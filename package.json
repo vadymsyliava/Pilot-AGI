@@ -1,6 +1,6 @@
 {
   "name": "pilot-agi",
-  "version": "0.2.0",
+  "version": "0.0.4",
   "description": "AI-powered development framework for Claude Code - Ship faster with structured workflows",
   "main": "bin/install.js",
   "bin": {

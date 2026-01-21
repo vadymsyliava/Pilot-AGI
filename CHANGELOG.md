@@ -8,13 +8,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- Subagent coordination
-- Custom templates
-- Team collaboration features
+- `/pilot-test` - Test generation
+- Vitest + Playwright integration
+- Coverage enforcement
+- Agent orchestration
 
 ---
 
-## [0.2.0] - 2026-01-20
+## [0.0.4] - 2026-01-21
+
+### Added
+- **`/pilot-design`** - Design system generation skill
+  - Full design system setup with design tokens
+  - shadcn/ui component installation and configuration
+  - Tailwind CSS integration with CSS custom properties
+  - Design system showcase page generation
+  - Support for incremental component addition
+- **Component Registry** - Track all UI components
+  - `component-registry.json` template with component metadata
+  - Patterns for form fields, loading states, error handling
+  - Rules to prevent duplicates and enforce design tokens
+- **Design System Page Template** - Visual showcase
+  - Colors, typography, spacing documentation
+  - All component variants displayed
+  - Interactive examples
+  - Dark mode support
+
+### Templates
+- `component-registry.json` - Component metadata and patterns
+- `design-system-page.tsx` - Showcase page template
+
+### Changed
+- README updated with v0.0.4 features and `/pilot-design` skill
+
+---
+
+## [0.0.3] - 2026-01-21
+
+### Added
+- **`/pilot-init`** - Initialize projects with intelligent questioning
+  - AI-powered pitch analysis (project type, domain, complexity)
+  - Tiered questions (essential, technical, context)
+  - Tech stack recommendations
+  - Automatic PROJECT_BRIEF.md generation
+  - ROADMAP.md generation with milestones
+- **`/pilot-sprint`** - Sprint planning with bd integration
+  - Auto-research for technical decisions
+  - Task breakdown with acceptance criteria
+  - Dependency mapping
+  - Sprint files in work/sprints/
+- **Templates** - PROJECT_BRIEF.md and sprint.md templates
+- **Research automation** - Integrated into sprint planning
+
+### Changed
+- Updated `/pilot-help` with new skills and workflow
+- README updated with v0.0.3 features
+- Canonical workflow now starts with `/pilot-init`
+
+---
+
+## [0.0.2] - 2026-01-20
 
 ### Added
 - **Beads (bd) Integration** - Tasks now use beads as single source of truth
@@ -42,7 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.1.0] - 2026-01-20
+## [0.0.1] - 2026-01-20
 
 ### Added
 - Initial release

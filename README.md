@@ -20,30 +20,28 @@ Pilot AGI brings structure to AI-assisted development:
 
 ## Quick Start
 
-### Prerequisites
-
-Install [beads](https://github.com/steveyegge/beads) (task management):
-```bash
-curl -fsSL https://beads.dev/install.sh | bash
-```
-
-### Installation
+### One-Command Installation
 
 ```bash
-# Global install (recommended)
+# Global install (recommended) - automatically installs beads (bd) if needed
 npx pilot-agi --global
 
 # Project-local install
 npx pilot-agi --local
 ```
 
-### Initialize Project
+The installer will automatically install [beads](https://github.com/steveyegge/beads) (task management) if not already present, using Homebrew, npm, or go install.
+
+### Initialize Your Project
 
 ```bash
+# Navigate to your project
+cd your-project
+
 # Initialize beads for task tracking
 bd init
 
-# Start using Pilot AGI skills
+# Start using Pilot AGI skills in Claude Code
 /pilot-help
 ```
 
@@ -51,20 +49,36 @@ bd init
 
 ## The Canonical Loop
 
+### New Project
+```
+/pilot-init → /pilot-sprint → bd ready → /pilot-plan → ...
+```
+
+### Daily Work
 ```
 bd ready → /pilot-plan → (approve) → /pilot-exec → /pilot-commit → /pilot-close
 ```
 
-1. **bd ready** - Pick top task (dependencies guarantee order)
-2. **/pilot-plan** - Create implementation plan, wait for approval
-3. **/pilot-exec** - Execute one micro-step with verification
-4. **/pilot-commit** - Create conventional commit linked to bd issue
-5. **/pilot-close** - Validate Definition of Done, close bd issue
+1. **/pilot-init** - Initialize project with smart questions (once per project)
+2. **/pilot-sprint** - Plan sprint with bd tasks
+3. **bd ready** - Pick top task (dependencies guarantee order)
+4. **/pilot-plan** - Create implementation plan, wait for approval
+5. **/pilot-exec** - Execute one micro-step with verification
+6. **/pilot-commit** - Create conventional commit linked to bd issue
+7. **/pilot-close** - Validate Definition of Done, close bd issue
 
 ---
 
 ## Skills
 
+### Project Setup
+| Skill | Purpose |
+|-------|---------|
+| `/pilot-init` | Initialize project with smart questions |
+| `/pilot-sprint` | Plan sprint with bd tasks |
+| `/pilot-design` | Create/update design system with shadcn/ui |
+
+### Workflow
 | Skill | Purpose |
 |-------|---------|
 | `/pilot-next` | Pick next ready task from bd |
@@ -73,6 +87,10 @@ bd ready → /pilot-plan → (approve) → /pilot-exec → /pilot-commit → /pi
 | `/pilot-commit` | Create conventional commit |
 | `/pilot-review` | Quick code review checklist |
 | `/pilot-close` | Validate DoD and close task |
+
+### Utilities
+| Skill | Purpose |
+|-------|---------|
 | `/pilot-research` | Research topic, save to work/research/ |
 | `/pilot-status` | Show progress and suggest next action |
 | `/pilot-update` | Update Pilot AGI |
@@ -160,16 +178,28 @@ See [CHANGELOG.md](./CHANGELOG.md) for version history.
 
 ## Roadmap
 
-### v0.2.0 (Current)
-- [x] Beads (bd) integration
-- [x] Skills-based architecture
-- [x] Session capsule system
-- [x] Configurable token budget
+### v0.0.4 (Current)
+- [x] `/pilot-design` - Design system generation
+- [x] Component registry with patterns and rules
+- [x] Design system page template
+- [x] shadcn/ui integration
 
-### v0.3.0 (Next)
-- [ ] Subagent coordination
-- [ ] Custom templates
-- [ ] Team collaboration
+### v0.0.3
+- [x] `/pilot-init` - Project initialization with smart questions
+- [x] `PROJECT_BRIEF.md` generation
+- [x] Roadmap generation
+- [x] `/pilot-sprint` - Sprint planning with bd tasks
+- [x] Research phase automation
+
+### v0.0.5 (Next)
+- [ ] `/pilot-test` - Test generation
+- [ ] Vitest + Playwright integration
+- [ ] Coverage enforcement
+
+### v0.1.0
+- [ ] Full agent orchestration
+- [ ] Quality gates
+- [ ] Duplicate detection
 
 ---
 
