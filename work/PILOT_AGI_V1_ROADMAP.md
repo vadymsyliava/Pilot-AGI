@@ -480,11 +480,12 @@ code_quality:
 - [x] Design system page template
 - [x] shadcn/ui integration
 
-### v0.0.5 - Testing
-- [ ] `/pilot-test` - Test generation
-- [ ] Vitest integration
-- [ ] Playwright E2E templates
-- [ ] Coverage enforcement
+### v0.0.5 - Testing (COMPLETED - 2026-01-21)
+- [x] `/pilot-test` - Test generation skill
+- [x] Vitest integration (config template, setup, unit/component templates)
+- [x] Playwright E2E templates
+- [x] Coverage enforcement (in vitest config)
+- [x] Action-oriented UX improvements (/pilot-next, /pilot-start)
 
 ### v0.0.6 - Agents
 - [ ] Frontend agent validation rules
