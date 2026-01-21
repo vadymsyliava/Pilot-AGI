@@ -487,11 +487,12 @@ code_quality:
 - [x] Coverage enforcement (in vitest config)
 - [x] Action-oriented UX improvements (/pilot-next, /pilot-start)
 
-### v0.0.6 - Agents
-- [ ] Frontend agent validation rules
-- [ ] Backend agent validation rules
-- [ ] Security agent
-- [ ] Review agent
+### v0.0.6 - Agents ✅ COMPLETED
+- [x] Frontend agent validation rules (.claude/pilot/rules/frontend.yaml)
+- [x] Backend agent validation rules (.claude/pilot/rules/backend.yaml)
+- [x] Security agent rules (.claude/pilot/rules/security.yaml)
+- [x] Review agent rules (.claude/pilot/rules/review.yaml)
+- [x] Parallel execution skill (/pilot-parallel)
 
 ### v0.1.0 - Production Ready
 - [ ] Full agent orchestration
