@@ -19,7 +19,7 @@ You are selecting the next task to work on. Be PROACTIVE - never tell the user t
 ## Step 1: Check bd status
 
 ```bash
-bd issues --limit 1 2>/dev/null
+bd list --limit 1 2>/dev/null
 ```
 
 ## Step 2: Get ready tasks

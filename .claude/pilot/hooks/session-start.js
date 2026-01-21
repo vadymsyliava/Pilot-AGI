@@ -66,7 +66,7 @@ function getBeadsContext() {
   if (!fs.existsSync(path.join(process.cwd(), '.beads'))) return null;
 
   try {
-    const result = execSync('bd issues --status in_progress --json 2>/dev/null || echo "[]"', {
+    const result = execSync('bd list --status in_progress --json 2>/dev/null || echo "[]"', {
       encoding: 'utf8', timeout: 5000
     });
     const tasks = JSON.parse(result);
