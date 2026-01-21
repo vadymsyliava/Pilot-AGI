@@ -1,13 +1,35 @@
 ---
 name: pilot-parallel
-description: Execute multiple independent tasks in parallel using sub-agents. Analyzes task independence, spawns workers, collects results.
-argument-hint: [--dry-run to analyze without executing]
+description: Execute multiple independent tasks in parallel using sub-agents. Analyzes task independence, spawns workers, collects results. Integrates with agent registry for specialized agents.
+argument-hint: [--dry-run to analyze without executing] [--orchestrate to use agent registry]
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Task, TaskOutput, AskUserQuestion
 ---
 
 # Parallel Task Executor
 
 Execute multiple independent tasks simultaneously using sub-agents for maximum efficiency.
+
+## Integration with Agent Orchestration
+
+This skill integrates with the agent registry (`.claude/pilot/agent-registry.json`) when `--orchestrate` flag is used.
+
+### Standard Mode (default)
+- Spawns general-purpose sub-agents
+- Each agent handles one complete task
+- No domain-specific rules loaded
+
+### Orchestrated Mode (`--orchestrate`)
+- Loads agent registry for specialized routing
+- Spawns domain-specific agents (frontend, backend, etc.)
+- Loads agent rules from `.claude/pilot/rules/*.yaml`
+- Better quality for multi-domain tasks
+
+To use orchestrated mode:
+```
+/pilot-parallel --orchestrate
+```
+
+Or for complex multi-domain tasks, use `/pilot-orchestrate` directly.
 
 ## Core Architecture
 
@@ -201,6 +223,41 @@ Task({
 })
 
 // All tasks spawned in parallel
+```
+
+### Orchestrated Spawning (with --orchestrate)
+
+When using orchestrated mode, load agent-specific context:
+
+```javascript
+// 1. Load agent registry
+const registry = JSON.parse(readFile('.claude/pilot/agent-registry.json'));
+
+// 2. For each task, classify and get matching agent
+const agent = classifyTask(taskDescription, registry);
+
+// 3. Load agent rules
+const rules = readFile(agent.rules_file);
+
+// 4. Spawn with agent-specific context
+Task({
+  description: `${agent.name}: ${taskTitle}`,
+  prompt: `
+You are the ${agent.name} working on: ${taskTitle}
+
+## Your Domain Rules
+${rules}
+
+## Task
+${taskDescription}
+
+## Output Format
+[standard FILE: format]
+`,
+  subagent_type: "general-purpose",
+  model: agent.model_preference || "opus",
+  run_in_background: true
+})
 ```
 
 ## Step 6: Wait and Collect Results
