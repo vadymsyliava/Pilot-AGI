@@ -1,0 +1,187 @@
+# Frontend Agent Validation Rules
+# Framework: React / Next.js
+# Purpose: Ensure consistent, accessible, and maintainable frontend code
+
+version: "1.0"
+scope: frontend
+frameworks:
+  - react
+  - nextjs
+
+# =============================================================================
+# MUST RULES - Required behaviors for all frontend work
+# =============================================================================
+must:
+  server_components:
+    rule: "Use Server Components by default"
+    description: |
+      Next.js App Router uses Server Components by default. Only opt into
+      Client Components when necessary for interactivity or browser APIs.
+    verification:
+      - "New components should NOT have 'use client' unless justified"
+      - "Data fetching should happen in Server Components"
+
+  client_directive:
+    rule: "Add 'use client' directive only when hooks or browser APIs are needed"
+    triggers:
+      - "useState"
+      - "useEffect"
+      - "useRef"
+      - "useContext"
+      - "onClick with state"
+      - "window.*"
+      - "document.*"
+      - "localStorage"
+
+  component_registry:
+    rule: "Check component registry before creating new components"
+    verification:
+      - "Search existing components in /components directory"
+      - "Check design system documentation"
+      - "Review shared UI library"
+    paths_to_check:
+      - "components/"
+      - "components/ui/"
+      - "components/shared/"
+
+  design_tokens:
+    rule: "Use design tokens from tokens.css, never hardcode colors/spacing"
+    verification:
+      - "No hex/rgb color values in component code"
+      - "No pixel values for spacing (use token scale)"
+      - "No hardcoded font sizes"
+
+  loading_states:
+    rule: "Include loading states for async operations"
+    requirements:
+      - "Skeleton loaders for content areas"
+      - "Spinner or progress indicator for actions"
+      - "Disabled state for buttons during submission"
+      - "Suspense boundaries for lazy-loaded components"
+
+  error_states:
+    rule: "Include error states and error boundaries"
+    requirements:
+      - "Error boundaries for component trees"
+      - "Error UI with retry option"
+      - "Form validation error display"
+      - "Network error handling"
+    files_required:
+      - "error.tsx for route segments"
+      - "global-error.tsx for root layout"
+
+  accessibility:
+    rule: "Pass WCAG AA accessibility standards"
+    requirements:
+      color_contrast:
+        - "4.5:1 for normal text"
+        - "3:1 for large text (18px+ or 14px+ bold)"
+      keyboard_navigation:
+        - "All interactive elements focusable"
+        - "Visible focus indicators"
+        - "Logical tab order"
+      screen_readers:
+        - "Meaningful alt text for images"
+        - "ARIA labels for icon buttons"
+        - "Proper heading hierarchy"
+      forms:
+        - "Labels associated with inputs"
+        - "Error messages linked to fields"
+
+  responsive_design:
+    rule: "Implement responsive design (mobile-first)"
+    breakpoints:
+      sm: "640px"
+      md: "768px"
+      lg: "1024px"
+      xl: "1280px"
+    requirements:
+      - "Base styles for mobile"
+      - "Progressive enhancement for larger screens"
+      - "Touch-friendly tap targets (44x44px minimum)"
+
+  semantic_html:
+    rule: "Use semantic HTML elements"
+    element_mapping:
+      navigation: "<nav>"
+      main_content: "<main>"
+      headers: "<header>"
+      footers: "<footer>"
+      sidebars: "<aside>"
+    requirements:
+      - "One <main> per page"
+      - "Proper heading hierarchy (h1-h6)"
+      - "Buttons for actions, links for navigation"
+
+# =============================================================================
+# MUST_NOT RULES - Prohibited patterns
+# =============================================================================
+must_not:
+  useeffect_data_fetching:
+    rule: "Do not use useEffect for data fetching"
+    alternatives:
+      - "Server Components with async/await"
+      - "SWR for client-side caching"
+      - "React Query for complex caching needs"
+      - "Server Actions for mutations"
+
+  duplicate_components:
+    rule: "Do not create duplicate components that exist in registry"
+    before_creating:
+      - "Search component registry"
+      - "Check design system"
+      - "Consider extending existing component"
+
+  inline_styles:
+    rule: "Do not use inline styles"
+    alternatives:
+      - "Tailwind CSS utility classes"
+      - "CSS Modules for complex styles"
+      - "Design token CSS variables"
+    exceptions:
+      - "Dynamic styles computed at runtime"
+      - "Animation values from JavaScript"
+
+  hardcoded_values:
+    rule: "Do not hardcode colors, spacing, or font sizes"
+    prohibited_patterns:
+      - "Hex colors: #xxx, #xxxxxx"
+      - "RGB/RGBA: rgb(), rgba()"
+      - "Pixel spacing: XXpx for margins/padding"
+      - "Fixed font sizes: font-size: XXpx"
+
+  typescript_errors:
+    rule: "Do not ignore TypeScript errors"
+    prohibited:
+      - "@ts-ignore without explanation"
+      - "@ts-nocheck"
+      - "Excessive use of 'any' type"
+
+  empty_alt_attributes:
+    rule: "Do not use empty alt attributes on meaningful images"
+    guidelines:
+      meaningful_images: "Descriptive alt text"
+      decorative_images: "alt='' or role='presentation'"
+
+  div_soup:
+    rule: "Do not create div soup"
+    solutions:
+      - "Use semantic HTML elements"
+      - "Flatten unnecessary nesting"
+      - "Use CSS Grid/Flexbox to reduce wrapper divs"
+
+# =============================================================================
+# VERIFICATION CHECKLIST
+# =============================================================================
+verification:
+  pre_commit:
+    - "TypeScript compiles without errors"
+    - "ESLint passes"
+    - "No hardcoded values in diff"
+    - "New components checked against registry"
+
+  pre_pr:
+    - "Accessibility audit passed"
+    - "Responsive design tested"
+    - "Loading states implemented"
+    - "Error states handled"

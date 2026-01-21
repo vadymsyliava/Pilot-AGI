@@ -1,0 +1,237 @@
+# Review Agent Validation Rules
+# Purpose: Code review checklist and quality standards
+
+version: "1.0"
+scope: code-review
+applies_to:
+  - pull_requests
+  - code_changes
+
+# =============================================================================
+# MUST RULES - Required review checks
+# =============================================================================
+must:
+  code_quality:
+    rule: "Verify code quality standards"
+    checks:
+      readability:
+        - "Clear, descriptive variable names"
+        - "Functions do one thing well"
+        - "No magic numbers or strings"
+        - "Appropriate comments for complex logic"
+      structure:
+        - "Files under 300 lines"
+        - "Functions under 50 lines"
+        - "Nesting depth under 4 levels"
+        - "Single responsibility principle"
+      consistency:
+        - "Follows project conventions"
+        - "Consistent naming patterns"
+        - "Consistent error handling"
+
+  type_safety:
+    rule: "Ensure proper TypeScript usage"
+    checks:
+      - "No 'any' types without justification"
+      - "Proper interface/type definitions"
+      - "No @ts-ignore without explanation"
+      - "Generic types used appropriately"
+      - "Strict null checks handled"
+
+  testing:
+    rule: "Verify adequate test coverage"
+    requirements:
+      unit_tests:
+        - "New functions have tests"
+        - "Edge cases covered"
+        - "Error cases tested"
+      integration_tests:
+        - "API endpoints tested"
+        - "Database operations verified"
+      coverage:
+        - "Maintain >80% coverage"
+        - "Critical paths 100% covered"
+
+  error_handling:
+    rule: "Review error handling"
+    checks:
+      - "All async operations have try-catch"
+      - "Errors are logged with context"
+      - "User-friendly error messages"
+      - "No swallowed errors"
+      - "Appropriate error boundaries"
+
+  performance:
+    rule: "Check for performance issues"
+    watch_for:
+      - "N+1 database queries"
+      - "Unnecessary re-renders"
+      - "Large bundle imports"
+      - "Missing memoization"
+      - "Synchronous heavy operations"
+      - "Unbounded data fetching"
+
+  security:
+    rule: "Security review checklist"
+    checks:
+      - "Input validation present"
+      - "No SQL/command injection vectors"
+      - "Auth checks on protected routes"
+      - "No exposed secrets"
+      - "XSS prevention in place"
+      - "CSRF protection configured"
+
+  documentation:
+    rule: "Ensure adequate documentation"
+    requirements:
+      - "Public APIs have JSDoc comments"
+      - "Complex logic is explained"
+      - "README updated if needed"
+      - "Breaking changes documented"
+      - "Migration steps provided"
+
+  accessibility:
+    rule: "Accessibility review for UI changes"
+    checks:
+      - "Semantic HTML used"
+      - "ARIA attributes correct"
+      - "Keyboard navigation works"
+      - "Color contrast sufficient"
+      - "Alt text on images"
+      - "Focus management handled"
+
+  backwards_compatibility:
+    rule: "Check backwards compatibility"
+    considerations:
+      - "API contracts maintained"
+      - "Database migrations reversible"
+      - "Feature flags for gradual rollout"
+      - "Deprecation warnings added"
+
+# =============================================================================
+# MUST_NOT RULES - Patterns to reject
+# =============================================================================
+must_not:
+  code_smells:
+    rule: "Reject code with major smells"
+    reject_if:
+      - "Duplicated code blocks"
+      - "Dead code or unused imports"
+      - "Console.log statements"
+      - "TODO without issue link"
+      - "Commented-out code"
+      - "Overly complex functions"
+
+  anti_patterns:
+    rule: "Reject known anti-patterns"
+    patterns:
+      - "God objects/components"
+      - "Spaghetti code"
+      - "Premature optimization"
+      - "Not invented here syndrome"
+      - "Magic values without constants"
+
+  incomplete_changes:
+    rule: "Reject incomplete implementations"
+    signs:
+      - "Missing error handling"
+      - "No tests for new code"
+      - "Unfinished TODO items"
+      - "Placeholder implementations"
+      - "Missing validation"
+
+  breaking_changes:
+    rule: "Flag undocumented breaking changes"
+    requires:
+      - "Migration guide for schema changes"
+      - "Version bump for API changes"
+      - "Deprecation period for removals"
+      - "Communication to consumers"
+
+# =============================================================================
+# REVIEW WORKFLOW
+# =============================================================================
+workflow:
+  quick_review:
+    description: "For small, focused changes"
+    checklist:
+      - "Builds successfully"
+      - "Tests pass"
+      - "Linting clean"
+      - "Follows conventions"
+      - "No obvious issues"
+
+  standard_review:
+    description: "For typical feature work"
+    checklist:
+      - "All quick_review items"
+      - "Code quality verified"
+      - "Test coverage adequate"
+      - "Error handling complete"
+      - "Security reviewed"
+      - "Performance acceptable"
+
+  thorough_review:
+    description: "For critical or complex changes"
+    checklist:
+      - "All standard_review items"
+      - "Architecture reviewed"
+      - "Edge cases considered"
+      - "Documentation complete"
+      - "Backwards compatibility verified"
+      - "Security audit completed"
+
+# =============================================================================
+# FEEDBACK GUIDELINES
+# =============================================================================
+feedback:
+  must_fix:
+    label: "[MUST FIX]"
+    description: "Blocking issues that must be resolved"
+    examples:
+      - "Security vulnerability"
+      - "Broken functionality"
+      - "Missing error handling"
+      - "Test failures"
+
+  should_fix:
+    label: "[SHOULD FIX]"
+    description: "Issues that should be addressed"
+    examples:
+      - "Code quality issues"
+      - "Performance concerns"
+      - "Missing tests"
+      - "Documentation gaps"
+
+  suggestion:
+    label: "[SUGGESTION]"
+    description: "Optional improvements"
+    examples:
+      - "Alternative approach"
+      - "Style preferences"
+      - "Future considerations"
+      - "Nice-to-have features"
+
+  question:
+    label: "[QUESTION]"
+    description: "Seeking clarification"
+    examples:
+      - "Why this approach?"
+      - "How does this work?"
+      - "Is this intentional?"
+
+# =============================================================================
+# VERIFICATION CHECKLIST
+# =============================================================================
+verification:
+  before_approving:
+    - "All blocking issues resolved"
+    - "Tests pass in CI"
+    - "No merge conflicts"
+    - "PR description clear"
+    - "Changes match description"
+
+  after_merge:
+    - "Deployment successful"
+    - "No errors in monitoring"
+    - "Feature working as expected"
