@@ -1,0 +1,231 @@
+# Backend Agent Validation Rules
+# Framework: Node.js / Next.js API Routes / Server Actions
+# Purpose: Ensure secure, performant, and maintainable backend code
+
+version: "1.0"
+scope: backend
+frameworks:
+  - nodejs
+  - nextjs-api
+  - server-actions
+
+# =============================================================================
+# MUST RULES - Required behaviors for all backend work
+# =============================================================================
+must:
+  input_validation:
+    rule: "Validate all inputs with Zod schemas"
+    description: |
+      Every API endpoint and Server Action must validate inputs before
+      processing. Use Zod for type-safe schema validation.
+    requirements:
+      - "Define Zod schema for request body/params"
+      - "Validate before any business logic"
+      - "Return structured validation errors"
+    example: |
+      const schema = z.object({
+        email: z.string().email(),
+        name: z.string().min(1).max(100),
+      });
+      const result = schema.safeParse(input);
+      if (!result.success) {
+        return { error: result.error.flatten() };
+      }
+
+  error_handling:
+    rule: "Use structured error responses"
+    description: |
+      All errors must be caught and returned in a consistent format.
+      Never expose internal error details to clients.
+    format:
+      success: false
+      error:
+        code: "ERROR_CODE"
+        message: "User-friendly message"
+    requirements:
+      - "Wrap handlers in try-catch"
+      - "Log errors with context"
+      - "Return appropriate HTTP status codes"
+      - "Never expose stack traces in production"
+
+  authentication:
+    rule: "Verify authentication on protected endpoints"
+    description: |
+      Every protected endpoint must verify the user's session
+      before processing the request.
+    requirements:
+      - "Use auth middleware or check at start of handler"
+      - "Return 401 for unauthenticated requests"
+      - "Return 403 for unauthorized access"
+      - "Validate session is not expired"
+
+  authorization:
+    rule: "Check permissions before resource access"
+    description: |
+      After authentication, verify the user has permission
+      to perform the requested action on the resource.
+    checks:
+      - "User owns the resource"
+      - "User has required role"
+      - "Action is allowed for resource state"
+
+  database_transactions:
+    rule: "Use transactions for multi-step operations"
+    description: |
+      Operations that modify multiple records must use database
+      transactions to ensure data consistency.
+    when_to_use:
+      - "Creating related records"
+      - "Transferring between accounts"
+      - "Multi-table updates"
+    example: |
+      await prisma.$transaction(async (tx) => {
+        await tx.account.update(...);
+        await tx.transaction.create(...);
+      });
+
+  rate_limiting:
+    rule: "Implement rate limiting on public endpoints"
+    description: |
+      Public-facing endpoints must have rate limiting to prevent abuse.
+    limits:
+      auth_endpoints: "5 requests per minute"
+      api_endpoints: "100 requests per minute"
+      write_operations: "20 requests per minute"
+
+  logging:
+    rule: "Log significant operations with context"
+    description: |
+      All significant operations must be logged for debugging
+      and audit purposes.
+    what_to_log:
+      - "User actions (create, update, delete)"
+      - "Authentication events"
+      - "Errors with stack traces"
+      - "Performance metrics for slow queries"
+    context_to_include:
+      - "User ID"
+      - "Request ID"
+      - "Timestamp"
+      - "Action performed"
+
+  environment_variables:
+    rule: "Use environment variables for configuration"
+    description: |
+      Never hardcode secrets, API keys, or environment-specific
+      configuration in source code.
+    requirements:
+      - "Define in .env.local for development"
+      - "Use process.env.VARIABLE_NAME"
+      - "Validate required env vars at startup"
+      - "Document required variables in .env.example"
+
+# =============================================================================
+# MUST_NOT RULES - Prohibited patterns
+# =============================================================================
+must_not:
+  sql_injection:
+    rule: "Do not concatenate user input into SQL queries"
+    description: |
+      Always use parameterized queries or ORM methods to prevent
+      SQL injection attacks.
+    prohibited:
+      - "String concatenation in queries"
+      - "Template literals with user input"
+      - "Raw SQL without parameters"
+    safe_alternatives:
+      - "Prisma query methods"
+      - "Parameterized queries with $1, $2"
+      - "ORM where clauses"
+
+  exposed_secrets:
+    rule: "Do not commit secrets or credentials"
+    description: |
+      Secrets must never appear in source code or version control.
+    prohibited:
+      - "API keys in source files"
+      - "Database passwords in code"
+      - "JWT secrets hardcoded"
+      - ".env files committed"
+    verification:
+      - "Check git diff before commit"
+      - "Use git-secrets or similar tools"
+
+  unvalidated_redirects:
+    rule: "Do not redirect to user-provided URLs without validation"
+    description: |
+      Unvalidated redirects can be used for phishing attacks.
+    requirements:
+      - "Whitelist allowed redirect domains"
+      - "Use relative URLs when possible"
+      - "Validate URL format and host"
+
+  blocking_operations:
+    rule: "Do not perform blocking operations in request handlers"
+    description: |
+      Long-running operations block the event loop and degrade performance.
+    prohibited:
+      - "Synchronous file operations"
+      - "Long-running computations"
+      - "Unbounded database queries"
+    alternatives:
+      - "Use async/await for I/O"
+      - "Queue long tasks for background processing"
+      - "Paginate large result sets"
+
+  mass_assignment:
+    rule: "Do not pass user input directly to database operations"
+    description: |
+      Mass assignment vulnerabilities allow attackers to modify
+      fields they shouldn't have access to.
+    prohibited:
+      - "prisma.user.update({ data: req.body })"
+      - "Spreading user input into update"
+    safe_pattern: |
+      const { name, email } = validatedInput;
+      await prisma.user.update({
+        where: { id },
+        data: { name, email }, // explicit fields only
+      });
+
+  n_plus_one_queries:
+    rule: "Do not create N+1 query patterns"
+    description: |
+      N+1 queries cause performance issues by making excessive
+      database calls.
+    detection:
+      - "Loop with individual queries"
+      - "Missing includes/joins"
+    solution: |
+      // Use include for related data
+      const posts = await prisma.post.findMany({
+        include: { author: true },
+      });
+
+  sensitive_data_logging:
+    rule: "Do not log sensitive data"
+    description: |
+      Logs should never contain sensitive information that could
+      be exploited if accessed.
+    prohibited:
+      - "Passwords"
+      - "API keys"
+      - "Credit card numbers"
+      - "Personal identification numbers"
+      - "Session tokens"
+
+# =============================================================================
+# VERIFICATION CHECKLIST
+# =============================================================================
+verification:
+  pre_commit:
+    - "Input validation on all endpoints"
+    - "No hardcoded secrets in diff"
+    - "Error handling in place"
+    - "Auth checks on protected routes"
+
+  pre_pr:
+    - "Rate limiting configured"
+    - "Logging implemented"
+    - "Database queries optimized"
+    - "Security review completed"
