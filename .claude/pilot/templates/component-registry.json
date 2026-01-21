@@ -1,0 +1,163 @@
+{
+  "$schema": "https://pilot-agi.dev/schemas/component-registry.json",
+  "version": "1.0.0",
+  "lastUpdated": "{{DATE}}",
+  "projectName": "{{PROJECT_NAME}}",
+  "components": {
+    "Button": {
+      "path": "src/components/ui/button.tsx",
+      "source": "shadcn",
+      "description": "Primary action element",
+      "variants": ["default", "secondary", "outline", "ghost", "destructive", "link"],
+      "sizes": ["default", "sm", "lg", "icon"],
+      "props": ["asChild", "disabled", "className"],
+      "usage": "<Button variant=\"primary\">Click me</Button>"
+    },
+    "Input": {
+      "path": "src/components/ui/input.tsx",
+      "source": "shadcn",
+      "description": "Text input field",
+      "types": ["text", "email", "password", "number", "search", "tel", "url"],
+      "props": ["disabled", "placeholder", "className", "type"],
+      "usage": "<Input type=\"email\" placeholder=\"Enter email\" />"
+    },
+    "Card": {
+      "path": "src/components/ui/card.tsx",
+      "source": "shadcn",
+      "description": "Content container with optional header/footer",
+      "subcomponents": ["Card", "CardHeader", "CardTitle", "CardDescription", "CardContent", "CardFooter"],
+      "usage": "<Card><CardHeader><CardTitle>Title</CardTitle></CardHeader><CardContent>Content</CardContent></Card>"
+    },
+    "Badge": {
+      "path": "src/components/ui/badge.tsx",
+      "source": "shadcn",
+      "description": "Status or label indicator",
+      "variants": ["default", "secondary", "outline", "destructive"],
+      "usage": "<Badge variant=\"secondary\">New</Badge>"
+    },
+    "Alert": {
+      "path": "src/components/ui/alert.tsx",
+      "source": "shadcn",
+      "description": "Feedback message container",
+      "variants": ["default", "destructive"],
+      "subcomponents": ["Alert", "AlertTitle", "AlertDescription"],
+      "usage": "<Alert><AlertTitle>Heads up!</AlertTitle><AlertDescription>Message here.</AlertDescription></Alert>"
+    },
+    "Select": {
+      "path": "src/components/ui/select.tsx",
+      "source": "shadcn",
+      "description": "Dropdown selection",
+      "subcomponents": ["Select", "SelectTrigger", "SelectValue", "SelectContent", "SelectItem"],
+      "usage": "<Select><SelectTrigger><SelectValue placeholder=\"Select\" /></SelectTrigger><SelectContent>...</SelectContent></Select>"
+    },
+    "Checkbox": {
+      "path": "src/components/ui/checkbox.tsx",
+      "source": "shadcn",
+      "description": "Boolean toggle checkbox",
+      "props": ["checked", "onCheckedChange", "disabled"],
+      "usage": "<Checkbox checked={value} onCheckedChange={setValue} />"
+    },
+    "Switch": {
+      "path": "src/components/ui/switch.tsx",
+      "source": "shadcn",
+      "description": "On/off toggle switch",
+      "props": ["checked", "onCheckedChange", "disabled"],
+      "usage": "<Switch checked={enabled} onCheckedChange={setEnabled} />"
+    },
+    "Dialog": {
+      "path": "src/components/ui/dialog.tsx",
+      "source": "shadcn",
+      "description": "Modal dialog overlay",
+      "subcomponents": ["Dialog", "DialogTrigger", "DialogContent", "DialogHeader", "DialogTitle", "DialogDescription", "DialogFooter", "DialogClose"],
+      "usage": "<Dialog><DialogTrigger>Open</DialogTrigger><DialogContent>...</DialogContent></Dialog>"
+    },
+    "Separator": {
+      "path": "src/components/ui/separator.tsx",
+      "source": "shadcn",
+      "description": "Visual divider line",
+      "props": ["orientation", "decorative"],
+      "usage": "<Separator />"
+    },
+    "Skeleton": {
+      "path": "src/components/ui/skeleton.tsx",
+      "source": "shadcn",
+      "description": "Loading placeholder",
+      "usage": "<Skeleton className=\"h-4 w-[200px]\" />"
+    },
+    "Label": {
+      "path": "src/components/ui/label.tsx",
+      "source": "shadcn",
+      "description": "Form field label",
+      "props": ["htmlFor"],
+      "usage": "<Label htmlFor=\"email\">Email</Label>"
+    },
+    "Textarea": {
+      "path": "src/components/ui/textarea.tsx",
+      "source": "shadcn",
+      "description": "Multi-line text input",
+      "props": ["disabled", "placeholder", "rows"],
+      "usage": "<Textarea placeholder=\"Enter description\" />"
+    }
+  },
+  "customComponents": {
+    "_comment": "Add project-specific components here"
+  },
+  "patterns": {
+    "form-field": {
+      "description": "Standard form field layout",
+      "structure": "Label + Input/Select + FormMessage",
+      "example": "<div className=\"space-y-2\"><Label htmlFor=\"name\">Name</Label><Input id=\"name\" />{error && <p className=\"text-sm text-destructive\">{error}</p>}</div>"
+    },
+    "loading-state": {
+      "description": "Component loading pattern",
+      "options": ["Use Skeleton for content placeholders", "Use spinner for actions", "Add isLoading prop to interactive components"],
+      "example": "isLoading ? <Skeleton className=\"h-10 w-full\" /> : <Content />"
+    },
+    "error-state": {
+      "description": "Error display pattern",
+      "structure": "Use Alert variant='destructive' for page-level errors, inline text-destructive for field errors",
+      "example": "<Alert variant=\"destructive\"><AlertTitle>Error</AlertTitle><AlertDescription>{message}</AlertDescription></Alert>"
+    },
+    "empty-state": {
+      "description": "No data display pattern",
+      "structure": "Centered card with icon, message, and action",
+      "example": "<div className=\"flex flex-col items-center py-12\"><Icon /><p className=\"text-muted-foreground\">No items yet</p><Button>Add First Item</Button></div>"
+    },
+    "data-fetching": {
+      "description": "Data loading approach",
+      "server": "Use Server Components for initial data load",
+      "client": "Use SWR or TanStack Query for client-side mutations and real-time updates"
+    }
+  },
+  "rules": {
+    "no-duplicate-components": {
+      "severity": "error",
+      "message": "Always check registry before creating new UI component. Reuse existing components."
+    },
+    "use-design-tokens": {
+      "severity": "error",
+      "message": "Never use hardcoded colors (hex, rgb) or spacing (px). Use Tailwind classes or CSS variables."
+    },
+    "accessibility": {
+      "severity": "error",
+      "message": "All interactive elements must be keyboard accessible with proper ARIA labels."
+    },
+    "composition-over-variants": {
+      "severity": "warning",
+      "message": "Prefer composing existing components over creating new variants."
+    },
+    "server-components-first": {
+      "severity": "warning",
+      "message": "Use Server Components by default. Only add 'use client' when needed for interactivity."
+    }
+  },
+  "tokens": {
+    "file": "src/styles/tokens.css",
+    "colors": {
+      "semantic": ["background", "foreground", "primary", "secondary", "muted", "accent", "destructive"],
+      "functional": ["border", "input", "ring"]
+    },
+    "spacing": "4px base scale (1, 2, 3, 4, 5, 6, 8, 10, 12, 16)",
+    "radius": ["sm (0.25rem)", "md (0.375rem)", "lg (0.5rem)", "xl (0.75rem)", "full"]
+  }
+}

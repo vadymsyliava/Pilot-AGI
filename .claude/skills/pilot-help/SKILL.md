@@ -17,24 +17,38 @@ Display this help information:
 CANONICAL WORKFLOW
 ────────────────────────────────────────────────────────────────
 
+  New Project:
+  /pilot-init → /pilot-sprint → bd ready → /pilot-plan → ...
+
+  Daily Work:
   bd ready → /pilot-plan → (approve) → /pilot-exec → /pilot-commit → /pilot-review → /pilot-close
 
-  1. bd ready         Pick top task (deps guarantee order)
-  2. /pilot-plan      Create implementation plan, wait for approval
-  3. /pilot-exec      Execute one micro-step with verification
-  4. /pilot-commit    Create conventional commit with bd issue ID
-  5. /pilot-review    Quick code review checklist
-  6. /pilot-close     Validate DoD, close bd issue
+  1. /pilot-init      Initialize project (once per project)
+  2. /pilot-sprint    Plan sprint with bd tasks
+  3. bd ready         Pick top task (deps guarantee order)
+  4. /pilot-plan      Create implementation plan, wait for approval
+  5. /pilot-exec      Execute one micro-step with verification
+  6. /pilot-commit    Create conventional commit with bd issue ID
+  7. /pilot-review    Quick code review checklist
+  8. /pilot-close     Validate DoD, close bd issue
 
 SKILLS
 ────────────────────────────────────────────────────────────────
 
+  Project Setup:
+  /pilot-init       Initialize project with smart questions
+  /pilot-sprint     Plan next sprint with bd tasks
+  /pilot-design     Create/update design system (shadcn/ui)
+
+  Workflow:
   /pilot-next       Pick next ready task from bd, show context
   /pilot-plan       Create implementation plan for current task
   /pilot-exec       Execute one micro-step only
   /pilot-commit     Create conventional commit linked to bd issue
   /pilot-review     Code review checklist (diff-focused)
   /pilot-close      Validate DoD and close bd issue
+
+  Utilities:
   /pilot-research   Research a topic, store in work/research/
   /pilot-status     Show current position and progress
   /pilot-update     Update Pilot AGI to latest version
