@@ -14,83 +14,113 @@ Display this help information:
 ║     AI-powered development framework for Claude Code         ║
 ╚══════════════════════════════════════════════════════════════╝
 
-CANONICAL WORKFLOW
+GETTING STARTED
 ────────────────────────────────────────────────────────────────
 
-  New Project:
-  /pilot-init → /pilot-sprint → bd ready → /pilot-plan → ...
+  Just run: /pilot-start
 
-  Daily Work:
-  bd ready → /pilot-plan → (approve) → /pilot-exec → /pilot-commit → /pilot-review → /pilot-close
+  The AI will:
+  • Detect your project state automatically
+  • Show you what's next
+  • Offer actions (not commands to type)
+  • Do the work when you approve
 
-  1. /pilot-init      Initialize project (once per project)
-  2. /pilot-sprint    Plan sprint with bd tasks
-  3. bd ready         Pick top task (deps guarantee order)
-  4. /pilot-plan      Create implementation plan, wait for approval
-  5. /pilot-exec      Execute one micro-step with verification
-  6. /pilot-commit    Create conventional commit with bd issue ID
-  7. /pilot-review    Quick code review checklist
-  8. /pilot-close     Validate DoD, close bd issue
-
-SKILLS
+HOW IT WORKS
 ────────────────────────────────────────────────────────────────
+
+  Pilot AGI is ACTION-ORIENTED. You don't type commands.
+  Instead, you're presented with choices:
+
+    "What would you like to do?"
+    → [Start Implementation] [Discuss] [Research] [Other Tasks]
+
+  Pick an option. The AI handles everything else.
+
+TYPICAL FLOW
+────────────────────────────────────────────────────────────────
+
+  1. /pilot-start or /pilot-next
+     → Shows your next task (To-Do status)
+     → Offers: Start Implementation / Discuss / Research
+
+  2. Pick "Start Implementation"
+     → Status changes to In Progress
+     → AI creates implementation plan
+     → Shows plan for your approval
+
+  3. Approve plan
+     → AI executes step by step
+     → Shows progress
+     → Asks "Commit changes?" when done
+
+  4. Task complete
+     → AI shows next task automatically
+     → Cycle continues
+
+TASK STATES
+────────────────────────────────────────────────────────────────
+
+  To-Do        Task exists, waiting to be started
+      ↓        [User picks "Start Implementation"]
+  In Progress  AI actively working on this task
+      ↓        [Work completed and verified]
+  Closed       Task done, committed, reviewed
+
+  Note: Status only changes when you take action.
+  Viewing a task doesn't change its status.
+
+AVAILABLE SKILLS
+────────────────────────────────────────────────────────────────
+
+  Entry Points (start here):
+  /pilot-start    Detect project state, guide you forward
+  /pilot-next     Show next task, offer actions
 
   Project Setup:
-  /pilot-init       Initialize project with smart questions
-  /pilot-sprint     Plan next sprint with bd tasks
-  /pilot-design     Create/update design system (shadcn/ui)
+  /pilot-init     New project: idea → brief → roadmap → tasks
+  /pilot-sprint   Create tasks from roadmap milestone
 
-  Workflow:
-  /pilot-next       Pick next ready task from bd, show context
-  /pilot-plan       Create implementation plan for current task
-  /pilot-exec       Execute one micro-step only
-  /pilot-commit     Create conventional commit linked to bd issue
-  /pilot-review     Code review checklist (diff-focused)
-  /pilot-close      Validate DoD and close bd issue
+  Design:
+  /pilot-design   Create design system with shadcn/ui
 
   Utilities:
-  /pilot-research   Research a topic, store in work/research/
-  /pilot-status     Show current position and progress
-  /pilot-update     Update Pilot AGI to latest version
-  /pilot-help       Show this help
+  /pilot-status   Show current progress
+  /pilot-research Do research on a topic
+  /pilot-help     Show this help
+  /pilot-update   Check for updates
 
 BEADS (bd) INTEGRATION
 ────────────────────────────────────────────────────────────────
 
-  Pilot AGI uses beads (bd) as the single source of truth for tasks.
+  Pilot AGI uses beads (bd) to track tasks.
+  You don't need to use bd commands - the AI handles it.
 
-  Key bd commands:
-    bd ready          List actionable tasks (no blockers)
-    bd create         Create a new task
-    bd update <id>    Update task status
-    bd dep add        Add dependencies between tasks
-    bd issues         Query all tasks
+  But if you want to:
+    bd ready       See actionable tasks
+    bd issues      See all tasks
+    bd create      Create a task manually
 
-  Install beads: curl -fsSL https://beads.dev/install.sh | bash
+  Install: curl -fsSL https://beads.dev/install.sh | bash
 
 PROJECT STRUCTURE
 ────────────────────────────────────────────────────────────────
 
-  .beads/             Task database (created by bd init)
-  .claude/
-    skills/pilot-*/   Pilot AGI skills
-    pilot/            Framework internals (hooks, templates)
-    settings.json     Hooks configuration
+  .beads/             Task database
+  .claude/skills/     Pilot AGI skills
   work/
-    ROADMAP.md        High-level planning
-    milestones/       Milestone specs
-    sprints/          Sprint planning
-    specs/            Feature specifications
-    research/         Research outputs
+    PROJECT_BRIEF.md  What you're building
+    ROADMAP.md        Milestones and phases
   runs/
-    YYYY-MM-DD.md     Session capsules for recovery
-  CLAUDE.md           Agent contract
+    YYYY-MM-DD.md     Session logs
 
-MORE INFO
+QUICK START
 ────────────────────────────────────────────────────────────────
 
-  GitHub:  https://github.com/vadymsyliava/Pilot-AGI
-  Beads:   https://github.com/steveyegge/beads
-  Update:  /pilot-update
+  New project?     Run /pilot-start
+  Resume work?     Run /pilot-next
+  Need help?       Run /pilot-help
 
+────────────────────────────────────────────────────────────────
+  GitHub: https://github.com/vadymsyliava/Pilot-AGI
+────────────────────────────────────────────────────────────────
 ```
