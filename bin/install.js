@@ -198,6 +198,29 @@ function updateSettings(claudeDir) {
     settings.hooks.SessionStart.push(sessionStartHook);
   }
 
+  // PreToolUse hook for quality gates (runs before git commits)
+  if (!settings.hooks.PreToolUse) {
+    settings.hooks.PreToolUse = [];
+  }
+
+  const qualityGateHook = {
+    matcher: 'Bash',
+    hooks: [{
+      type: 'command',
+      command: `node "${path.join(claudeDir, 'pilot', 'hooks', 'quality-gate.js')}"`,
+      timeout: 60
+    }]
+  };
+
+  // Check if quality gate hook already exists
+  const qualityHookExists = settings.hooks.PreToolUse.some(
+    h => h.hooks?.[0]?.command?.includes('quality-gate.js')
+  );
+
+  if (!qualityHookExists) {
+    settings.hooks.PreToolUse.push(qualityGateHook);
+  }
+
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 }
 

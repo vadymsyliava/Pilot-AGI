@@ -25,5 +25,24 @@
   "beads": {
     "auto_claim": true,
     "auto_close": false
+  },
+  "quality_gates": {
+    "enabled": true,
+    "file_size": {
+      "enabled": true,
+      "warn": 300,
+      "block": 500
+    },
+    "lint": {
+      "enabled": true,
+      "timeout": 30000
+    },
+    "secrets": {
+      "enabled": true
+    },
+    "type_check": {
+      "enabled": true,
+      "timeout": 30000
+    }
   }
 }
