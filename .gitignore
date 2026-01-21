@@ -28,5 +28,12 @@ coverage/
 .env.*.local
 
 # Pilot AGI local state (for users of this framework)
-# Note: This is not gitignored in the framework repo itself
-# .planning/
+# These are created when using Pilot AGI, not part of the product
+.beads/
+runs/
+AGENTS.md
+work/plans/
+work/research/
+
+# Note: work/ROADMAP.md and work/PROJECT_BRIEF.md ARE part of the product
+# as examples/templates. Users will have their own.
