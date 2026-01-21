@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0",
+  "description": "Agent registry for Pilot AGI orchestration",
+
+  "agents": {
+    "frontend": {
+      "name": "Frontend Agent",
+      "description": "React/Next.js UI development specialist",
+      "rules_file": ".claude/pilot/rules/frontend.yaml",
+      "capabilities": [
+        "component_creation",
+        "styling",
+        "accessibility",
+        "responsive_design",
+        "state_management",
+        "data_fetching_ui"
+      ],
+      "file_patterns": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/components/**/*",
+        "**/app/**/*.tsx",
+        "**/pages/**/*.tsx",
+        "**/*.css",
+        "**/*.scss",
+        "**/styles/**/*"
+      ],
+      "task_indicators": [
+        "component",
+        "page",
+        "ui",
+        "button",
+        "form",
+        "modal",
+        "layout",
+        "responsive",
+        "style",
+        "css",
+        "tailwind",
+        "animation",
+        "design system"
+      ],
+      "excluded_patterns": [
+        "**/api/**/*",
+        "**/server/**/*",
+        "**/*.test.*",
+        "**/*.spec.*"
+      ],
+      "model_preference": "opus"
+    },
+
+    "backend": {
+      "name": "Backend Agent",
+      "description": "Node.js/Next.js API and server-side specialist",
+      "rules_file": ".claude/pilot/rules/backend.yaml",
+      "capabilities": [
+        "api_design",
+        "database_operations",
+        "authentication",
+        "authorization",
+        "input_validation",
+        "server_actions"
+      ],
+      "file_patterns": [
+        "**/api/**/*",
+        "**/server/**/*",
+        "**/lib/**/*",
+        "**/services/**/*",
+        "**/db/**/*",
+        "**/prisma/**/*",
+        "**/*.server.ts"
+      ],
+      "task_indicators": [
+        "api",
+        "endpoint",
+        "database",
+        "query",
+        "mutation",
+        "server action",
+        "authentication",
+        "authorization",
+        "middleware",
+        "prisma",
+        "schema"
+      ],
+      "excluded_patterns": [
+        "**/components/**/*",
+        "**/*.test.*",
+        "**/*.spec.*"
+      ],
+      "model_preference": "opus"
+    },
+
+    "testing": {
+      "name": "Testing Agent",
+      "description": "Unit, integration, and E2E testing specialist",
+      "rules_file": null,
+      "capabilities": [
+        "unit_testing",
+        "integration_testing",
+        "e2e_testing",
+        "test_coverage",
+        "mocking"
+      ],
+      "file_patterns": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/tests/**/*",
+        "**/test/**/*",
+        "**/__tests__/**/*",
+        "**/e2e/**/*"
+      ],
+      "task_indicators": [
+        "test",
+        "testing",
+        "unit test",
+        "integration test",
+        "e2e",
+        "coverage",
+        "vitest",
+        "playwright",
+        "mock",
+        "fixture"
+      ],
+      "excluded_patterns": [],
+      "model_preference": "sonnet"
+    },
+
+    "security": {
+      "name": "Security Agent",
+      "description": "Security review and vulnerability prevention specialist",
+      "rules_file": ".claude/pilot/rules/security.yaml",
+      "capabilities": [
+        "security_audit",
+        "vulnerability_detection",
+        "input_sanitization",
+        "authentication_review",
+        "dependency_audit"
+      ],
+      "file_patterns": [
+        "**/*"
+      ],
+      "task_indicators": [
+        "security",
+        "vulnerability",
+        "auth",
+        "permission",
+        "xss",
+        "injection",
+        "encryption",
+        "secrets",
+        "audit",
+        "owasp"
+      ],
+      "excluded_patterns": [
+        "**/*.md",
+        "**/*.json",
+        "**/node_modules/**/*"
+      ],
+      "model_preference": "opus"
+    },
+
+    "review": {
+      "name": "Review Agent",
+      "description": "Code review and quality assurance specialist",
+      "rules_file": ".claude/pilot/rules/review.yaml",
+      "capabilities": [
+        "code_review",
+        "quality_check",
+        "pattern_compliance",
+        "performance_review",
+        "documentation_review"
+      ],
+      "file_patterns": [
+        "**/*"
+      ],
+      "task_indicators": [
+        "review",
+        "quality",
+        "refactor",
+        "cleanup",
+        "optimize",
+        "improve",
+        "code smell",
+        "lint",
+        "pr review"
+      ],
+      "excluded_patterns": [
+        "**/node_modules/**/*",
+        "**/*.lock"
+      ],
+      "model_preference": "sonnet"
+    }
+  },
+
+  "routing": {
+    "rules": [
+      {
+        "condition": "file_pattern_match",
+        "description": "Route based on file patterns being modified"
+      },
+      {
+        "condition": "task_indicator_match",
+        "description": "Route based on keywords in task description"
+      },
+      {
+        "condition": "explicit_agent",
+        "description": "Route to explicitly requested agent"
+      }
+    ],
+    "fallback": "review",
+    "multi_agent_threshold": 0.5,
+    "confidence_threshold": 0.7
+  },
+
+  "orchestration": {
+    "patterns": {
+      "full_stack_feature": {
+        "description": "New feature touching frontend and backend",
+        "agents": ["backend", "frontend"],
+        "sequence": "parallel",
+        "post_agents": ["testing", "review"]
+      },
+      "api_only": {
+        "description": "Backend-only API work",
+        "agents": ["backend"],
+        "sequence": "single",
+        "post_agents": ["security", "testing"]
+      },
+      "ui_only": {
+        "description": "Frontend-only UI work",
+        "agents": ["frontend"],
+        "sequence": "single",
+        "post_agents": ["testing"]
+      },
+      "security_audit": {
+        "description": "Security-focused review",
+        "agents": ["security"],
+        "sequence": "single",
+        "post_agents": ["review"]
+      },
+      "comprehensive": {
+        "description": "Full review with all agents",
+        "agents": ["frontend", "backend", "security"],
+        "sequence": "parallel",
+        "post_agents": ["testing", "review"]
+      }
+    }
+  }
+}
