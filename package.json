@@ -1,0 +1,54 @@
+{
+  "name": "pilot-agi",
+  "version": "0.1.0",
+  "description": "AI-powered development framework for Claude Code - Ship faster with structured workflows",
+  "main": "bin/install.js",
+  "bin": {
+    "pilot-agi": "./bin/install.js"
+  },
+  "scripts": {
+    "prepare": "husky || true",
+    "lint": "eslint .",
+    "test": "node --test",
+    "release": "semantic-release"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "ai",
+    "coding-assistant",
+    "developer-tools",
+    "productivity",
+    "workflow",
+    "automation"
+  ],
+  "author": "Vadym Syliava",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vadymsyliava/Pilot-AGI.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vadymsyliava/Pilot-AGI/issues"
+  },
+  "homepage": "https://github.com/vadymsyliava/Pilot-AGI#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "bin/",
+    "commands/",
+    "skills/",
+    "hooks/",
+    "agents/",
+    "templates/",
+    "VERSION",
+    "CHANGELOG.md"
+  ],
+  "devDependencies": {
+    "@commitlint/cli": "^19.0.0",
+    "@commitlint/config-conventional": "^19.0.0",
+    "husky": "^9.0.0",
+    "semantic-release": "^23.0.0"
+  }
+}
