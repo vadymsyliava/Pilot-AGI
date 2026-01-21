@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+All notable changes to Pilot AGI will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -8,63 +8,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- Token usage tracking and cost estimation
-- Session persistence and crash recovery
+- Subagent coordination
+- Custom templates
 - Team collaboration features
+
+---
+
+## [0.2.0] - 2026-01-20
+
+### Added
+- **Beads (bd) Integration** - Tasks now use beads as single source of truth
+- **Skills Architecture** - Migrated from commands/ to .claude/skills/
+- **Session Capsules** - Crash recovery via runs/YYYY-MM-DD.md
+- **Configurable Token Budget** - Settings in config.default.json
+- **CLAUDE.md Agent Contract** - Defines canonical workflow
+
+### Changed
+- Restructured from `/pilot:*` commands to `/pilot-*` skills
+- Planning docs moved to work/ directory
+- Session hook now integrates with bd for context
+
+### Skills
+- `/pilot-next` - Pick next ready task from bd
+- `/pilot-plan` - Create implementation plan
+- `/pilot-exec` - Execute one micro-step
+- `/pilot-commit` - Create conventional commit
+- `/pilot-review` - Code review checklist
+- `/pilot-close` - Validate DoD and close task
+- `/pilot-research` - Research and document
+- `/pilot-status` - Show progress
+- `/pilot-update` - Update framework
+- `/pilot-help` - Show help
 
 ---
 
 ## [0.1.0] - 2026-01-20
 
 ### Added
-- **Initial release of Pilot AGI**
-- Core command structure with 10 intuitive commands:
-  - `/pilot:init` - Initialize project with guided setup
-  - `/pilot:scan` - Analyze existing codebase
-  - `/pilot:milestone` - Manage project milestones
-  - `/pilot:plan` - Create detailed implementation plans
-  - `/pilot:exec` - Execute approved plans
-  - `/pilot:verify` - Verify implementation completion
-  - `/pilot:quick` - Handle ad-hoc tasks
-  - `/pilot:status` - Check project progress
-  - `/pilot:help` - Display help and documentation
-  - `/pilot:update` - Update to latest version
-- npm distribution via `npx pilot-agi`
-- Global and local installation options
-- Project state management in `.planning/` directory
-- Template files for PROJECT.md, ROADMAP.md, STATE.md
-- SessionStart hook for update notifications
-- MIT license
-
-### Technical
-- Node.js 18+ requirement
-- Husky for git hooks
-- Conventional commits enforcement
-- Semantic release automation
-
----
-
-## Version History
-
-| Version | Date | Highlights |
-|---------|------|------------|
-| 0.1.0 | 2026-01-20 | Initial release |
-
----
-
-## Upgrade Guide
-
-### From Pre-release to 0.1.0
-
-If you were using a pre-release version:
-
-```bash
-# Update to latest
-npx pilot-agi --global
-
-# Or in Claude Code
-/pilot:update
-```
+- Initial release
+- Basic command structure
+- npm distribution
 
 ---
 

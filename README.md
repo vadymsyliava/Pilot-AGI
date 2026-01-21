@@ -1,31 +1,31 @@
 # Pilot AGI
 
-**AI-powered development framework for Claude Code** - Ship faster with structured workflows, not ceremony.
+**AI-powered development framework for Claude Code** - Structured workflows that ship.
 
 [![npm version](https://img.shields.io/npm/v/pilot-agi.svg)](https://www.npmjs.com/package/pilot-agi)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
 
-## Why Pilot AGI?
+## What is Pilot AGI?
 
-Traditional AI coding assistants are reactive - they wait for you to tell them what to do. Pilot AGI is **proactive** - it plans, executes, and verifies work systematically.
+Pilot AGI brings structure to AI-assisted development:
 
-### The Problem with "Vibe Coding"
-- AI generates code without understanding context
-- Quality degrades as context window fills
-- No verification that code actually works
-- Progress is lost between sessions
-
-### The Pilot AGI Solution
-- **Structured planning** before any code is written
-- **Token-efficient** workflows that stay in the sweet spot
-- **Built-in verification** at every step
-- **Session persistence** - pick up right where you left off
+- **Beads (bd) Integration** - Git-backed task management as single source of truth
+- **Plan → Approve → Execute → Verify** - The canonical loop that prevents drift
+- **Session Capsules** - Crash recovery and context continuity
+- **Token Efficiency** - Progressive disclosure, load only what's needed
 
 ---
 
 ## Quick Start
+
+### Prerequisites
+
+Install [beads](https://github.com/steveyegge/beads) (task management):
+```bash
+curl -fsSL https://beads.dev/install.sh | bash
+```
 
 ### Installation
 
@@ -37,232 +37,117 @@ npx pilot-agi --global
 npx pilot-agi --local
 ```
 
-### First Project
+### Initialize Project
 
 ```bash
-# In Claude Code, run:
-/pilot:init
-```
+# Initialize beads for task tracking
+bd init
 
-This starts an interactive session to understand your project, then generates:
-- `PROJECT.md` - Your vision and requirements
-- `ROADMAP.md` - Milestones and phases
-- `STATE.md` - Progress tracking
-
----
-
-## Commands
-
-Pilot AGI provides **10 intuitive commands**:
-
-| Command | Purpose | When to Use |
-|---------|---------|-------------|
-| `/pilot:init` | Initialize project | Starting a new project |
-| `/pilot:scan` | Analyze codebase | Understanding existing code |
-| `/pilot:milestone` | Manage milestones | Planning major releases |
-| `/pilot:plan` | Plan work | Before implementing features |
-| `/pilot:exec` | Execute plan | Implementing planned work |
-| `/pilot:verify` | Verify completion | After implementing features |
-| `/pilot:quick` | Ad-hoc tasks | Bug fixes, small changes |
-| `/pilot:status` | Check progress | Seeing where you are |
-| `/pilot:help` | Show help | Learning the system |
-| `/pilot:update` | Update framework | Getting latest features |
-
-### Workflow
-
-The typical workflow is:
-
-```
-/pilot:init → /pilot:plan → /pilot:exec → /pilot:verify
-     ↓              ↓            ↓             ↓
-  Understand    Design     Implement      Confirm
-   project      solution     code          works
-```
-
-For quick tasks:
-```
-/pilot:quick → done
+# Start using Pilot AGI skills
+/pilot-help
 ```
 
 ---
 
-## Detailed Command Reference
-
-### `/pilot:init` - Initialize Project
-
-Starts a conversational flow to understand your project:
+## The Canonical Loop
 
 ```
-/pilot:init
+bd ready → /pilot-plan → (approve) → /pilot-exec → /pilot-commit → /pilot-close
 ```
 
-**What it does:**
-1. Asks about your project vision
-2. Identifies key requirements
-3. Suggests milestones and phases
-4. Creates planning documents
-
-**Options:**
-- `--from-readme` - Extract info from existing README
-- `--minimal` - Skip deep questions, create basic structure
+1. **bd ready** - Pick top task (dependencies guarantee order)
+2. **/pilot-plan** - Create implementation plan, wait for approval
+3. **/pilot-exec** - Execute one micro-step with verification
+4. **/pilot-commit** - Create conventional commit linked to bd issue
+5. **/pilot-close** - Validate Definition of Done, close bd issue
 
 ---
 
-### `/pilot:scan` - Analyze Codebase
+## Skills
 
-Builds understanding of an existing codebase:
-
-```
-/pilot:scan
-```
-
-**What it does:**
-1. Identifies tech stack and patterns
-2. Maps module dependencies
-3. Finds conventions and standards
-4. Creates codebase summary
-
----
-
-### `/pilot:plan` - Plan Work
-
-Creates detailed implementation plan for a phase:
-
-```
-/pilot:plan [phase-number]
-/pilot:plan 2
-```
-
-**What it does:**
-1. Researches requirements for the phase
-2. Identifies files to modify
-3. Creates step-by-step implementation plan
-4. Waits for your approval before proceeding
-
----
-
-### `/pilot:exec` - Execute Plan
-
-Implements the approved plan:
-
-```
-/pilot:exec
-```
-
-**What it does:**
-1. Executes each step in the plan
-2. Runs tests after each change
-3. Commits atomic changes
-4. Updates progress in STATE.md
-
----
-
-### `/pilot:verify` - Verify Completion
-
-Confirms implementation meets requirements:
-
-```
-/pilot:verify
-```
-
-**What it does:**
-1. Checks all planned items completed
-2. Runs full test suite
-3. Validates against requirements
-4. Marks phase as complete or lists remaining work
-
----
-
-### `/pilot:quick` - Ad-hoc Tasks
-
-For small tasks that don't need full planning:
-
-```
-/pilot:quick fix the login button styling
-/pilot:quick add error handling to API calls
-```
-
-**What it does:**
-1. Understands the quick task
-2. Implements with verification
-3. Commits with clear message
-
----
-
-### `/pilot:status` - Check Progress
-
-Shows current project state:
-
-```
-/pilot:status
-```
-
-**Output includes:**
-- Current milestone and phase
-- Completed vs remaining work
-- Session token usage
-- Suggested next action
-
----
-
-### `/pilot:update` - Update Framework
-
-Updates Pilot AGI to latest version:
-
-```
-/pilot:update
-```
-
-**What it does:**
-1. Checks for new version
-2. Shows changelog
-3. Updates installation
-4. Preserves your settings
-
----
-
-## Configuration
-
-### Project Settings
-
-Create `.planning/config.json`:
-
-```json
-{
-  "commit_planning_docs": false,
-  "auto_verify": true,
-  "token_budget_warning": 50000,
-  "preferred_model": "sonnet"
-}
-```
-
-### Global Settings
-
-Located at `~/.claude/pilot-config.json`:
-
-```json
-{
-  "check_updates": true,
-  "telemetry": false
-}
-```
+| Skill | Purpose |
+|-------|---------|
+| `/pilot-next` | Pick next ready task from bd |
+| `/pilot-plan` | Create implementation plan for task |
+| `/pilot-exec` | Execute one micro-step |
+| `/pilot-commit` | Create conventional commit |
+| `/pilot-review` | Quick code review checklist |
+| `/pilot-close` | Validate DoD and close task |
+| `/pilot-research` | Research topic, save to work/research/ |
+| `/pilot-status` | Show progress and suggest next action |
+| `/pilot-update` | Update Pilot AGI |
+| `/pilot-help` | Show help |
 
 ---
 
 ## Project Structure
 
-After `/pilot:init`, your project has:
-
 ```
 your-project/
-├── .planning/              # Pilot AGI state (gitignored)
-│   ├── PROJECT.md          # Vision & requirements
-│   ├── ROADMAP.md          # Milestones & phases
-│   ├── STATE.md            # Current progress
-│   ├── research/           # Domain research
-│   ├── plans/              # Phase plans
-│   └── sessions/           # Session recovery
-└── ... your code ...
+├── .beads/                 # Task database (bd init)
+├── .claude/
+│   ├── skills/pilot-*/     # Pilot AGI skills
+│   ├── pilot/              # Framework internals
+│   │   ├── hooks/          # Session hooks
+│   │   ├── templates/      # Planning templates
+│   │   └── config.default.json
+│   └── settings.json       # Hooks configuration
+├── work/
+│   ├── ROADMAP.md          # High-level planning
+│   ├── milestones/         # Milestone specs
+│   ├── sprints/            # Sprint planning
+│   ├── specs/              # Feature specifications
+│   ├── research/           # Research outputs
+│   └── plans/              # Approved implementation plans
+├── runs/
+│   └── YYYY-MM-DD.md       # Session capsules
+└── CLAUDE.md               # Agent contract
+```
+
+---
+
+## Key Concepts
+
+### Beads as Task SSOT
+
+Tasks live in beads (bd), not markdown files:
+```bash
+bd create "Implement user auth"    # Create task
+bd ready                           # List actionable tasks
+bd update bd-a1b2 --status in_progress  # Claim task
+bd issues                          # Query all tasks
+```
+
+### Session Capsules
+
+Every action logged to `runs/YYYY-MM-DD.md` for:
+- Crash recovery
+- Context continuity
+- Progress tracking
+
+### Token Discipline
+
+- Skills are concise (<500 lines)
+- Progressive disclosure (load on demand)
+- Scoped reads (specific sections, not whole files)
+- Session logs summarize, don't carry full context
+
+---
+
+## Configuration
+
+`.claude/pilot/config.default.json`:
+```json
+{
+  "token_budget": {
+    "warning_threshold": 50000,
+    "target_range": { "min": 20000, "max": 80000 }
+  },
+  "planning": {
+    "require_approval": true,
+    "max_steps_per_plan": 10
+  }
+}
 ```
 
 ---
@@ -275,31 +160,24 @@ See [CHANGELOG.md](./CHANGELOG.md) for version history.
 
 ## Roadmap
 
-### v0.1.0 (Current)
-- [x] Core command structure
-- [x] Project initialization
-- [x] Basic planning workflow
-- [x] npm distribution
+### v0.2.0 (Current)
+- [x] Beads (bd) integration
+- [x] Skills-based architecture
+- [x] Session capsule system
+- [x] Configurable token budget
 
-### v0.2.0 (Next)
-- [ ] Token usage tracking
-- [ ] Cost estimation
-- [ ] Session persistence
-- [ ] Crash recovery
-
-### v0.3.0 (Future)
-- [ ] Team collaboration
+### v0.3.0 (Next)
+- [ ] Subagent coordination
 - [ ] Custom templates
-- [ ] Plugin system
-- [ ] VS Code extension
+- [ ] Team collaboration
 
 ---
 
 ## Contributing
 
-Contributions welcome! Please read [CONTRIBUTING.md](./CONTRIBUTING.md) first.
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-### Development Setup
+### Development
 
 ```bash
 git clone https://github.com/vadymsyliava/Pilot-AGI.git
@@ -309,19 +187,6 @@ npm install
 npm link
 ```
 
-### Branch Strategy
-
-- `main` - Stable releases
-- `release` - Pre-release testing
-- `dev` - Active development
-
----
-
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/vadymsyliava/Pilot-AGI/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/vadymsyliava/Pilot-AGI/discussions)
-
 ---
 
 ## License
@@ -330,4 +195,4 @@ MIT - see [LICENSE](./LICENSE)
 
 ---
 
-**Built with Claude Code** - An Anthropic product
+**Built for Claude Code**

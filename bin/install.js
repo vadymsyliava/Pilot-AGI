@@ -98,7 +98,7 @@ function updateSettings(claudeDir) {
     settings.hooks = {};
   }
 
-  // SessionStart hook for update checking
+  // SessionStart hook for update checking and bd context
   if (!settings.hooks.SessionStart) {
     settings.hooks.SessionStart = [];
   }
@@ -107,7 +107,7 @@ function updateSettings(claudeDir) {
     matcher: '*',
     hooks: [{
       type: 'command',
-      command: `node "${path.join(claudeDir, 'hooks', 'session-start.js')}"`,
+      command: `node "${path.join(claudeDir, 'pilot', 'hooks', 'session-start.js')}"`,
       timeout: 10
     }]
   };
@@ -135,65 +135,82 @@ async function install(targetDir, isGlobal) {
 
   logStep('1/5', 'Creating directories...');
 
-  const dirs = [
-    path.join(claudeDir, 'commands', 'pilot'),
-    path.join(claudeDir, 'skills', 'pilot'),
-    path.join(claudeDir, 'hooks'),
-    path.join(claudeDir, 'agents')
-  ];
+  const skillsDir = path.join(claudeDir, 'skills');
+  const pilotDir = path.join(claudeDir, 'pilot');
 
-  for (const dir of dirs) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  // Create directories
+  fs.mkdirSync(skillsDir, { recursive: true });
+  fs.mkdirSync(pilotDir, { recursive: true });
   logSuccess('Directories created');
 
-  logStep('2/5', 'Installing commands...');
-  copyDirectory(
-    path.join(packageDir, 'commands', 'pilot'),
-    path.join(claudeDir, 'commands', 'pilot')
-  );
-  logSuccess('Commands installed');
+  logStep('2/5', 'Installing skills...');
+  // Copy all pilot-* skill directories
+  const sourceSkillsDir = path.join(packageDir, '.claude', 'skills');
+  if (fs.existsSync(sourceSkillsDir)) {
+    const skillDirs = fs.readdirSync(sourceSkillsDir, { withFileTypes: true })
+      .filter(d => d.isDirectory() && d.name.startsWith('pilot-'));
 
-  logStep('3/5', 'Installing skills...');
-  copyDirectory(
-    path.join(packageDir, 'skills', 'pilot'),
-    path.join(claudeDir, 'skills', 'pilot')
-  );
+    for (const skill of skillDirs) {
+      copyDirectory(
+        path.join(sourceSkillsDir, skill.name),
+        path.join(skillsDir, skill.name)
+      );
+    }
+  }
   logSuccess('Skills installed');
 
-  logStep('4/5', 'Installing hooks...');
+  logStep('3/5', 'Installing framework internals...');
   copyDirectory(
-    path.join(packageDir, 'hooks'),
-    path.join(claudeDir, 'hooks')
+    path.join(packageDir, '.claude', 'pilot'),
+    pilotDir
   );
-  logSuccess('Hooks installed');
+  logSuccess('Framework installed');
+
+  logStep('4/5', 'Creating project structure...');
+  // Create work/ and runs/ directories
+  const workDir = path.join(targetDir, 'work');
+  const runsDir = path.join(targetDir, 'runs');
+
+  for (const dir of ['milestones', 'sprints', 'specs', 'research', 'plans']) {
+    fs.mkdirSync(path.join(workDir, dir), { recursive: true });
+  }
+  fs.mkdirSync(runsDir, { recursive: true });
+
+  // Copy templates
+  const templatesDir = path.join(packageDir, '.claude', 'pilot', 'templates');
+  if (fs.existsSync(templatesDir)) {
+    const roadmapTemplate = path.join(templatesDir, 'ROADMAP.md');
+    if (fs.existsSync(roadmapTemplate)) {
+      fs.copyFileSync(roadmapTemplate, path.join(workDir, 'ROADMAP.md'));
+    }
+  }
+
+  // Copy CLAUDE.md
+  const claudeMd = path.join(packageDir, 'CLAUDE.md');
+  if (fs.existsSync(claudeMd)) {
+    fs.copyFileSync(claudeMd, path.join(targetDir, 'CLAUDE.md'));
+  }
+  logSuccess('Project structure created');
 
   logStep('5/5', 'Configuring settings...');
   updateSettings(claudeDir);
 
   // Write version file
   fs.writeFileSync(
-    path.join(claudeDir, 'pilot-version'),
+    path.join(pilotDir, 'VERSION'),
     VERSION
   );
   logSuccess('Settings configured');
-
-  // Copy agents
-  if (fs.existsSync(path.join(packageDir, 'agents'))) {
-    copyDirectory(
-      path.join(packageDir, 'agents'),
-      path.join(claudeDir, 'agents')
-    );
-  }
 
   log('\n════════════════════════════════════════════', 'green');
   log('  Installation complete!', 'green');
   log('════════════════════════════════════════════\n', 'green');
 
   log('Next steps:', 'bright');
-  log('  1. Restart Claude Code to load commands');
-  log('  2. Run /pilot:help to see available commands');
-  log('  3. Run /pilot:init to start a new project\n');
+  log('  1. Install beads: curl -fsSL https://beads.dev/install.sh | bash');
+  log('  2. Initialize beads in your project: bd init');
+  log('  3. Restart Claude Code to load skills');
+  log('  4. Run /pilot-help to see available commands\n');
 
   if (isGlobal) {
     log(`Installed to: ${claudeDir}`, 'yellow');
