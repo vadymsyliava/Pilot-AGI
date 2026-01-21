@@ -97,7 +97,7 @@ BEADS (bd) INTEGRATION
 
   But if you want to:
     bd ready       See actionable tasks
-    bd issues      See all tasks
+    bd list        See all tasks
     bd create      Create a task manually
 
   Install: curl -fsSL https://beads.dev/install.sh | bash

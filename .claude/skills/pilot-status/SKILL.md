@@ -11,7 +11,7 @@ You are displaying the current project state.
 ## Step 1: Check bd status
 
 ```bash
-bd issues --json
+bd list --json
 ```
 
 Get counts by status:
@@ -23,7 +23,7 @@ Get counts by status:
 ## Step 2: Get current task
 
 ```bash
-bd issues --status in_progress --json
+bd list --status in_progress --json
 ```
 
 ## Step 3: Read session capsule

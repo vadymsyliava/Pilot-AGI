@@ -11,7 +11,7 @@ You are validating completion and closing the bd task.
 ## Step 1: Get current task
 
 ```bash
-bd issues --status in_progress --json
+bd list --status in_progress --json
 ```
 
 ## Step 2: Load plan and verify all steps complete

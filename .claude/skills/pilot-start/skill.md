@@ -20,7 +20,7 @@ ls work/PROJECT_BRIEF.md work/ROADMAP.md .beads 2>/dev/null
 ls -la src/ app/ lib/ package.json Cargo.toml go.mod requirements.txt 2>/dev/null
 
 # Check 3: Is bd initialized?
-bd issues --limit 1 2>/dev/null
+bd list --limit 1 2>/dev/null
 
 # Check 4: Any roadmap files?
 ls work/*ROADMAP*.md 2>/dev/null
@@ -103,7 +103,7 @@ PROJECT: {name from PROJECT_BRIEF.md or directory name}
 Then check bd status:
 
 ```bash
-bd issues --json 2>/dev/null
+bd list --json 2>/dev/null
 bd ready --json 2>/dev/null
 ```
 

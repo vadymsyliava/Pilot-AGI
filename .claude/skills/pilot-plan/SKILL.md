@@ -11,7 +11,7 @@ You are creating an implementation plan for the current task.
 ## Step 1: Get current task
 
 ```bash
-bd issues --status in_progress --json
+bd list --status in_progress --json
 ```
 
 If no task is in progress:

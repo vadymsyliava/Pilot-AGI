@@ -494,7 +494,7 @@ code_quality:
 - [x] Review agent rules (.claude/pilot/rules/review.yaml)
 - [x] Parallel execution skill (/pilot-parallel)
 
-### v0.1.0 - Production Ready
+### v0.0.7 - Production Ready
 - [ ] Full agent orchestration
 - [ ] Quality gates
 - [ ] Duplicate detection
