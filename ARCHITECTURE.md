@@ -2,138 +2,160 @@
 
 ## Design Philosophy
 
-Pilot AGI is built on three core principles:
+1. **bd as SSOT** - Tasks live in beads, not markdown
+2. **Token Efficiency** - Progressive disclosure, minimal context
+3. **Crash Recovery** - Session capsules enable continuity
+4. **Verifiable Progress** - Every step has verification criteria
 
-1. **Simplicity Over Complexity** - Fewer commands that do more
-2. **Token Efficiency** - Progressive disclosure, minimal context loading
-3. **Robust State** - Crash recovery, persistent sessions, clear state
+## The Canonical Loop
 
-## Command Structure
+```
+bd ready → /pilot-plan → (approve) → /pilot-exec → /pilot-commit → /pilot-review → /pilot-close
+```
 
-| Command | Purpose |
-|---------|---------|
-| `/pilot:init` | Initialize project |
-| `/pilot:scan` | Analyze codebase |
-| `/pilot:milestone` | Milestone management |
-| `/pilot:plan` | Plan work |
-| `/pilot:exec` | Execute plan |
-| `/pilot:verify` | Verify completion |
-| `/pilot:quick` | Ad-hoc tasks |
-| `/pilot:status` | Check progress |
-| `/pilot:help` | Show help |
-| `/pilot:update` | Update framework |
+This loop ensures:
+- Dependencies are respected (bd ready)
+- Plans are approved before execution
+- Each step is verified before committing
+- DoD is validated before closing
 
 ## Directory Structure
 
 ```
-pilot-agi/                    # npm package root
+pilot-agi/                      # npm package
 ├── bin/
-│   └── install.js            # npx installer
-├── commands/pilot/           # Claude Code commands
-│   ├── init.md
-│   ├── scan.md
-│   ├── milestone.md
-│   ├── plan.md
-│   ├── exec.md
-│   ├── verify.md
-│   ├── quick.md
-│   ├── status.md
-│   ├── help.md
-│   └── update.md
-├── skills/pilot/             # Core skill logic
-│   ├── SKILL.md
-│   ├── workflows/
-│   │   ├── init.md
-│   │   ├── plan.md
-│   │   ├── execute.md
-│   │   └── verify.md
-│   ├── templates/
-│   │   ├── PROJECT.md
-│   │   ├── ROADMAP.md
-│   │   └── STATE.md
-│   └── prompts/
-│       └── system.md
-├── hooks/
-│   ├── session-start.js      # Update check + context injection
-│   └── post-tool.js          # State tracking
-├── agents/
-│   ├── researcher.md
-│   ├── planner.md
-│   ├── executor.md
-│   └── reviewer.md
+│   └── install.js              # npx installer
+├── .claude/
+│   ├── skills/
+│   │   ├── pilot-help/SKILL.md
+│   │   ├── pilot-next/SKILL.md
+│   │   ├── pilot-plan/SKILL.md
+│   │   ├── pilot-exec/SKILL.md
+│   │   ├── pilot-commit/SKILL.md
+│   │   ├── pilot-review/SKILL.md
+│   │   ├── pilot-close/SKILL.md
+│   │   ├── pilot-research/SKILL.md
+│   │   ├── pilot-status/SKILL.md
+│   │   └── pilot-update/SKILL.md
+│   └── pilot/
+│       ├── hooks/
+│       │   └── session-start.js
+│       ├── templates/
+│       │   ├── session-capsule.md
+│       │   ├── ROADMAP.md
+│       │   └── spec.md
+│       ├── prompts/
+│       │   └── roles/
+│       └── config.default.json
+├── work/                       # Planning templates
+├── runs/                       # Session capsule directory
+├── CLAUDE.md                   # Agent contract
 ├── package.json
 ├── README.md
-├── CHANGELOG.md
-├── LICENSE
-└── VERSION
+└── CHANGELOG.md
 ```
 
-## Project Structure (created by /pilot:init)
+## Project Structure (after installation)
 
 ```
-.planning/                    # Project state (gitignored by default)
-├── PROJECT.md                # Vision & requirements
-├── ROADMAP.md                # Milestones & phases
-├── STATE.md                  # Current progress & session memory
-├── research/                 # Domain research outputs
-├── plans/                    # Phase plans
-├── sessions/                 # Session logs for recovery
-└── config.json               # Project settings
+user-project/
+├── .beads/                     # Task database (created by bd init)
+│   ├── issues.jsonl            # Task data (Git-tracked)
+│   └── beads.db                # SQLite cache (not tracked)
+├── .claude/
+│   ├── skills/pilot-*/         # Installed skills
+│   ├── pilot/                  # Framework internals
+│   └── settings.json           # Hooks configuration
+├── work/
+│   ├── ROADMAP.md              # High-level planning
+│   ├── milestones/
+│   ├── sprints/
+│   ├── specs/
+│   ├── research/
+│   └── plans/
+├── runs/
+│   └── YYYY-MM-DD.md           # Session logs
+└── CLAUDE.md                   # Agent contract
 ```
 
-## State Management
+## Beads Integration
 
-### Session Persistence
-- Every significant action writes to `.planning/sessions/`
-- Crash recovery reads last session state
-- Token usage tracked per session
+### Why Beads?
 
-### State File Format (STATE.md)
+- **Git-backed** - Tasks tracked alongside code
+- **Dependency-aware** - DAG model prevents execution order issues
+- **Multi-agent safe** - Hash-based IDs prevent merge conflicts
+- **Agent-optimized** - JSON output for programmatic access
+
+### Task Lifecycle
+
+```
+open → in_progress → closed
+        ↓
+      blocked (if dependencies not met)
+```
+
+### Key Commands
+
+```bash
+bd init                    # Initialize .beads/
+bd create "Task title"     # Create task
+bd ready                   # List actionable tasks
+bd ready --json            # Machine-readable output
+bd update <id> --status in_progress  # Claim task
+bd dep add <id> --blocks <other>     # Add dependency
+```
+
+## Session Capsules
+
+### Purpose
+
+- **Crash Recovery** - Resume after unexpected interruption
+- **Context Continuity** - Pick up where you left off
+- **Progress Tracking** - See what was done
+
+### Format
+
 ```markdown
-# Project State
+# Session: 2026-01-20
 
-## Current Position
-- Milestone: M1 - Core Features
-- Phase: 2 - Authentication
-- Task: Implement JWT validation
+## Tasks Worked
+### Task: bd-a1b2
+- Title: Implement auth
+- Progress: Step 2/5
 
-## Progress
-- [x] Phase 1: Project Setup
-- [ ] Phase 2: Authentication (in progress)
-- [ ] Phase 3: API Endpoints
+## Commits
+- abc123 - feat(auth): add login endpoint
 
-## Session
-- Started: 2026-01-20 10:00
-- Tokens used: 12,450
-- Last action: Completed login endpoint
+## Resume Context
+- Current task: bd-a1b2
+- Next action: /pilot-exec
 ```
 
 ## Token Efficiency Strategy
 
-1. **Lazy Loading** - Only load context when needed
-2. **Scoped Reads** - Read specific file sections, not entire files
-3. **Cached Analysis** - Don't re-analyze unchanged code
-4. **Minimal Prompts** - Skills are concise (<500 lines)
+### Progressive Disclosure
+
+1. **Tier 0** (always loaded): CLAUDE.md, current bd task
+2. **Tier 1** (per task): Referenced spec section
+3. **Tier 2** (on demand): Canonical patterns, specific files
+4. **Tier 3** (rare): Full architecture docs
+
+### Skill Constraints
+
+- Each SKILL.md < 500 lines
+- Load references on demand
+- Summarize closed work in session capsules
 
 ## Update Mechanism
 
-1. **SessionStart hook** checks npm registry for new versions
+1. **SessionStart hook** checks npm registry
 2. **Notification** shown if update available
-3. **/pilot:update** downloads and installs new version
-4. **CHANGELOG.md** shown to user with what's new
-5. **VERSION** file tracks installed version
+3. **/pilot-update** downloads and installs
+4. **CHANGELOG.md** shown to user
 
-## Git Integration
+## Git Branch Strategy
 
-### Branch Strategy
-- `main` - Stable releases only
-- `release` - Pre-release testing
+- `main` - Stable releases
+- `release` - Push here triggers npm publish
 - `dev` - Active development
-
-### Auto-Release Flow
-1. Push to `release` branch
-2. GitHub Action runs tests
-3. If tests pass, merge to `main`
-4. Publish to npm with new version
-5. Create GitHub Release with changelog
-6. Users get update notification on next session

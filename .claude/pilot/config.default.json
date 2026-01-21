@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "token_budget": {
+    "warning_threshold": 50000,
+    "target_range": {
+      "min": 20000,
+      "max": 80000
+    },
+    "compaction_trigger": 100000
+  },
+  "session": {
+    "auto_capsule": true,
+    "capsule_interval_minutes": 15
+  },
+  "commits": {
+    "conventional": true,
+    "include_bd_id": true,
+    "auto_stage": false
+  },
+  "planning": {
+    "require_approval": true,
+    "max_steps_per_plan": 10,
+    "auto_verify": true
+  },
+  "beads": {
+    "auto_claim": true,
+    "auto_close": false
+  }
+}
