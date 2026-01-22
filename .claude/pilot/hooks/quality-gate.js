@@ -16,6 +16,7 @@ const fileSizeGate = require('./gates/file-size');
 const lintGate = require('./gates/lint');
 const secretsGate = require('./gates/secrets');
 const typeCheckGate = require('./gates/type-check');
+const duplicateGate = require('./gates/duplicate');
 const reporter = require('./lib/reporter');
 
 /**
@@ -64,6 +65,7 @@ async function runGates(config) {
   const gates = [
     { name: 'file-size', fn: fileSizeGate, config: config.file_size },
     { name: 'secrets', fn: secretsGate, config: config.secrets },
+    { name: 'duplicate', fn: duplicateGate, config: config.duplicate },
     { name: 'lint', fn: lintGate, config: config.lint },
     { name: 'type-check', fn: typeCheckGate, config: config.type_check }
   ];

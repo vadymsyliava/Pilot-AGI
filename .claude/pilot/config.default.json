@@ -40,6 +40,12 @@
     "secrets": {
       "enabled": true
     },
+    "duplicate": {
+      "enabled": true,
+      "block_threshold": 0.7,
+      "warn_threshold": 0.5,
+      "min_lines": 15
+    },
     "type_check": {
       "enabled": true,
       "timeout": 30000
