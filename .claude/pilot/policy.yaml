@@ -1,0 +1,169 @@
+# Pilot AGI Governance Policy
+# This file defines enforcement rules that control agent behavior.
+# Hooks (session_start.js, user_prompt_submit.js, pre_tool_use.js) read this
+# policy to enforce governance rules.
+#
+# Version: 1.0
+# Updated: 2026-01-21
+
+version: "1.0"
+
+# =============================================================================
+# ENFORCEMENT RULES
+# Controls what must be true before code edits are allowed
+# =============================================================================
+enforcement:
+  # R1: Must have an active claimed task to edit files
+  # When true, Edit/Write operations are blocked unless a bd task is claimed
+  require_active_task: true
+
+  # R2: Must have an approved plan for complex tasks
+  # When true, blocks edits until plan is approved
+  require_plan_approval: true
+
+  # Plan approval threshold determines when plans are required:
+  # - "low": Always require plan approval
+  # - "medium": Require for tasks with 2+ steps (default)
+  # - "high": Require only for tasks marked as complex
+  plan_approval_threshold: "medium"
+
+  # R3: Protected branches cannot be edited directly
+  # Edit/Write blocked when on these branches
+  protected_branches:
+    - main
+    - master
+    - production
+
+  # R4: Detect new scope in user messages
+  # When true, user prompts are analyzed for new work requests
+  # and routed to /pilot-new-task instead of direct implementation
+  detect_new_scope: true
+
+  # Keywords that trigger new scope detection
+  new_scope_keywords:
+    - "add feature"
+    - "implement"
+    - "create new"
+    - "build"
+    - "fix bug"
+    - "add a"
+    - "can you add"
+    - "let's add"
+
+# =============================================================================
+# EXECUTION RULES
+# Controls what must happen during and after each micro-step
+# =============================================================================
+execution:
+  # R5: Run verification after each micro-step
+  # Ensures changes work before moving to next step
+  require_verification: true
+
+  # R6: Create a commit after each micro-step
+  # Keeps commits atomic and easy to review/revert
+  require_commit_per_step: true
+
+  # R7: Update session run log after each action
+  # Maintains crash recovery context in runs/YYYY-MM-DD.md
+  require_run_log_update: true
+
+  # R8: Update bd task status after state changes
+  # Keeps bd as the single source of truth for task state
+  require_bd_update: true
+
+# =============================================================================
+# AREA DEFINITIONS
+# Maps file paths to domains and agents for multi-agent coordination
+# =============================================================================
+areas:
+  frontend:
+    paths:
+      - "src/app/**"
+      - "src/components/**"
+      - "src/styles/**"
+      - "src/hooks/**"
+      - "app/**"
+      - "components/**"
+      - "pages/**"
+    agent: "frontend-master"
+
+  backend:
+    paths:
+      - "src/api/**"
+      - "src/server/**"
+      - "src/lib/**"
+      - "src/services/**"
+      - "api/**"
+      - "server/**"
+      - "lib/**"
+    agent: "backend-master"
+
+  database:
+    paths:
+      - "prisma/**"
+      - "src/db/**"
+      - "migrations/**"
+      - "drizzle/**"
+      - "db/**"
+    agent: "database-master"
+
+  infra:
+    paths:
+      - ".github/**"
+      - "docker/**"
+      - "infra/**"
+      - "terraform/**"
+      - "k8s/**"
+    agent: null  # No specialized agent
+
+  config:
+    paths:
+      - ".claude/**"
+      - ".pilot-internal/**"
+      - "work/**"
+    agent: null  # Framework configuration
+
+# =============================================================================
+# SESSION MANAGEMENT
+# Controls multi-session coordination and locking
+# =============================================================================
+session:
+  # How often sessions send heartbeat (seconds)
+  heartbeat_interval_sec: 60
+
+  # How long a file/area lock is valid without heartbeat (minutes)
+  lock_timeout_min: 30
+
+  # Maximum concurrent Claude Code sessions
+  max_concurrent_sessions: 6
+
+  # Session state directory
+  state_dir: ".claude/pilot/state/sessions"
+
+  # Event stream file for session coordination
+  event_stream: "runs/sessions.jsonl"
+
+# =============================================================================
+# EXCEPTIONS
+# Files and patterns that bypass enforcement rules
+# =============================================================================
+exceptions:
+  # Files that can be edited without an active task
+  no_task_required:
+    - "runs/*.md"           # Session logs
+    - ".claude/pilot/state/**"  # Session state
+    - "*.lock"              # Lock files
+
+  # Files that don't require plan approval
+  no_plan_required:
+    - "runs/*.md"
+    - ".gitignore"
+    - "*.md"                # Documentation
+
+  # Files that are always blocked from editing (security)
+  never_edit:
+    - ".env"
+    - ".env.*"
+    - "*.pem"
+    - "*.key"
+    - "credentials.*"
