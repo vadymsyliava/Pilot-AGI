@@ -7,7 +7,7 @@
 /**
  * Format results into summary and details
  */
-function format(results) {
+function format(results, total_duration_ms = null) {
   const passed = results.filter(r => r.status === 'pass');
   const warnings = results.filter(r => r.status === 'warn');
   const failed = results.filter(r => r.status === 'fail');
@@ -20,7 +20,10 @@ function format(results) {
   if (errors.length > 0) parts.push(`${errors.length} errors`);
   if (passed.length > 0) parts.push(`${passed.length} passed`);
 
-  const summary = `Quality gates: ${parts.join(', ')}`;
+  let summary = `Quality gates: ${parts.join(', ')}`;
+  if (total_duration_ms !== null) {
+    summary += ` (${total_duration_ms}ms)`;
+  }
 
   // Build detailed output for failures
   let details = '';
@@ -46,20 +49,36 @@ function format(results) {
     }
   }
 
+  // Build metrics for tracking
+  const metrics = {
+    timestamp: new Date().toISOString(),
+    total_duration_ms,
+    gate_count: results.length,
+    passed_count: passed.length,
+    failed_count: failed.length,
+    warning_count: warnings.length,
+    gates: results.map(r => ({
+      name: r.gate,
+      status: r.status,
+      duration_ms: r.duration_ms || null
+    }))
+  };
+
   return {
     summary,
     details,
     warnings: warningsText,
     passed: passed.length,
     failed: failed.length,
-    total: results.length
+    total: results.length,
+    metrics
   };
 }
 
 /**
  * Format for console output
  */
-function formatConsole(results) {
+function formatConsole(results, total_duration_ms = null) {
   const lines = [
     '╔══════════════════════════════════════════════════════════════╗',
     '║  QUALITY GATES                                               ║',
@@ -72,7 +91,8 @@ function formatConsole(results) {
                  result.status === 'warn' ? '⚠' :
                  result.status === 'fail' ? '✗' : '?';
 
-    lines.push(`  ${icon} ${result.gate}: ${result.message}`);
+    const timing = result.duration_ms ? ` (${result.duration_ms}ms)` : '';
+    lines.push(`  ${icon} ${result.gate}: ${result.message}${timing}`);
 
     if (result.status !== 'pass' && result.details) {
       const detailLines = result.details.split('\n');
@@ -83,9 +103,28 @@ function formatConsole(results) {
   }
 
   lines.push('');
+  if (total_duration_ms !== null) {
+    lines.push(`  Total: ${total_duration_ms}ms`);
+  }
   lines.push('────────────────────────────────────────────────────────────────');
 
   return lines.join('\n');
 }
 
-module.exports = { format, formatConsole };
+/**
+ * Format metrics as JSON for session logs
+ */
+function formatMetricsJSON(results, total_duration_ms = null) {
+  return {
+    timestamp: new Date().toISOString(),
+    total_duration_ms,
+    gates: results.map(r => ({
+      name: r.gate,
+      status: r.status,
+      duration_ms: r.duration_ms || null,
+      message: r.message
+    }))
+  };
+}
+
+module.exports = { format, formatConsole, formatMetricsJSON };

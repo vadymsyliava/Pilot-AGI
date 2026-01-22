@@ -1,5 +1,5 @@
 {
-  "version": "0.3.0",
+  "version": "0.4.0",
   "token_budget": {
     "warning_threshold": 50000,
     "target_range": {
@@ -49,6 +49,25 @@
     "type_check": {
       "enabled": true,
       "timeout": 30000
+    },
+    "security": {
+      "enabled": true,
+      "block_severities": ["critical", "high"],
+      "warn_severities": ["moderate"]
+    }
+  },
+  "benchmarks": {
+    "enabled": true,
+    "targets": {
+      "init_to_commit_minutes": 15,
+      "test_coverage_percent": 80,
+      "security_critical_high": 0,
+      "duplicate_percent": 5,
+      "file_size_violations": 0
+    },
+    "tracking": {
+      "log_to_session": true,
+      "metrics_file": "work/metrics/benchmarks.json"
     }
   }
 }
