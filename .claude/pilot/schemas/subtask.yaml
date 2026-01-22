@@ -1,0 +1,214 @@
+# Subtask Schema Definition
+# Version: 1.0
+# Purpose: Define the contract format for task decomposition in Pilot AGI
+
+version: "1.0"
+
+# =============================================================================
+# SUBTASK DEFINITION
+# =============================================================================
+# A subtask represents an atomic unit of work that can be assigned to an agent
+
+subtask:
+  # Unique identifier for this subtask
+  id:
+    type: string
+    pattern: "st-[a-z0-9]{3}"
+    description: "Short unique ID for referencing"
+    example: "st-001"
+
+  # Human-readable title
+  title:
+    type: string
+    max_length: 100
+    description: "Brief description of what this subtask accomplishes"
+    example: "Create AvatarUpload component"
+
+  # Detailed description of the work
+  description:
+    type: string
+    description: "Full context and requirements for the subtask"
+    example: |
+      Build a reusable avatar upload component that allows users to:
+      - Select an image file
+      - Preview before upload
+      - Crop to square aspect ratio
+      - Show upload progress
+
+  # Agent assignment
+  agent:
+    type: string
+    enum: ["frontend", "backend", "testing", "security", "review"]
+    description: "Which specialized agent handles this subtask"
+
+  # Priority within the decomposition
+  priority:
+    type: string
+    enum: ["critical", "high", "medium", "low"]
+    default: "medium"
+    description: "Execution priority (affects parallel grouping)"
+
+# =============================================================================
+# INPUTS
+# =============================================================================
+# What context/data this subtask needs to execute
+
+inputs:
+  description: "List of inputs required for this subtask"
+  items:
+    - name:
+        type: string
+        description: "Identifier for this input"
+        example: "design_tokens"
+
+      source:
+        type: string
+        description: "Where to get this input"
+        patterns:
+          file: "file:{path}"           # Single file
+          glob: "glob:{pattern}"        # Multiple files matching pattern
+          subtask: "subtask:{id}"       # Output from another subtask
+          context: "context:{key}"      # From orchestrator context
+        examples:
+          - "file:.claude/pilot/design-tokens.json"
+          - "glob:src/components/ui/*.tsx"
+          - "subtask:st-001"
+          - "context:database_schema"
+
+      required:
+        type: boolean
+        default: true
+        description: "Whether this input is mandatory"
+
+# =============================================================================
+# OUTPUTS
+# =============================================================================
+# What this subtask will produce
+
+outputs:
+  description: "List of expected outputs from this subtask"
+  items:
+    - path:
+        type: string
+        description: "File path for the output"
+        example: "src/components/features/AvatarUpload.tsx"
+
+      type:
+        type: string
+        enum:
+          - "react_component"
+          - "api_route"
+          - "server_action"
+          - "utility"
+          - "test_file"
+          - "config"
+          - "schema"
+          - "documentation"
+        description: "Type of output for validation"
+
+      validation:
+        type: array
+        description: "Validation rules to apply"
+        items:
+          - "has_use_client_if_needed"
+          - "uses_design_tokens"
+          - "wcag_aa_compliant"
+          - "has_zod_validation"
+          - "has_error_handling"
+          - "has_loading_state"
+          - "typescript_strict"
+          - "exports_types"
+
+# =============================================================================
+# DEPENDENCIES
+# =============================================================================
+# Relationship to other subtasks
+
+dependencies:
+  depends_on:
+    type: array
+    items:
+      type: string
+      pattern: "st-[a-z0-9]{3}"
+    description: "Subtask IDs that must complete before this one starts"
+    example: ["st-001", "st-002"]
+
+  blocks:
+    type: array
+    items:
+      type: string
+      pattern: "st-[a-z0-9]{3}"
+    description: "Subtask IDs that cannot start until this completes"
+    example: ["st-004"]
+
+# =============================================================================
+# EXECUTION METADATA
+# =============================================================================
+
+execution:
+  # Model preference for this subtask complexity
+  model:
+    type: string
+    enum: ["opus", "sonnet", "haiku"]
+    description: "LLM model to use (based on complexity)"
+    guidelines:
+      opus: "Complex reasoning, architecture decisions, multi-file changes"
+      sonnet: "Standard implementation, clear requirements"
+      haiku: "Simple tasks, formatting, analysis"
+
+  # Estimated token usage
+  estimated_tokens:
+    type: integer
+    description: "Rough estimate of context tokens needed"
+
+  # Timeout for this subtask
+  timeout_minutes:
+    type: integer
+    default: 10
+    description: "Max execution time before marking as failed"
+
+# =============================================================================
+# EXAMPLE SUBTASK
+# =============================================================================
+
+example:
+  subtask:
+    id: "st-001"
+    title: "Create AvatarUpload component"
+    description: |
+      Build a client-side avatar upload component with:
+      - File input accepting image types
+      - Preview thumbnail
+      - Upload progress indicator
+      - Integration with existing Button component
+    agent: "frontend"
+    priority: "high"
+
+  inputs:
+    - name: "design_tokens"
+      source: "file:src/styles/tokens.css"
+      required: true
+    - name: "existing_button"
+      source: "file:src/components/ui/Button.tsx"
+      required: true
+    - name: "upload_api"
+      source: "subtask:st-002"
+      required: false
+
+  outputs:
+    - path: "src/components/features/AvatarUpload.tsx"
+      type: "react_component"
+      validation:
+        - "has_use_client_if_needed"
+        - "uses_design_tokens"
+        - "wcag_aa_compliant"
+        - "has_loading_state"
+
+  dependencies:
+    depends_on: []
+    blocks: ["st-003"]
+
+  execution:
+    model: "opus"
+    estimated_tokens: 8000
+    timeout_minutes: 10
