@@ -15,6 +15,7 @@ const path = require('path');
 const fileSizeGate = require('./gates/file-size');
 const lintGate = require('./gates/lint');
 const secretsGate = require('./gates/secrets');
+const securityGate = require('./gates/security');
 const typeCheckGate = require('./gates/type-check');
 const duplicateGate = require('./gates/duplicate');
 const reporter = require('./lib/reporter');
@@ -58,39 +59,49 @@ function loadConfig() {
 }
 
 /**
- * Run all enabled quality gates
+ * Run all enabled quality gates with timing
  */
 async function runGates(config) {
   const results = [];
   const gates = [
     { name: 'file-size', fn: fileSizeGate, config: config.file_size },
     { name: 'secrets', fn: secretsGate, config: config.secrets },
+    { name: 'security', fn: securityGate, config: config.security },
     { name: 'duplicate', fn: duplicateGate, config: config.duplicate },
     { name: 'lint', fn: lintGate, config: config.lint },
     { name: 'type-check', fn: typeCheckGate, config: config.type_check }
   ];
+
+  const totalStart = process.hrtime.bigint();
 
   for (const gate of gates) {
     if (gate.config?.enabled === false) {
       continue;
     }
 
+    const startTime = process.hrtime.bigint();
     try {
       const result = await gate.fn.check(gate.config || {});
+      const duration = Number(process.hrtime.bigint() - startTime) / 1e6;
       results.push({
         gate: gate.name,
+        duration_ms: Math.round(duration),
         ...result
       });
     } catch (error) {
+      const duration = Number(process.hrtime.bigint() - startTime) / 1e6;
       results.push({
         gate: gate.name,
+        duration_ms: Math.round(duration),
         status: 'error',
         message: error.message
       });
     }
   }
 
-  return results;
+  const totalDuration = Number(process.hrtime.bigint() - totalStart) / 1e6;
+
+  return { results, total_duration_ms: Math.round(totalDuration) };
 }
 
 /**
@@ -131,8 +142,8 @@ async function main() {
     process.exit(0);
   }
 
-  const results = await runGates(config);
-  const report = reporter.format(results);
+  const { results, total_duration_ms } = await runGates(config);
+  const report = reporter.format(results, total_duration_ms);
 
   // Check for failures
   const failures = results.filter(r => r.status === 'fail');
