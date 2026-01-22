@@ -42,6 +42,359 @@ Coordinate specialized agents (frontend, backend, testing, security, review) for
     └──────────────┘  └──────────────┘  └──────────────┘
 ```
 
+---
+
+# TASK DECOMPOSITION
+
+For complex tasks, the orchestrator can decompose them into atomic subtasks with clear boundaries and dependencies.
+
+## When to Decompose
+
+Use task decomposition when:
+- Task involves multiple distinct deliverables
+- Task touches multiple files across domains
+- Task has implicit dependencies between parts
+- Task is too large for a single agent context
+
+Skip decomposition when:
+- Task is a single, atomic action
+- Task clearly belongs to one domain
+- Task has simple, linear execution
+
+## Decomposition Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  COMPLEX TASK INPUT                                             │
+│  "Build user profile page with avatar upload and settings"      │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP A: IDENTIFY ATOMIC ACTIONS                                │
+│                                                                 │
+│  Parse task to find distinct deliverables:                      │
+│  • What components need to be created?                          │
+│  • What API endpoints are required?                             │
+│  • What data models need updating?                              │
+│  • What tests should be written?                                │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP B: BUILD DEPENDENCY GRAPH (DAG)                           │
+│                                                                 │
+│  For each subtask, determine:                                   │
+│  • What does it depend on? (must complete first)                │
+│  • What does it block? (waits for this)                         │
+│  • Can it run in parallel with others?                          │
+│                                                                 │
+│  Example DAG:                                                   │
+│                                                                 │
+│  [st-001: ProfilePage] ────┬────▶ [st-005: Tests]               │
+│         │                  │                                    │
+│         ▼                  │                                    │
+│  [st-002: AvatarUpload] ───┼───▶ [st-004: POST /api/avatar]     │
+│         │                  │                                    │
+│         ▼                  ▼                                    │
+│  [st-003: SettingsForm] ───▶ [st-006: PUT /api/profile]         │
+│                                                                 │
+│  Parallel groups: [st-002, st-003] (no shared dependencies)     │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP C: CREATE SUBTASK CONTRACTS                               │
+│                                                                 │
+│  For each subtask, define:                                      │
+│  • ID, title, description                                       │
+│  • Assigned agent (frontend, backend, etc.)                     │
+│  • Required inputs (files, data from other subtasks)            │
+│  • Expected outputs (files to create, data to pass)             │
+│  • Validation requirements                                      │
+│                                                                 │
+│  Schema: .claude/pilot/schemas/subtask.yaml                     │
+│  Output: .claude/pilot/schemas/subtask-output.yaml              │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP D: PRESENT DECOMPOSITION FOR APPROVAL                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Decomposition Step A: Identify Atomic Actions
+
+Parse the task description to identify discrete units of work:
+
+### Action Categories
+
+| Category | Examples | Agent |
+|----------|----------|-------|
+| Create component | "Button", "Modal", "ProfileCard" | Frontend |
+| Create page/route | "/profile", "/settings" | Frontend |
+| Create API endpoint | "POST /api/users", "GET /api/profile" | Backend |
+| Update schema | "Add avatar field to User model" | Backend |
+| Write tests | "Test ProfilePage", "Test avatar upload" | Testing |
+| Security review | "Review auth flow", "Audit inputs" | Security |
+
+### Extraction Prompts
+
+Ask yourself:
+1. "What new files will be created?"
+2. "What existing files will be modified?"
+3. "What are the user-visible features?"
+4. "What API changes are needed?"
+5. "What should be tested?"
+
+### Output Format
+
+```yaml
+atomic_actions:
+  - action: "Create ProfilePage component"
+    type: "create_component"
+    agent: "frontend"
+    files: ["src/app/profile/page.tsx"]
+
+  - action: "Create AvatarUpload component"
+    type: "create_component"
+    agent: "frontend"
+    files: ["src/components/features/AvatarUpload.tsx"]
+
+  - action: "Create avatar upload endpoint"
+    type: "create_api"
+    agent: "backend"
+    files: ["src/app/api/avatar/route.ts"]
+```
+
+## Decomposition Step B: Build Dependency Graph
+
+Create a directed acyclic graph (DAG) of subtask dependencies.
+
+### Dependency Rules
+
+**A subtask depends on another if:**
+- It imports/uses output from the other
+- It needs data generated by the other
+- It tests/reviews code from the other
+- The task description implies order
+
+**Subtasks are independent (can parallelize) if:**
+- They don't share files
+- They don't have input/output relationships
+- They belong to different domains with no overlap
+
+### Graph Construction
+
+```
+For each subtask S:
+  For each other subtask T:
+    If S.inputs includes T.outputs:
+      Add edge T → S (T must complete before S)
+    If S modifies files that T reads:
+      Add edge S → T (S must complete before T)
+```
+
+### Cycle Detection
+
+If the graph has cycles, decomposition is invalid. Break cycles by:
+1. Merging related subtasks
+2. Re-evaluating dependencies
+3. Creating intermediate data contracts
+
+### Parallel Groups
+
+Identify sets of subtasks with no edges between them:
+
+```
+Group 1 (wave 1): [st-001]           # No dependencies
+Group 2 (wave 2): [st-002, st-003]   # Both depend only on st-001
+Group 3 (wave 3): [st-004, st-005]   # Depend on wave 2
+```
+
+## Decomposition Step C: Create Subtask Contracts
+
+For each atomic action, create a contract following `.claude/pilot/schemas/subtask.yaml`:
+
+### Contract Template
+
+```yaml
+subtask:
+  id: "st-001"
+  title: "Create ProfilePage component"
+  description: |
+    Build the main profile page that displays:
+    - User avatar (uses AvatarUpload component)
+    - Profile settings form (uses SettingsForm component)
+    - Edit capabilities
+  agent: "frontend"
+  priority: "high"
+
+inputs:
+  - name: "design_tokens"
+    source: "file:src/styles/tokens.css"
+    required: true
+  - name: "user_types"
+    source: "file:src/types/user.ts"
+    required: true
+
+outputs:
+  - path: "src/app/profile/page.tsx"
+    type: "react_component"
+    validation:
+      - "uses_design_tokens"
+      - "wcag_aa_compliant"
+      - "has_loading_state"
+      - "has_error_state"
+
+dependencies:
+  depends_on: []
+  blocks: ["st-002", "st-003"]
+
+execution:
+  model: "opus"
+  timeout_minutes: 10
+```
+
+## Decomposition Step D: Present for Approval
+
+Display the decomposition plan:
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║  TASK DECOMPOSITION                                          ║
+╚══════════════════════════════════════════════════════════════╝
+
+ORIGINAL TASK: Build user profile page with avatar upload and settings
+
+SUBTASKS (6 total)
+────────────────────────────────────────────────────────────────
+
+  WAVE 1 (parallel)
+  ├── st-001: Create ProfilePage layout      [frontend]
+  │           → src/app/profile/page.tsx
+  │
+  └── st-004: Define User types              [backend]
+              → src/types/user.ts
+
+  WAVE 2 (parallel, after wave 1)
+  ├── st-002: Create AvatarUpload component  [frontend]
+  │           → src/components/features/AvatarUpload.tsx
+  │           depends: st-001
+  │
+  └── st-003: Create SettingsForm component  [frontend]
+              → src/components/features/SettingsForm.tsx
+              depends: st-001
+
+  WAVE 3 (parallel, after wave 2)
+  ├── st-005: Create avatar upload API       [backend]
+  │           → src/app/api/avatar/route.ts
+  │           depends: st-002, st-004
+  │
+  └── st-006: Create profile update API      [backend]
+              → src/app/api/profile/route.ts
+              depends: st-003, st-004
+
+  POST-WORK (after all waves)
+  └── st-007: Write tests for profile        [testing]
+              depends: all above
+
+DEPENDENCY GRAPH
+────────────────────────────────────────────────────────────────
+
+  st-001 ─────┬─────▶ st-002 ────┐
+              │                   │
+              └─────▶ st-003 ────┼───▶ st-006
+                                 │
+  st-004 ─────────────┬──────────┴───▶ st-005
+                      │
+                      └────────────────────────▶ st-007
+
+────────────────────────────────────────────────────────────────
+```
+
+### Approval Options
+
+Use AskUserQuestion:
+
+**Question**: "Approve this decomposition?"
+
+**Options**:
+1. **Approve & execute** - Start executing waves
+2. **Modify subtasks** - Adjust scope or dependencies
+3. **Merge subtasks** - Combine related work
+4. **Cancel** - Don't decompose, use simple orchestration
+
+---
+
+## Executing Decomposed Tasks
+
+After approval, execute subtasks wave by wave:
+
+### Wave Execution
+
+```
+For each wave:
+  1. Spawn all subtasks in wave (parallel Task calls)
+  2. Wait for all to complete
+  3. Collect outputs
+  4. Pass outputs to next wave as inputs
+  5. Continue to next wave
+```
+
+### Inter-Subtask Data Passing
+
+When a subtask produces data for another:
+
+1. **Producer** includes `### DATA_OUTPUT:` block
+2. **Orchestrator** parses and stores the data
+3. **Consumer** receives data in its `inputs` context
+
+Example flow:
+
+```
+st-004 produces:
+### DATA_OUTPUT: user_types
+```json
+{
+  "type": "typescript_types",
+  "value": "export interface User { id: string; avatar?: string; }"
+}
+```
+
+Orchestrator passes to st-005:
+## Input from st-004: user_types
+```typescript
+export interface User { id: string; avatar?: string; }
+```
+```
+
+### Progress Tracking
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║  DECOMPOSED EXECUTION IN PROGRESS                            ║
+╚══════════════════════════════════════════════════════════════╝
+
+WAVE 1 [████████████████████] COMPLETE
+  ✓ st-001: ProfilePage layout
+  ✓ st-004: User types
+
+WAVE 2 [████████░░░░░░░░░░░░] IN PROGRESS
+  ◐ st-002: AvatarUpload component
+  ◐ st-003: SettingsForm component
+
+WAVE 3 [░░░░░░░░░░░░░░░░░░░░] PENDING
+  ○ st-005: Avatar upload API
+  ○ st-006: Profile update API
+
+POST-WORK [░░░░░░░░░░░░░░░░░░░░] PENDING
+  ○ st-007: Tests
+────────────────────────────────────────────────────────────────
+```
+
+---
+
 ## Step 1: Load Agent Registry
 
 ```bash

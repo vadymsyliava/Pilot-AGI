@@ -1,0 +1,283 @@
+# Subtask Output Format Specification
+# Version: 1.0
+# Purpose: Standardize output format from agents for orchestrator processing
+
+version: "1.0"
+
+# =============================================================================
+# OUTPUT FORMAT OVERVIEW
+# =============================================================================
+#
+# Agents must return their work in this exact format so the orchestrator can:
+# 1. Parse file contents reliably
+# 2. Validate outputs against subtask requirements
+# 3. Pass data to dependent subtasks
+# 4. Handle errors gracefully
+
+# =============================================================================
+# FILE BLOCK FORMAT
+# =============================================================================
+
+file_block:
+  description: "Format for returning file contents"
+  format: |
+    ### FILE: {relative/path/to/file.ext}
+    ```{language}
+    {complete file contents}
+    ```
+
+  rules:
+    - "Path must be relative to project root"
+    - "Language hint must match file extension"
+    - "Contents must be complete (not snippets)"
+    - "Multiple files = multiple FILE blocks"
+
+  examples:
+    react_component: |
+      ### FILE: src/components/features/AvatarUpload.tsx
+      ```tsx
+      'use client';
+
+      import { useState } from 'react';
+      import { Button } from '@/components/ui/Button';
+
+      export function AvatarUpload() {
+        // ... complete implementation
+      }
+      ```
+
+    api_route: |
+      ### FILE: src/app/api/avatar/route.ts
+      ```ts
+      import { NextResponse } from 'next/server';
+      import { z } from 'zod';
+
+      const uploadSchema = z.object({
+        // ... schema definition
+      });
+
+      export async function POST(request: Request) {
+        // ... complete implementation
+      }
+      ```
+
+# =============================================================================
+# ANALYSIS BLOCK FORMAT
+# =============================================================================
+
+analysis_block:
+  description: "Format for returning analysis/review results"
+  format: |
+    ### ANALYSIS
+
+    **Issues Found:**
+    - [CRITICAL] {description}
+    - [WARNING] {description}
+    - [INFO] {description}
+
+    **Recommendations:**
+    - {recommendation 1}
+    - {recommendation 2}
+
+    **Confidence:** {high|medium|low}
+
+  severity_levels:
+    CRITICAL: "Must fix before deployment"
+    WARNING: "Should fix, may cause problems"
+    INFO: "Suggestion for improvement"
+
+# =============================================================================
+# DATA BLOCK FORMAT
+# =============================================================================
+
+data_block:
+  description: "Format for returning structured data for dependent subtasks"
+  format: |
+    ### DATA_OUTPUT: {key}
+    ```json
+    {
+      "type": "{data_type}",
+      "value": {structured_data}
+    }
+    ```
+
+  use_cases:
+    - "Passing generated types to dependent subtasks"
+    - "Sharing API schema with frontend agent"
+    - "Providing test fixtures to testing agent"
+
+  example: |
+    ### DATA_OUTPUT: avatar_api_types
+    ```json
+    {
+      "type": "typescript_types",
+      "value": {
+        "AvatarUploadRequest": "{ file: File; userId: string }",
+        "AvatarUploadResponse": "{ url: string; id: string }"
+      }
+    }
+    ```
+
+# =============================================================================
+# SUMMARY BLOCK FORMAT
+# =============================================================================
+
+summary_block:
+  description: "Required summary at end of every agent response"
+  format: |
+    ### SUMMARY
+
+    **Status:** {success|partial|failed}
+
+    **Files Created:**
+    - {path/to/file1.ext}
+    - {path/to/file2.ext}
+
+    **Files Modified:**
+    - {path/to/existing.ext}
+
+    **Data Outputs:**
+    - {key1}: {brief description}
+
+    **Notes:**
+    - {any decisions made}
+    - {any issues encountered}
+    - {any assumptions}
+
+  status_definitions:
+    success: "All required outputs generated, validation passed"
+    partial: "Some outputs generated, but with issues or incomplete"
+    failed: "Could not complete the subtask"
+
+# =============================================================================
+# COMPLETE OUTPUT TEMPLATE
+# =============================================================================
+
+complete_template: |
+  # Subtask: {subtask_id} - {subtask_title}
+
+  ## Execution
+
+  [Agent's reasoning and approach]
+
+  ## Files
+
+  ### FILE: src/components/features/Example.tsx
+  ```tsx
+  // Complete file contents
+  ```
+
+  ### FILE: src/components/features/Example.test.tsx
+  ```tsx
+  // Test file contents
+  ```
+
+  ## Data Outputs
+
+  ### DATA_OUTPUT: component_exports
+  ```json
+  {
+    "type": "export_list",
+    "value": ["Example", "ExampleProps"]
+  }
+  ```
+
+  ## Analysis (if applicable)
+
+  ### ANALYSIS
+
+  **Issues Found:**
+  - [INFO] Consider adding memoization for performance
+
+  **Recommendations:**
+  - Add error boundary for production
+
+  **Confidence:** high
+
+  ## Summary
+
+  ### SUMMARY
+
+  **Status:** success
+
+  **Files Created:**
+  - src/components/features/Example.tsx
+  - src/components/features/Example.test.tsx
+
+  **Data Outputs:**
+  - component_exports: List of exported items
+
+  **Notes:**
+  - Used existing Button component from design system
+  - Added 'use client' due to useState usage
+
+# =============================================================================
+# PARSING RULES FOR ORCHESTRATOR
+# =============================================================================
+
+parsing:
+  file_regex: |
+    ### FILE: (.+)\n```(\w+)\n([\s\S]+?)```
+
+  data_regex: |
+    ### DATA_OUTPUT: (\w+)\n```json\n([\s\S]+?)```
+
+  summary_regex: |
+    ### SUMMARY\n([\s\S]+?)(?=\n## |$)
+
+  analysis_regex: |
+    ### ANALYSIS\n([\s\S]+?)(?=\n## |### |$)
+
+# =============================================================================
+# VALIDATION RULES
+# =============================================================================
+
+validation:
+  required:
+    - "At least one FILE or DATA_OUTPUT block"
+    - "SUMMARY block at the end"
+
+  file_validation:
+    - "Path matches expected output from subtask definition"
+    - "Language hint is valid"
+    - "Content is not empty"
+    - "Content compiles/parses for typed languages"
+
+  red_flags:
+    - "Output exceeds 50,000 tokens"
+    - "Missing SUMMARY block"
+    - "Empty FILE blocks"
+    - "Placeholder comments like '// TODO' or '// implement'"
+    - "Import errors or undefined references"
+
+# =============================================================================
+# ERROR OUTPUT FORMAT
+# =============================================================================
+
+error_format:
+  description: "Format when subtask cannot be completed"
+  template: |
+    ### ERROR
+
+    **Type:** {error_type}
+    **Message:** {error_message}
+
+    **Context:**
+    - {relevant context}
+
+    **Recovery Suggestion:**
+    - {what could fix this}
+
+    ### SUMMARY
+
+    **Status:** failed
+
+    **Notes:**
+    - {explanation of failure}
+
+  error_types:
+    - "MISSING_INPUT: Required input not available"
+    - "VALIDATION_FAILED: Output doesn't meet requirements"
+    - "DEPENDENCY_ERROR: Dependent subtask failed"
+    - "TIMEOUT: Exceeded execution time limit"
+    - "CONFLICT: Would overwrite existing file unexpectedly"
