@@ -242,6 +242,86 @@ function getReadyTasks() {
 }
 
 /**
+ * Get workflow state for active task
+ * Returns: { state: string, suggestion: string }
+ *
+ * States:
+ * - needs_plan: Task claimed but no plan file exists
+ * - needs_approval: Plan exists but not approved
+ * - ready_to_exec: Plan approved, work can proceed
+ * - has_changes: Uncommitted changes exist
+ * - no_task: No active task
+ */
+function getTaskState(activeTask) {
+  if (!activeTask) {
+    return { state: 'no_task', suggestion: '/pilot-next' };
+  }
+
+  const taskId = activeTask.id;
+  const plansDir = path.join(process.cwd(), 'work', 'plans');
+
+  // Check for plan file (various naming conventions)
+  const planPatterns = [
+    `${taskId}*.md`,
+    `*${taskId}*.md`
+  ];
+
+  let planFile = null;
+  if (fs.existsSync(plansDir)) {
+    try {
+      const files = fs.readdirSync(plansDir);
+      for (const file of files) {
+        if (file.includes(taskId.replace(/\s+/g, '-')) ||
+            file.includes(taskId.replace(/\s+/g, '_'))) {
+          planFile = path.join(plansDir, file);
+          break;
+        }
+      }
+    } catch (e) {
+      // Ignore read errors
+    }
+  }
+
+  // No plan file - needs planning
+  if (!planFile) {
+    return { state: 'needs_plan', suggestion: '/pilot-plan' };
+  }
+
+  // Check if plan is approved (look for approval marker in file)
+  try {
+    const planContent = fs.readFileSync(planFile, 'utf8');
+    const isApproved = planContent.includes('Status: Approved') ||
+                       planContent.includes('APPROVED') ||
+                       planContent.includes('✅ Approved');
+
+    if (!isApproved) {
+      return { state: 'needs_approval', suggestion: 'Review and approve the plan' };
+    }
+  } catch (e) {
+    // Can't read plan, assume needs approval
+    return { state: 'needs_approval', suggestion: 'Review and approve the plan' };
+  }
+
+  // Plan approved - check for uncommitted changes
+  try {
+    // Safe: command is hardcoded
+    const gitStatus = execSync('git status --porcelain 2>/dev/null || echo ""', {
+      encoding: 'utf8',
+      timeout: 5000
+    });
+
+    if (gitStatus.trim()) {
+      return { state: 'has_changes', suggestion: '/pilot-commit' };
+    }
+  } catch (e) {
+    // Git not available or error
+  }
+
+  // Plan approved, no uncommitted changes - ready to execute
+  return { state: 'ready_to_exec', suggestion: '/pilot-exec' };
+}
+
+/**
  * Refresh all caches
  */
 function refreshCache() {
@@ -323,6 +403,7 @@ function buildGuardianContext() {
   const summary = loadProjectSummary();
   const activeTask = getActiveTask();
   const readyTasks = getReadyTasks();
+  const taskState = getTaskState(activeTask);
 
   const lines = ['<pilot-context>'];
 
@@ -330,9 +411,11 @@ function buildGuardianContext() {
   lines.push(`Project: ${summary}`);
   lines.push('');
 
-  // Active task
+  // Active task with state
   if (activeTask) {
     lines.push(`Active task: [${activeTask.id}] ${activeTask.title}`);
+    lines.push(`Workflow state: ${taskState.state}`);
+    lines.push(`Suggested action: ${taskState.suggestion}`);
   } else {
     lines.push('Active task: none');
   }
@@ -345,14 +428,35 @@ function buildGuardianContext() {
     if (readyTasks.length > 5) {
       lines.push(`  (+${readyTasks.length - 5} more)`);
     }
-  } else {
+  } else if (!activeTask) {
     lines.push('Ready tasks: none');
   }
 
   lines.push('');
   lines.push('Evaluate this prompt:');
-  lines.push('- If requesting NEW work not matching any task → guide user to /pilot-new-task');
-  lines.push('- If matches an existing ready task → suggest /pilot-next');
+
+  if (activeTask) {
+    // State-aware guidance
+    switch (taskState.state) {
+      case 'needs_plan':
+        lines.push('- Active task needs a plan → suggest creating implementation plan');
+        break;
+      case 'needs_approval':
+        lines.push('- Plan exists but needs approval → ask user to review and approve');
+        break;
+      case 'ready_to_exec':
+        lines.push('- Plan approved → proceed with implementation');
+        break;
+      case 'has_changes':
+        lines.push('- Uncommitted changes detected → suggest committing first');
+        break;
+    }
+    lines.push('- If prompt is about the active task → proceed with work');
+    lines.push('- If requesting DIFFERENT work → guide to /pilot-new-task');
+  } else {
+    lines.push('- If requesting NEW work not matching any task → guide user to /pilot-new-task');
+    lines.push('- If matches an existing ready task → suggest /pilot-next');
+  }
   lines.push('- If question/clarification → proceed normally');
   lines.push('</pilot-context>');
 
@@ -365,6 +469,7 @@ module.exports = {
   loadTaskIndex,
   getActiveTask,
   getReadyTasks,
+  getTaskState,
   needsRefresh,
   buildGuardianContext,
   ensureCacheDir,
