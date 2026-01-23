@@ -21,9 +21,10 @@ const path = require('path');
 const https = require('https');
 const { execSync } = require('child_process');
 
-// Import session and policy utilities
+// Import session, policy, and cache utilities
 const session = require('./lib/session');
 const { loadPolicy } = require('./lib/policy');
+const cache = require('./lib/cache');
 
 // =============================================================================
 // VERSION CHECK (preserved from v1)
@@ -316,7 +317,21 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
-  // 7. Build Output
+  // 7. Guardian Cache (new in v2.1)
+  // -------------------------------------------------------------------------
+
+  try {
+    if (cache.needsRefresh()) {
+      const cacheResult = cache.refreshCache();
+      context.cache_refreshed = true;
+      context.task_count = cacheResult.taskCount;
+    }
+  } catch (e) {
+    // Cache refresh failed, continue without
+  }
+
+  // -------------------------------------------------------------------------
+  // 8. Build Output
   // -------------------------------------------------------------------------
 
   if (messages.length > 0) {
