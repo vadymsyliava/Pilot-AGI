@@ -1,0 +1,13 @@
+{
+  "session_id": "S-mkp1ve0a-2ec9",
+  "started_at": "2026-01-22T06:07:35.339Z",
+  "last_heartbeat": "2026-01-22T06:07:35.339Z",
+  "status": "ended",
+  "claimed_task": null,
+  "locked_areas": [],
+  "locked_files": [],
+  "cwd": "/Users/vadymsyliava/Pilot AGI",
+  "pid": 99694,
+  "ended_at": "2026-01-22T07:00:43.325Z",
+  "end_reason": "stale"
+}

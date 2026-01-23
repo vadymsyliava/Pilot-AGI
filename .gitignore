@@ -35,5 +35,8 @@ AGENTS.md
 work/plans/
 work/research/
 
+# Internal development (dogfooding Pilot AGI on itself)
+.pilot-internal/
+
 # Note: work/ROADMAP.md and work/PROJECT_BRIEF.md ARE part of the product
 # as examples/templates. Users will have their own.
