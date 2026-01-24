@@ -1,19 +1,25 @@
 #!/usr/bin/env node
 
 /**
- * Pilot AGI Pre-Tool-Use Hook
+ * Pilot AGI Pre-Tool-Use Hook (Governance Enforcement)
  *
- * Runs before Edit and Write tool calls to enforce governance rules.
+ * GOVERNANCE HOOK: Enforces policy rules before code changes.
+ *
+ * This is the core governance enforcement hook. It blocks Edit/Write
+ * operations that violate organizational policy defined in policy.yaml.
  *
  * Enforcement rules (from policy.yaml):
  * - R1: require_active_task - Must have in_progress bd task
  * - R2: require_plan_approval - Must have approved plan
  * - R3: protected_branches - Cannot edit on main/master/production
- * - R4: never_edit - Certain files are always blocked
+ * - R4: never_edit - Certain files are always blocked (security)
  *
- * Exceptions:
+ * Exceptions (from policy.yaml):
  * - no_task_required: Some files don't need active task
  * - no_plan_required: Some files don't need plan approval
+ *
+ * This hook is GOVERNANCE-ONLY: it enforces rules, not workflow.
+ * It does not suggest commands or guide workflow - it only blocks/allows.
  *
  * Security note: All execSync calls use hardcoded commands only.
  * No user input is ever interpolated into shell commands.

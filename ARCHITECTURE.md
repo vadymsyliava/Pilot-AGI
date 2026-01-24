@@ -132,6 +132,40 @@ bd dep add <id> --blocks <other>     # Add dependency
 - Next action: /pilot-exec
 ```
 
+## Governance Layer (Hooks)
+
+Pilot AGI hooks are a **governance layer**, not workflow automation.
+They enforce organizational policies without duplicating Claude Code's native capabilities.
+
+### Hook Classification
+
+| Hook | Type | Purpose |
+|------|------|---------|
+| session-start.js | Governance | Session coordination, policy context, task visibility |
+| pre-tool-use.js | Governance | Enforce require_task, require_plan, protected_branches |
+| user-prompt-submit.js | Governance | Semantic guardian - detect new work, ensure task tracking |
+| quality-gate.js | Optional | Pre-commit checks (disabled by default - duplicates native) |
+
+### Governance vs Workflow
+
+**Governance hooks DO:**
+- Enforce policy rules (block unauthorized edits)
+- Inject context (task state, locked areas)
+- Detect violations (new work without task)
+
+**Governance hooks DON'T:**
+- Suggest specific commands ("run /pilot-plan")
+- Automate workflow steps
+- Replace Claude Code native features
+
+### Configuration
+
+Governance behavior is controlled by `policy.yaml`:
+- `enforcement.require_active_task` - Block edits without claimed task
+- `enforcement.require_plan_approval` - Block edits without approved plan
+- `enforcement.detect_new_scope` - Enable semantic guardian
+- `quality_gates.enabled` - Enable optional quality checks (default: false)
+
 ## Token Efficiency Strategy
 
 ### Progressive Disclosure
@@ -149,10 +183,14 @@ bd dep add <id> --blocks <other>     # Add dependency
 
 ## Update Mechanism
 
-1. **SessionStart hook** checks npm registry
-2. **Notification** shown if update available
-3. **/pilot-update** downloads and installs
-4. **CHANGELOG.md** shown to user
+Updates are handled through standard npm mechanisms:
+
+```bash
+npm outdated -g pilot-agi    # Check for updates
+npm update -g pilot-agi      # Install updates
+```
+
+The `/pilot-update` skill provides a convenient wrapper with changelog display.
 
 ## Git Branch Strategy
 

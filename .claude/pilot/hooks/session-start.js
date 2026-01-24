@@ -1,24 +1,27 @@
 #!/usr/bin/env node
 
 /**
- * Pilot AGI Session Start Hook (v2.0)
+ * Pilot AGI Session Start Hook (v2.1 - Governance Focus)
  *
- * Runs when Claude Code session starts.
+ * GOVERNANCE HOOK: Provides session context and coordination.
  *
- * Features:
+ * This hook is part of Pilot AGI's governance layer, NOT workflow automation.
+ * It focuses on policy enforcement and multi-agent coordination.
+ *
+ * Governance features:
  * - Session ID generation and registration
  * - Multi-session coordination (detect other active sessions)
- * - Locked file/area awareness
- * - Project context loading (brief, roadmap)
- * - Policy loading
- * - Version update checking
- * - Beads task context
- * - Session capsule resume hints
+ * - Locked file/area awareness (prevents conflicts)
+ * - Policy loading and enforcement context
+ * - bd task context injection (governance state)
+ *
+ * Non-governance features (removed or delegated):
+ * - Version update checking → Removed (use npm/CLI)
+ * - Workflow hints → Kept minimal (context only, not commands)
  */
 
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
 const { execSync } = require('child_process');
 
 // Import session, policy, and cache utilities
@@ -27,56 +30,14 @@ const { loadPolicy } = require('./lib/policy');
 const cache = require('./lib/cache');
 
 // =============================================================================
-// VERSION CHECK (preserved from v1)
+// VERSION CHECK (REMOVED - handled by npm/CLI)
 // =============================================================================
-
-function getInstalledVersion() {
-  const locations = [
-    path.join(process.env.HOME || '', '.claude', 'pilot', 'VERSION'),
-    path.join(process.cwd(), '.claude', 'pilot', 'VERSION')
-  ];
-
-  for (const loc of locations) {
-    if (fs.existsSync(loc)) {
-      return fs.readFileSync(loc, 'utf8').trim();
-    }
-  }
-  return null;
-}
-
-function checkLatestVersion() {
-  return new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: 'registry.npmjs.org',
-      path: '/pilot-agi/latest',
-      method: 'GET',
-      timeout: 5000
-    }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data).version);
-        } catch (e) {
-          reject(e);
-        }
-      });
-    });
-    req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-    req.end();
-  });
-}
-
-function isNewer(latest, current) {
-  const l = latest.split('.').map(Number);
-  const c = current.split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    if ((l[i] || 0) > (c[i] || 0)) return true;
-    if ((l[i] || 0) < (c[i] || 0)) return false;
-  }
-  return false;
-}
+// Version update checking has been removed from this hook.
+// Reason: This duplicates Claude Code's built-in update notification
+// and npm's standard package update mechanisms.
+//
+// To check for updates manually: npm outdated -g pilot-agi
+// =============================================================================
 
 // =============================================================================
 // BEADS CONTEXT (enhanced in v2.1 with task list summary)
@@ -300,21 +261,10 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
-  // 4. Version Check (preserved from v1)
+  // 4. Version Check - REMOVED (handled by npm/CLI)
   // -------------------------------------------------------------------------
-
-  const version = getInstalledVersion();
-  if (version) {
-    try {
-      const latest = await checkLatestVersion();
-      if (isNewer(latest, version)) {
-        messages.push(`Update: v${latest} available`);
-        context.update_available = latest;
-      }
-    } catch (e) {
-      // Network error, skip update check
-    }
-  }
+  // Version checking removed to reduce hook complexity.
+  // Users can check updates via: npm outdated -g pilot-agi
 
   // -------------------------------------------------------------------------
   // 5. Beads Context (enhanced in v2.1 with task list summary)
