@@ -143,6 +143,15 @@ session:
   # Event stream file for session coordination
   event_stream: "runs/sessions.jsonl"
 
+  # Task list display settings for session start
+  task_list_display:
+    # Maximum number of ready tasks to show at session start
+    max_ready_tasks: 5
+    # Show task priority in the list
+    show_priority: true
+    # Include task list summary in session context
+    enabled: true
+
 # =============================================================================
 # EXCEPTIONS
 # Files and patterns that bypass enforcement rules

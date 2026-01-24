@@ -79,33 +79,60 @@ function isNewer(latest, current) {
 }
 
 // =============================================================================
-// BEADS CONTEXT (preserved from v1)
+// BEADS CONTEXT (enhanced in v2.1 with task list summary)
 // Note: Uses execSync with hardcoded command - no user input interpolation
 // =============================================================================
 
-function getBeadsContext() {
+function getBeadsContext(policy) {
   if (!fs.existsSync(path.join(process.cwd(), '.beads'))) return null;
 
-  try {
-    // Safe: command is hardcoded, no user input
-    const result = execSync('bd list --status in_progress --json 2>/dev/null || echo "[]"', {
-      encoding: 'utf8', timeout: 5000
-    });
-    const tasks = JSON.parse(result);
-    if (tasks.length > 0) {
-      return {
-        currentTask: { id: tasks[0].id, title: tasks[0].title },
-        hasTask: true
-      };
-    }
+  // Get task list display settings from policy
+  const displaySettings = policy?.session?.task_list_display || {
+    max_ready_tasks: 5,
+    show_priority: true,
+    enabled: true
+  };
 
-    // Safe: command is hardcoded, no user input
-    const ready = JSON.parse(execSync('bd ready --json 2>/dev/null || echo "[]"', {
-      encoding: 'utf8', timeout: 5000
-    }));
-    return { readyCount: ready.length, hasTask: false };
+  // Skip task list summary if disabled in policy
+  if (!displaySettings.enabled) {
+    return { hasTask: false, readyCount: 0 };
+  }
+
+  try {
+    // Use the enhanced buildTaskListSummary from cache module
+    const taskSummary = cache.buildTaskListSummary({
+      maxReadyTasks: displaySettings.max_ready_tasks,
+      showPriority: displaySettings.show_priority
+    });
+
+    return {
+      currentTask: taskSummary.activeTask,
+      hasTask: !!taskSummary.activeTask,
+      readyCount: taskSummary.readyCount,
+      state: taskSummary.state,
+      taskListSummary: taskSummary.summary
+    };
   } catch (e) {
-    return null;
+    // Fallback to basic check (hardcoded commands - no user input)
+    try {
+      const result = execSync('bd list --status in_progress --json 2>/dev/null || echo "[]"', {
+        encoding: 'utf8', timeout: 5000
+      });
+      const tasks = JSON.parse(result);
+      if (tasks.length > 0) {
+        return {
+          currentTask: { id: tasks[0].id, title: tasks[0].title },
+          hasTask: true
+        };
+      }
+
+      const ready = JSON.parse(execSync('bd ready --json 2>/dev/null || echo "[]"', {
+        encoding: 'utf8', timeout: 5000
+      }));
+      return { readyCount: ready.length, hasTask: false };
+    } catch (e2) {
+      return null;
+    }
   }
 }
 
@@ -248,8 +275,9 @@ async function main() {
   // 2. Policy Loading (new in v2)
   // -------------------------------------------------------------------------
 
+  let policy = null;
   try {
-    const policy = loadPolicy();
+    policy = loadPolicy();
     context.policy_version = policy.version;
     context.enforcement = {
       require_active_task: policy.enforcement?.require_active_task,
@@ -289,14 +317,20 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
-  // 5. Beads Context (preserved from v1)
+  // 5. Beads Context (enhanced in v2.1 with task list summary)
   // -------------------------------------------------------------------------
 
-  const bd = getBeadsContext();
+  const bd = getBeadsContext(policy);
   if (bd) {
+    // Include task list summary in context for Claude visibility
+    if (bd.taskListSummary) {
+      context.task_list = bd.taskListSummary;
+    }
+
     if (bd.currentTask) {
       messages.push(`Active: [${bd.currentTask.id}] ${bd.currentTask.title}`);
       context.active_task = bd.currentTask;
+      context.workflow_state = bd.state;
     } else if (bd.readyCount > 0) {
       messages.push(`${bd.readyCount} tasks ready`);
       context.ready_tasks = bd.readyCount;
