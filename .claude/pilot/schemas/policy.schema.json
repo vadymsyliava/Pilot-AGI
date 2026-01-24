@@ -1,0 +1,344 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pilot-agi.dev/schemas/policy.schema.json",
+  "title": "Pilot AGI Governance Policy",
+  "description": "Defines enforcement rules that control AI agent behavior in Pilot AGI projects. This schema validates policy.yaml configuration files.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "type": "string",
+      "title": "Policy Schema Version",
+      "description": "Semantic version of the policy format",
+      "pattern": "^\\d+\\.\\d+(\\.\\d+)?$",
+      "examples": ["1.0", "1.1.0"]
+    },
+    "enforcement": {
+      "type": "object",
+      "title": "Enforcement Rules",
+      "description": "Controls what must be true before code edits are allowed",
+      "additionalProperties": true,
+      "properties": {
+        "require_active_task": {
+          "type": "boolean",
+          "title": "Require Active Task",
+          "description": "When true, Edit/Write operations are blocked unless a bd task is claimed",
+          "default": true
+        },
+        "require_plan_approval": {
+          "type": "boolean",
+          "title": "Require Plan Approval",
+          "description": "When true, blocks edits until plan is approved for complex tasks",
+          "default": true
+        },
+        "plan_approval_threshold": {
+          "type": "string",
+          "title": "Plan Approval Threshold",
+          "description": "Determines when plans are required: 'low' (always), 'medium' (2+ steps), 'high' (complex only)",
+          "enum": ["low", "medium", "high"],
+          "default": "medium"
+        },
+        "protected_branches": {
+          "type": "array",
+          "title": "Protected Branches",
+          "description": "Git branches where Edit/Write operations are blocked",
+          "items": {
+            "type": "string"
+          },
+          "default": ["main", "master", "production"]
+        },
+        "detect_new_scope": {
+          "type": "boolean",
+          "title": "Detect New Scope",
+          "description": "When true, user prompts are analyzed for new work requests and routed to /pilot-new-task",
+          "default": true
+        },
+        "new_scope_keywords": {
+          "type": "array",
+          "title": "New Scope Keywords",
+          "description": "Keywords in user messages that trigger new scope detection",
+          "items": {
+            "type": "string"
+          },
+          "default": ["add feature", "implement", "create new", "build", "fix bug"]
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "title": "Execution Rules",
+      "description": "Controls what must happen during and after each micro-step",
+      "additionalProperties": true,
+      "properties": {
+        "require_verification": {
+          "type": "boolean",
+          "title": "Require Verification",
+          "description": "Ensures changes work before moving to next step",
+          "default": true
+        },
+        "require_commit_per_step": {
+          "type": "boolean",
+          "title": "Require Commit Per Step",
+          "description": "Keeps commits atomic and easy to review/revert",
+          "default": true
+        },
+        "require_run_log_update": {
+          "type": "boolean",
+          "title": "Require Run Log Update",
+          "description": "Maintains crash recovery context in runs/YYYY-MM-DD.md",
+          "default": true
+        },
+        "require_bd_update": {
+          "type": "boolean",
+          "title": "Require BD Update",
+          "description": "Keeps bd as the single source of truth for task state",
+          "default": true
+        }
+      }
+    },
+    "areas": {
+      "type": "object",
+      "title": "Area Definitions",
+      "description": "Maps file paths to domains and agents for multi-agent coordination",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "paths": {
+            "type": "array",
+            "title": "File Path Patterns",
+            "description": "Glob patterns matching files in this area",
+            "items": {
+              "type": "string"
+            }
+          },
+          "agent": {
+            "oneOf": [
+              {
+                "type": "string",
+                "title": "Agent Name",
+                "description": "Name of the specialized agent for this area"
+              },
+              {
+                "type": "null",
+                "title": "No Agent",
+                "description": "No specialized agent assigned"
+              }
+            ]
+          }
+        },
+        "required": ["paths"]
+      }
+    },
+    "session": {
+      "type": "object",
+      "title": "Session Management",
+      "description": "Controls multi-session coordination and locking behavior",
+      "additionalProperties": true,
+      "properties": {
+        "heartbeat_interval_sec": {
+          "type": "integer",
+          "title": "Heartbeat Interval",
+          "description": "How often sessions send heartbeat (in seconds)",
+          "minimum": 1,
+          "default": 60
+        },
+        "lock_timeout_min": {
+          "type": "integer",
+          "title": "Lock Timeout",
+          "description": "How long a file/area lock is valid without heartbeat (in minutes)",
+          "minimum": 1,
+          "default": 30
+        },
+        "max_concurrent_sessions": {
+          "type": "integer",
+          "title": "Maximum Concurrent Sessions",
+          "description": "Maximum number of concurrent Claude Code sessions allowed",
+          "minimum": 1,
+          "default": 6
+        },
+        "state_dir": {
+          "type": "string",
+          "title": "State Directory",
+          "description": "Directory path for session state files",
+          "default": ".claude/pilot/state/sessions"
+        },
+        "event_stream": {
+          "type": "string",
+          "title": "Event Stream File",
+          "description": "File path for session coordination event stream",
+          "default": "runs/sessions.jsonl"
+        },
+        "task_list_display": {
+          "type": "object",
+          "title": "Task List Display Settings",
+          "description": "Controls how tasks are displayed at session start",
+          "additionalProperties": true,
+          "properties": {
+            "max_ready_tasks": {
+              "type": "integer",
+              "title": "Maximum Ready Tasks",
+              "description": "Maximum number of ready tasks to show at session start",
+              "minimum": 0,
+              "default": 5
+            },
+            "show_priority": {
+              "type": "boolean",
+              "title": "Show Priority",
+              "description": "Whether to show task priority in the list",
+              "default": true
+            },
+            "enabled": {
+              "type": "boolean",
+              "title": "Enabled",
+              "description": "Whether to include task list summary in session context",
+              "default": true
+            }
+          }
+        }
+      }
+    },
+    "quality_gates": {
+      "type": "object",
+      "title": "Quality Gates",
+      "description": "Pre-commit quality checks. These duplicate Claude Code native functionality. Enable only if you need stricter checks.",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "title": "Master Switch",
+          "description": "Set to true to enable quality gates globally",
+          "default": false
+        },
+        "file_size": {
+          "type": "object",
+          "title": "File Size Gate",
+          "description": "Check file size in lines of code",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "warn": {
+              "type": "integer",
+              "title": "Warning Threshold",
+              "description": "Number of lines to trigger a warning",
+              "minimum": 1,
+              "default": 300
+            },
+            "block": {
+              "type": "integer",
+              "title": "Blocking Threshold",
+              "description": "Number of lines to block the commit",
+              "minimum": 1,
+              "default": 500
+            }
+          }
+        },
+        "lint": {
+          "type": "object",
+          "title": "Lint Gate",
+          "description": "Run linter before commit",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "timeout": {
+              "type": "integer",
+              "title": "Timeout",
+              "description": "Lint timeout in milliseconds",
+              "minimum": 1000,
+              "default": 30000
+            }
+          }
+        },
+        "secrets": {
+          "type": "object",
+          "title": "Secrets Detection Gate",
+          "description": "Scan for leaked secrets",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "security": {
+          "type": "object",
+          "title": "Security Gate",
+          "description": "Run security checks",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "type_check": {
+          "type": "object",
+          "title": "Type Check Gate",
+          "description": "Run TypeScript type checking",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "timeout": {
+              "type": "integer",
+              "title": "Timeout",
+              "description": "Type check timeout in milliseconds",
+              "minimum": 1000,
+              "default": 30000
+            }
+          }
+        },
+        "duplicate": {
+          "type": "object",
+          "title": "Duplicate Code Detection Gate",
+          "description": "Check for duplicate code (expensive)",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      }
+    },
+    "exceptions": {
+      "type": "object",
+      "title": "Exceptions",
+      "description": "Files and patterns that bypass enforcement rules",
+      "additionalProperties": true,
+      "properties": {
+        "no_task_required": {
+          "type": "array",
+          "title": "No Task Required",
+          "description": "File patterns that can be edited without an active task",
+          "items": {
+            "type": "string"
+          },
+          "default": ["runs/*.md", ".claude/pilot/state/**", "*.lock"]
+        },
+        "no_plan_required": {
+          "type": "array",
+          "title": "No Plan Required",
+          "description": "File patterns that don't require plan approval",
+          "items": {
+            "type": "string"
+          },
+          "default": ["runs/*.md", ".gitignore", "*.md"]
+        },
+        "never_edit": {
+          "type": "array",
+          "title": "Never Edit",
+          "description": "File patterns that are always blocked from editing (security)",
+          "items": {
+            "type": "string"
+          },
+          "default": [".env", ".env.*", "*.pem", "*.key", "credentials.*"]
+        }
+      }
+    }
+  }
+}

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=./schemas/policy.schema.json
 # Pilot AGI Governance Policy
 # This file defines enforcement rules that control agent behavior.
 # Hooks (session_start.js, user_prompt_submit.js, pre_tool_use.js) read this
