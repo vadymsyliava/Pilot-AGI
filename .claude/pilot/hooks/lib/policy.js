@@ -180,7 +180,12 @@ function getDefaultPolicy() {
     session: {
       heartbeat_interval_sec: 60,
       lock_timeout_min: 30,
-      max_concurrent_sessions: 6
+      max_concurrent_sessions: 6,
+      task_list_display: {
+        max_ready_tasks: 5,
+        show_priority: true,
+        enabled: true
+      }
     },
     exceptions: {
       no_task_required: ['runs/*.md'],

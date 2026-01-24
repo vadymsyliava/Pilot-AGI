@@ -463,6 +463,75 @@ function buildGuardianContext() {
   return lines.join('\n');
 }
 
+/**
+ * Build task list summary for session start
+ * Returns formatted string showing bd tasks for Claude's context
+ * Optimized for token efficiency (~150-200 tokens max)
+ *
+ * @param {Object} options - Formatting options
+ * @param {number} options.maxReadyTasks - Max ready tasks to show (default: 5)
+ * @param {boolean} options.showPriority - Include priority in output (default: true)
+ * @returns {Object} - { summary: string, activeTask: object|null, readyCount: number }
+ */
+function buildTaskListSummary(options = {}) {
+  const { maxReadyTasks = 5, showPriority = true } = options;
+
+  const activeTask = getActiveTask();
+  const readyTasks = getReadyTasks();
+  const taskState = activeTask ? getTaskState(activeTask) : null;
+
+  const lines = [];
+  let hasContent = false;
+
+  // Active task section
+  if (activeTask) {
+    hasContent = true;
+    lines.push(`ACTIVE: [${activeTask.id}] ${activeTask.title}`);
+    if (taskState) {
+      const stateEmoji = {
+        'needs_plan': '📝',
+        'needs_approval': '⏳',
+        'ready_to_exec': '▶️',
+        'has_changes': '💾',
+        'no_task': ''
+      };
+      lines.push(`  State: ${stateEmoji[taskState.state] || ''} ${taskState.state.replace(/_/g, ' ')}`);
+      lines.push(`  Next: ${taskState.suggestion}`);
+    }
+  }
+
+  // Ready tasks section
+  if (readyTasks.length > 0) {
+    hasContent = true;
+    if (activeTask) lines.push(''); // Spacing
+    lines.push(`READY (${readyTasks.length}):`);
+
+    const shown = readyTasks.slice(0, maxReadyTasks);
+    for (const task of shown) {
+      const priorityStr = showPriority && task.priority !== undefined
+        ? ` [P${task.priority}]`
+        : '';
+      lines.push(`  • [${task.id}] ${task.title}${priorityStr}`);
+    }
+
+    if (readyTasks.length > maxReadyTasks) {
+      lines.push(`  ... +${readyTasks.length - maxReadyTasks} more (run /pilot-status)`);
+    }
+  }
+
+  // No tasks message
+  if (!hasContent) {
+    lines.push('No active or ready tasks. Run /pilot-next to start.');
+  }
+
+  return {
+    summary: lines.join('\n'),
+    activeTask,
+    readyCount: readyTasks.length,
+    state: taskState?.state || 'no_task'
+  };
+}
+
 module.exports = {
   refreshCache,
   loadProjectSummary,
@@ -472,6 +541,7 @@ module.exports = {
   getTaskState,
   needsRefresh,
   buildGuardianContext,
+  buildTaskListSummary,
   ensureCacheDir,
   getCacheDir
 };
