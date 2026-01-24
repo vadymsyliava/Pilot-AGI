@@ -1,22 +1,28 @@
 #!/usr/bin/env node
 
 /**
- * Pilot AGI User Prompt Submit Hook (v2.0 - Semantic Guardian)
+ * Pilot AGI User Prompt Submit Hook (Semantic Guardian)
  *
- * Runs when user submits a prompt to Claude Code.
+ * GOVERNANCE HOOK: Detects new work and enforces task-first workflow.
  *
- * Purpose:
- * - Quick heuristics to pass through obvious non-work prompts
- * - Inject context for potentially new work (let Claude self-evaluate)
- * - Guide users to proper task creation workflow
+ * This hook is a UNIQUE DIFFERENTIATOR for Pilot AGI. It provides:
+ * - Semantic detection of new work requests (vs questions/reviews)
+ * - Context injection for Claude to self-evaluate scope
+ * - Guidance toward proper task creation workflow
+ *
+ * Governance purpose:
+ * - Prevents "shadow work" (work done without task tracking)
+ * - Ensures all significant work has a task in bd
+ * - Provides project context for informed decisions
+ *
+ * Non-blocking: This hook injects context but doesn't block prompts.
+ * Claude evaluates the context and decides how to proceed.
  *
  * Strategy:
- * - Instead of brittle keyword matching, inject project context
- * - Claude semantically evaluates if prompt is new work
+ * - Quick heuristics filter obvious non-work prompts (questions, etc.)
+ * - For uncertain prompts, inject project + task context
+ * - Claude semantically evaluates if this is new work
  * - Token-efficient: only inject ~300 tokens for uncertain prompts
- *
- * Security note: All execSync calls use hardcoded commands only.
- * No user input is ever interpolated into shell commands.
  */
 
 const fs = require('fs');

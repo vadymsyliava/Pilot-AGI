@@ -153,6 +153,33 @@ session:
     enabled: true
 
 # =============================================================================
+# QUALITY GATES (optional, disabled by default)
+# Pre-commit quality checks - these duplicate Claude Code native functionality
+# Enable only if you need stricter checks than Claude Code provides
+# =============================================================================
+quality_gates:
+  # Master switch - set to true to enable quality gates
+  enabled: false
+
+  # Individual gate configuration (when enabled)
+  file_size:
+    enabled: true
+    warn: 300    # Lines to warn
+    block: 500   # Lines to block
+  lint:
+    enabled: true
+    timeout: 30000
+  secrets:
+    enabled: true
+  security:
+    enabled: true
+  type_check:
+    enabled: true
+    timeout: 30000
+  duplicate:
+    enabled: false  # Expensive check, disabled by default
+
+# =============================================================================
 # EXCEPTIONS
 # Files and patterns that bypass enforcement rules
 # =============================================================================

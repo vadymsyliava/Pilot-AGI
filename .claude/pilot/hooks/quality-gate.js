@@ -1,15 +1,23 @@
 #!/usr/bin/env node
 
 /**
- * Quality Gate Runner
+ * Quality Gate Runner (OPTIONAL - Disabled by default)
  *
  * PreToolUse hook that runs quality checks before git commits.
- * Integrates with Claude Code's hook system to block commits
- * that don't meet quality standards.
+ *
+ * NOTE: This hook is DISABLED by default in policy.yaml because:
+ * - Claude Code has its own pre-commit quality tooling
+ * - These checks duplicate functionality available elsewhere
+ * - Keeping hooks governance-focused reduces complexity
+ *
+ * To enable: Set quality_gates.enabled: true in policy.yaml
+ *
+ * This is NOT a governance hook - it's an optional quality layer.
  */
 
 const fs = require('fs');
 const path = require('path');
+const { loadPolicy } = require('./lib/policy');
 
 // Gate modules
 const fileSizeGate = require('./gates/file-size');
@@ -108,6 +116,19 @@ async function runGates(config) {
  * Main entry point
  */
 async function main() {
+  // First check policy - quality gates are disabled by default
+  let policy;
+  try {
+    policy = loadPolicy();
+    if (!policy.quality_gates?.enabled) {
+      // Quality gates disabled in policy - pass through silently
+      process.exit(0);
+    }
+  } catch (e) {
+    // No policy or error - default to disabled, pass through
+    process.exit(0);
+  }
+
   let input = '';
 
   // Read stdin
@@ -136,7 +157,9 @@ async function main() {
   }
 
   // Load configuration and run gates
-  const config = loadConfig();
+  // Merge policy quality_gates with config file
+  const fileConfig = loadConfig();
+  const config = { ...fileConfig, ...policy.quality_gates };
 
   if (config.enabled === false) {
     process.exit(0);
