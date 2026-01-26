@@ -29,6 +29,7 @@ const fs = require('fs');
 const path = require('path');
 const { loadPolicy } = require('./lib/policy');
 const cache = require('./lib/cache');
+const session = require('./lib/session');
 
 // =============================================================================
 // QUICK HEURISTICS (instant, no tokens)
@@ -137,6 +138,13 @@ async function main() {
 
   const prompt = hookInput.prompt || '';
 
+  // Update heartbeat (keeps session alive)
+  try {
+    session.heartbeat();
+  } catch (e) {
+    // Best effort - don't block on heartbeat failure
+  }
+
   // Skip if empty prompt
   if (!prompt.trim()) {
     process.exit(0);
@@ -177,7 +185,8 @@ async function main() {
 
   // Uncertain prompt with no active task - inject guardian context
   // Claude will semantically evaluate if this is new work
-  const guardianContext = cache.buildGuardianContext();
+  // Pass prompt to enable smart task suggestion
+  const guardianContext = cache.buildGuardianContext(prompt);
 
   const output = {
     hookSpecificOutput: {

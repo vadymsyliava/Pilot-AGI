@@ -1,0 +1,72 @@
+# PAGES.yaml Template
+# Documentation for UI pages in the project
+# Copy to .claude/pilot/kb/ui/PAGES.yaml and customize
+
+pages:
+  # Example page entry
+  - route: /
+    name: Home
+    description: Landing page with hero section and feature overview
+    component: src/app/page.tsx
+    auth: false
+
+  - route: /dashboard
+    name: Dashboard
+    description: Main user dashboard showing stats and recent activity
+    component: src/app/dashboard/page.tsx
+    auth: true
+    features:
+      - User statistics cards
+      - Recent activity feed
+      - Quick actions panel
+
+  - route: /settings
+    name: Settings
+    description: User account and application settings
+    component: src/app/settings/page.tsx
+    auth: true
+    tabs:
+      - profile: User profile settings
+      - security: Password and 2FA
+      - notifications: Email and push notifications
+      - integrations: Third-party connections
+
+# Layouts documentation
+layouts:
+  - path: src/app/layout.tsx
+    name: Root Layout
+    description: Main application layout with navigation and footer
+    provides:
+      - Navigation header
+      - Footer
+      - Theme provider
+      - Auth context
+
+  - path: src/app/dashboard/layout.tsx
+    name: Dashboard Layout
+    description: Layout for authenticated dashboard pages
+    provides:
+      - Sidebar navigation
+      - User menu
+      - Breadcrumbs
+    requires_auth: true
+
+# Component categories for navigation
+categories:
+  marketing:
+    pages: ["/", "/pricing", "/about"]
+    layout: marketing
+
+  dashboard:
+    pages: ["/dashboard", "/settings", "/projects/*"]
+    layout: dashboard
+    requires_auth: true
+
+  auth:
+    pages: ["/login", "/register", "/forgot-password"]
+    layout: minimal
+
+# Page metadata for SEO/navigation
+metadata:
+  default_title_suffix: " | My App"
+  default_description: "Default page description for SEO"

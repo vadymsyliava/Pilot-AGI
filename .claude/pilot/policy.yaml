@@ -4,10 +4,13 @@
 # Hooks (session_start.js, user_prompt_submit.js, pre_tool_use.js) read this
 # policy to enforce governance rules.
 #
-# Version: 1.0
-# Updated: 2026-01-21
+# POSITION: This is the definitive enterprise governance DSL for Claude Code.
+# While Claude Code provides AI coding power, this policy ensures compliance.
+#
+# Version: 2.0
+# Updated: 2026-01-25
 
-version: "1.0"
+version: "2.0"
 
 # =============================================================================
 # ENFORCEMENT RULES
@@ -35,7 +38,7 @@ enforcement:
     - master
     - production
 
-  # R4: Detect new scope in user messages
+  # R4: Detect new scope in user messages (Semantic Guardian)
   # When true, user prompts are analyzed for new work requests
   # and routed to /pilot-new-task instead of direct implementation
   detect_new_scope: true
@@ -71,6 +74,250 @@ execution:
   # R8: Update bd task status after state changes
   # Keeps bd as the single source of truth for task state
   require_bd_update: true
+
+# =============================================================================
+# AUDIT TRAIL (Enterprise Compliance)
+# Configures comprehensive logging for compliance audits
+# =============================================================================
+audit_trail:
+  # Master switch for audit logging
+  enabled: true
+
+  # Log all tool uses (for SOC2, HIPAA compliance)
+  log_tool_uses: true
+
+  # Log format: "json" for machine parsing, "markdown" for humans
+  format: "json"
+
+  # Where to write audit logs
+  log_file: "runs/audit.jsonl"
+
+  # What to capture in each log entry
+  capture:
+    - timestamp
+    - session_id
+    - user_id
+    - task_id
+    - tool_name
+    - tool_args_hash      # Hash of args (not full content for PII)
+    - result_status       # success/failure
+    - files_touched
+
+  # Retention policy
+  retention:
+    days: 90
+    archive_to: "runs/archive/"
+
+  # Events that always get logged regardless of other settings
+  always_log:
+    - file_edit
+    - file_delete
+    - bash_command
+    - plan_approval
+    - task_claim
+    - task_close
+
+# =============================================================================
+# APPROVAL MATRIX (Role-Based Access Control)
+# Defines who can approve what types of changes
+# =============================================================================
+approval_matrix:
+  # Default approval requirements
+  defaults:
+    # Can the AI auto-approve simple changes?
+    ai_auto_approve: false
+    # Require explicit human approval for all changes
+    require_human: true
+
+  # Change types and their approval requirements
+  change_types:
+    # Standard code changes - default approval
+    code_change:
+      ai_auto_approve: true
+      require_human: false
+      escalate_if:
+        - files_changed > 10
+        - touches_auth_code
+        - touches_payment_code
+
+    # Documentation changes - can be auto-approved
+    documentation:
+      ai_auto_approve: true
+      require_human: false
+
+    # Database migrations - always require human
+    database_migration:
+      ai_auto_approve: false
+      require_human: true
+      approvers:
+        - tech_lead
+        - dba
+      notify:
+        - ops_team
+
+    # Authentication/authorization changes - critical
+    auth_change:
+      ai_auto_approve: false
+      require_human: true
+      approvers:
+        - security_team
+        - tech_lead
+      notify:
+        - security_team
+
+    # File deletions - require confirmation
+    file_deletion:
+      ai_auto_approve: false
+      require_human: true
+      warn_message: "This action will delete files permanently."
+
+    # External API integrations - review required
+    external_api:
+      ai_auto_approve: false
+      require_human: true
+      approvers:
+        - tech_lead
+      checklist:
+        - "API key stored in secrets manager?"
+        - "Rate limiting implemented?"
+        - "Error handling complete?"
+
+    # Production deployments - highest approval
+    production_deploy:
+      ai_auto_approve: false
+      require_human: true
+      require_multiple_approvers: true
+      min_approvers: 2
+      approvers:
+        - tech_lead
+        - ops_team
+        - product_owner
+
+  # Role definitions (map to actual users/groups externally)
+  roles:
+    tech_lead:
+      can_approve: all
+      can_override: true
+    security_team:
+      can_approve: [auth_change, production_deploy]
+      can_override: false
+    dba:
+      can_approve: [database_migration]
+      can_override: false
+    ops_team:
+      can_approve: [production_deploy]
+      can_override: false
+    product_owner:
+      can_approve: [production_deploy]
+      can_override: false
+
+# =============================================================================
+# COMPLIANCE RULES (Industry Standards)
+# Pre-configured rules for common compliance frameworks
+# =============================================================================
+compliance_rules:
+  # Enable compliance mode (stricter enforcement)
+  enabled: false
+
+  # Which frameworks to enforce
+  frameworks: []  # Options: hipaa, soc2, pci_dss, gdpr
+
+  # HIPAA (Healthcare)
+  hipaa:
+    enabled: false
+    rules:
+      - name: "phi_detection"
+        description: "Detect and block PHI in code/logs"
+        patterns:
+          - "\\b\\d{3}-\\d{2}-\\d{4}\\b"  # SSN
+          - "\\b\\d{9}\\b"                 # MRN patterns
+          - "patient.*name"
+          - "medical.*record"
+        action: "block"
+        message: "Potential PHI detected. Cannot commit."
+
+      - name: "encryption_required"
+        description: "Ensure data at rest encryption"
+        check: "config_value"
+        path: "*.env*"
+        required_keys:
+          - "ENCRYPTION_KEY"
+          - "DATABASE_ENCRYPTION"
+
+      - name: "audit_logging"
+        description: "Audit logging must be enabled"
+        require:
+          audit_trail.enabled: true
+          audit_trail.log_tool_uses: true
+
+  # SOC2 (Service Organizations)
+  soc2:
+    enabled: false
+    rules:
+      - name: "access_control"
+        description: "Verify access controls in auth code"
+        patterns:
+          - "TODO.*auth"
+          - "FIXME.*permission"
+          - "// skip auth"
+        action: "warn"
+        message: "Potential access control issue. Review required."
+
+      - name: "change_management"
+        description: "All changes must be tracked"
+        require:
+          enforcement.require_active_task: true
+          audit_trail.enabled: true
+
+      - name: "incident_logging"
+        description: "Errors must be logged"
+        check: "code_pattern"
+        require_in_catch_blocks:
+          - "console.error"
+          - "logger.error"
+          - "log.error"
+
+  # PCI-DSS (Payment Card Industry)
+  pci_dss:
+    enabled: false
+    rules:
+      - name: "card_data_detection"
+        description: "Block credit card numbers in code"
+        patterns:
+          - "\\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14})\\b"  # Visa/MC
+          - "card.*number"
+          - "cvv"
+          - "cvc"
+        action: "block"
+        message: "Potential card data detected. Cannot commit."
+
+      - name: "secure_transmission"
+        description: "Require HTTPS for API calls"
+        patterns:
+          - "http://"  # Non-HTTPS
+        exclude:
+          - "localhost"
+          - "127.0.0.1"
+        action: "warn"
+
+  # GDPR (Data Privacy)
+  gdpr:
+    enabled: false
+    rules:
+      - name: "pii_detection"
+        description: "Detect PII in code/config"
+        patterns:
+          - "email.*=.*@"
+          - "phone.*=.*\\d{10}"
+          - "address.*=.*"
+        action: "warn"
+        message: "Potential PII hardcoded. Use environment variables."
+
+      - name: "data_retention"
+        description: "Verify data retention policies"
+        require_in_models:
+          - "deletedAt"
+          - "retentionPolicy"
 
 # =============================================================================
 # AREA DEFINITIONS

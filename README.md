@@ -1,6 +1,6 @@
 # Pilot AGI
 
-**AI-powered development framework for Claude Code** - Structured workflows that ship.
+**Governance Layer for Claude Code** - Enterprise-grade compliance, approval workflows, and audit trails for AI-assisted development.
 
 [![npm version](https://img.shields.io/npm/v/pilot-agi.svg)](https://www.npmjs.com/package/pilot-agi)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -9,92 +9,209 @@
 
 ## What is Pilot AGI?
 
-Pilot AGI brings structure to AI-assisted development:
+Pilot AGI is a **governance layer** that sits on top of Claude Code, providing enterprise compliance and oversight for AI-assisted development. While Claude Code provides powerful AI coding capabilities, Pilot AGI adds the guardrails organizations need.
 
-- **Beads (bd) Integration** - Git-backed task management as single source of truth
-- **Plan → Approve → Execute → Verify** - The canonical loop that prevents drift
-- **Session Capsules** - Crash recovery and context continuity
-- **Token Efficiency** - Progressive disclosure, load only what's needed
+### Pilot AGI vs Native Claude Code
+
+| Capability | Claude Code (Native) | Pilot AGI (Governance) |
+|------------|---------------------|------------------------|
+| Code exploration | Plan Mode | Leverages native |
+| Code editing | Direct edits | Requires approval |
+| Task tracking | None | bd (beads) integration |
+| Approval workflows | None | Configurable gates |
+| Audit trails | None | Session capsules |
+| Policy enforcement | None | policy.yaml DSL |
+| Multi-agent coordination | None | Session management |
+| Crash recovery | None | Context continuity |
+
+**Key insight**: Pilot AGI doesn't duplicate Claude Code - it governs it.
+
+---
+
+## Core Governance Features
+
+### 1. Approval Workflows
+
+Every significant change requires explicit approval before execution:
+
+```
+/pilot-plan → (APPROVAL GATE) → /pilot-exec
+```
+
+High-risk operations trigger mandatory approval:
+- Database migrations
+- Authentication/authorization changes
+- File deletions
+- External API integrations
+- Security-sensitive code
+
+### 2. Audit Trails (Session Capsules)
+
+Every action is logged to `runs/YYYY-MM-DD.md`:
+- Who did what, when
+- Task references
+- Approval records
+- Crash recovery context
+
+Perfect for compliance audits and incident investigation.
+
+### 3. Policy Enforcement
+
+Define organization rules in `policy.yaml`:
+
+```yaml
+execution:
+  require_plan_approval: true
+  require_verification: true
+  require_commit_per_step: true
+
+approval_gates:
+  - type: database_migration
+    require: explicit_approval
+  - type: auth_changes
+    require: explicit_approval
+  - type: delete_files
+    require: explicit_approval
+
+semantic_guardian:
+  max_file_changes_per_step: 10
+  require_test_for_new_code: true
+```
+
+### 4. Task Management (bd Integration)
+
+Git-backed task tracking with [beads](https://github.com/steveyegge/beads):
+- Single source of truth for work items
+- Dependency management
+- Priority ordering
+- Commit linking
 
 ---
 
 ## Quick Start
 
-### One-Command Installation
+### Installation
 
 ```bash
-# Global install (recommended) - automatically installs beads (bd) if needed
+# Global install (recommended)
 npx pilot-agi --global
 
 # Project-local install
 npx pilot-agi --local
 ```
 
-The installer will automatically install [beads](https://github.com/steveyegge/beads) (task management) if not already present, using Homebrew, npm, or go install.
-
-### Initialize Your Project
+### Initialize Governance
 
 ```bash
-# Navigate to your project
 cd your-project
 
-# Initialize beads for task tracking
+# Initialize task tracking
 bd init
 
-# Start using Pilot AGI skills in Claude Code
+# View available commands
 /pilot-help
 ```
 
 ---
 
-## The Canonical Loop
+## The Governed Workflow
 
-### New Project
-```
-/pilot-init → /pilot-sprint → bd ready → /pilot-plan → ...
-```
+### Daily Development
 
-### Daily Work
 ```
 bd ready → /pilot-plan → (approve) → /pilot-exec → /pilot-commit → /pilot-close
 ```
 
-1. **/pilot-init** - Initialize project with smart questions (once per project)
-2. **/pilot-sprint** - Plan sprint with bd tasks
-3. **bd ready** - Pick top task (dependencies guarantee order)
-4. **/pilot-plan** - Create implementation plan, wait for approval
-5. **/pilot-exec** - Execute one micro-step with verification
-6. **/pilot-commit** - Create conventional commit linked to bd issue
-7. **/pilot-close** - Validate Definition of Done, close bd issue
+1. **bd ready** - Pick top task (dependencies guarantee order)
+2. **/pilot-plan** - Create implementation plan
+3. **APPROVAL GATE** - Human review and approval
+4. **/pilot-exec** - Execute one micro-step with verification
+5. **/pilot-commit** - Create conventional commit with task reference
+6. **/pilot-close** - Validate Definition of Done
+
+### Autonomous Mode (with Guardrails)
+
+```bash
+/pilot-auto --max-tasks 10 --max-errors 3
+```
+
+Autonomous execution still respects:
+- Approval gates (pauses for high-risk operations)
+- Verification requirements
+- Policy rules
+- Session logging
 
 ---
 
-## Skills
+## Skills Reference
+
+### Governance & Control
+| Skill | Purpose |
+|-------|---------|
+| `/pilot-plan` | Create implementation plan (requires approval) |
+| `/pilot-approve` | Approve a pending plan |
+| `/pilot-auto` | Start autonomous execution with guardrails |
+| `/pilot-pause` | Pause autonomous execution |
+
+### Workflow Execution
+| Skill | Purpose |
+|-------|---------|
+| `/pilot-next` | Pick next ready task from bd |
+| `/pilot-exec` | Execute one verified micro-step |
+| `/pilot-commit` | Create conventional commit |
+| `/pilot-review` | Quick code review checklist |
+| `/pilot-close` | Validate DoD and close task |
 
 ### Project Setup
 | Skill | Purpose |
 |-------|---------|
 | `/pilot-init` | Initialize project with smart questions |
 | `/pilot-sprint` | Plan sprint with bd tasks |
-| `/pilot-design` | Create/update design system with shadcn/ui |
-
-### Workflow
-| Skill | Purpose |
-|-------|---------|
-| `/pilot-next` | Pick next ready task from bd |
-| `/pilot-plan` | Create implementation plan for task |
-| `/pilot-exec` | Execute one micro-step |
-| `/pilot-commit` | Create conventional commit |
-| `/pilot-review` | Quick code review checklist |
-| `/pilot-close` | Validate DoD and close task |
+| `/pilot-design` | Create/update design system |
 
 ### Utilities
 | Skill | Purpose |
 |-------|---------|
-| `/pilot-research` | Research topic, save to work/research/ |
 | `/pilot-status` | Show progress and suggest next action |
-| `/pilot-update` | Update Pilot AGI |
-| `/pilot-help` | Show help |
+| `/pilot-session` | View session state and locks |
+| `/pilot-serve` | Start local API server |
+| `/pilot-help` | Show available commands |
+
+---
+
+## Enterprise Features
+
+### Multi-Agent Coordination
+
+When multiple Claude Code sessions work on the same project:
+- **Task claiming** with leases prevents conflicts
+- **Area locking** ensures no overlapping edits
+- **Session heartbeats** detect abandoned work
+- **Atomic claims** via bd prevent race conditions
+
+### Session Management
+
+```bash
+# View active sessions
+/pilot-session
+
+# Check what's locked
+curl http://localhost:3333/api/locks
+```
+
+### Kanban API
+
+Local REST API for dashboards and monitoring:
+
+```
+GET /api/health     - Server status
+GET /api/sessions   - Active sessions
+GET /api/issues     - All bd tasks
+GET /api/events     - Event stream
+GET /api/locks      - Current locks
+```
+
+Start with `/pilot-serve`.
 
 ---
 
@@ -102,71 +219,77 @@ bd ready → /pilot-plan → (approve) → /pilot-exec → /pilot-commit → /pi
 
 ```
 your-project/
-├── .beads/                 # Task database (bd init)
+├── .beads/                 # Task database (git-backed)
 ├── .claude/
-│   ├── skills/pilot-*/     # Pilot AGI skills
-│   ├── pilot/              # Framework internals
+│   ├── pilot/
+│   │   ├── policy.yaml     # Governance rules
 │   │   ├── hooks/          # Session hooks
-│   │   ├── templates/      # Planning templates
-│   │   └── config.default.json
-│   └── settings.json       # Hooks configuration
+│   │   └── state/          # Runtime state
+│   └── settings.json       # Claude Code config
 ├── work/
-│   ├── ROADMAP.md          # High-level planning
-│   ├── milestones/         # Milestone specs
-│   ├── sprints/            # Sprint planning
-│   ├── specs/              # Feature specifications
-│   ├── research/           # Research outputs
-│   └── plans/              # Approved implementation plans
+│   ├── ROADMAP.md          # Planning documents
+│   ├── sprints/            # Sprint definitions
+│   └── plans/              # Approved plans
 ├── runs/
-│   └── YYYY-MM-DD.md       # Session capsules
+│   └── YYYY-MM-DD.md       # Audit trail (session capsules)
 └── CLAUDE.md               # Agent contract
 ```
 
 ---
 
-## Key Concepts
+## Configuration
 
-### Beads as Task SSOT
+### policy.yaml (Governance Rules)
 
-Tasks live in beads (bd), not markdown files:
-```bash
-bd create "Implement user auth"    # Create task
-bd ready                           # List actionable tasks
-bd update bd-a1b2 --status in_progress  # Claim task
-bd issues                          # Query all tasks
+```yaml
+version: "1.0"
+
+execution:
+  require_plan_approval: true
+  require_verification: true
+  auto_commit: true
+
+approval_gates:
+  database_migration:
+    require: explicit_approval
+    notify: ["tech-lead"]
+  auth_changes:
+    require: explicit_approval
+  production_deploy:
+    require: explicit_approval
+
+semantic_guardian:
+  max_changes_per_step: 10
+  forbidden_patterns:
+    - "rm -rf"
+    - "DROP TABLE"
 ```
-
-### Session Capsules
-
-Every action logged to `runs/YYYY-MM-DD.md` for:
-- Crash recovery
-- Context continuity
-- Progress tracking
 
 ### Token Discipline
 
+Pilot AGI enforces efficient context usage:
 - Skills are concise (<500 lines)
 - Progressive disclosure (load on demand)
-- Scoped reads (specific sections, not whole files)
-- Session logs summarize, don't carry full context
+- Scoped reads (specific sections only)
+- Session logs summarize closed work
 
 ---
 
-## Configuration
+## Why Governance Matters
 
-`.claude/pilot/config.default.json`:
-```json
-{
-  "token_budget": {
-    "warning_threshold": 50000,
-    "target_range": { "min": 20000, "max": 80000 }
-  },
-  "planning": {
-    "require_approval": true,
-    "max_steps_per_plan": 10
-  }
-}
-```
+### Without Pilot AGI
+- AI makes changes without oversight
+- No audit trail of what happened
+- No way to enforce organization policies
+- Multi-agent chaos
+- Difficult incident investigation
+
+### With Pilot AGI
+- Every change approved before execution
+- Complete audit trail
+- Policy enforcement via DSL
+- Coordinated multi-agent work
+- Easy compliance and debugging
 
 ---
 
@@ -178,28 +301,19 @@ See [CHANGELOG.md](./CHANGELOG.md) for version history.
 
 ## Roadmap
 
-### v0.0.4 (Current)
-- [x] `/pilot-design` - Design system generation
-- [x] Component registry with patterns and rules
-- [x] Design system page template
-- [x] shadcn/ui integration
+### v2.0.0 (Current Development)
+- [x] Governance framework with approval gates
+- [x] Policy.yaml for rule definition
+- [x] Session management and coordination
+- [x] Audit trails (session capsules)
+- [x] Autonomous mode with guardrails
+- [x] Kanban API for monitoring
 
-### v0.0.3
-- [x] `/pilot-init` - Project initialization with smart questions
-- [x] `PROJECT_BRIEF.md` generation
-- [x] Roadmap generation
-- [x] `/pilot-sprint` - Sprint planning with bd tasks
-- [x] Research phase automation
-
-### v0.0.5 (Next)
-- [ ] `/pilot-test` - Test generation
-- [ ] Vitest + Playwright integration
-- [ ] Coverage enforcement
-
-### v0.1.0
-- [ ] Full agent orchestration
-- [ ] Quality gates
-- [ ] Duplicate detection
+### v2.1.0 (Next)
+- [ ] Enhanced policy DSL
+- [ ] Teleport support for session capsules
+- [ ] Quality gates integration
+- [ ] Dashboard UI
 
 ---
 
@@ -225,4 +339,4 @@ MIT - see [LICENSE](./LICENSE)
 
 ---
 
-**Built for Claude Code**
+**Governance for Claude Code** - Ship with confidence.
