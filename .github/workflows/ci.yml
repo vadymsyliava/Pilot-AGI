@@ -47,27 +47,29 @@ jobs:
       - name: Run tests
         run: npm test
 
-  validate-commands:
+  validate-hooks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate command files
+      - name: Validate hook files exist
         run: |
-          echo "Validating command markdown files..."
-          for file in commands/pilot/*.md; do
-            echo "Checking $file"
-            if ! head -1 "$file" | grep -q "^---"; then
-              echo "ERROR: $file missing frontmatter"
-              exit 1
-            fi
-            if ! grep -q "^name:" "$file"; then
-              echo "ERROR: $file missing name field"
-              exit 1
-            fi
-            if ! grep -q "^description:" "$file"; then
-              echo "ERROR: $file missing description field"
+          echo "Validating Pilot AGI hooks..."
+          for hook in session-start user-prompt-submit pre-tool-use; do
+            if [ -f ".claude/pilot/hooks/${hook}.js" ]; then
+              echo "✓ ${hook}.js exists"
+            else
+              echo "ERROR: ${hook}.js missing"
               exit 1
             fi
           done
-          echo "All command files valid!"
+          echo "All hooks valid!"
+
+      - name: Validate policy.yaml
+        run: |
+          if [ -f ".claude/pilot/policy.yaml" ]; then
+            echo "✓ policy.yaml exists"
+          else
+            echo "ERROR: policy.yaml missing"
+            exit 1
+          fi
