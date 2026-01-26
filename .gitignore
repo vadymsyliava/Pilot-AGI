@@ -34,7 +34,13 @@ runs/
 AGENTS.md
 work/plans/
 work/research/
+work/ROADMAP.md
+work/DEPRECATION.md
+work/SEMANTIC_GUARDIAN.md
 .claude/pilot/cache/
+.claude/pilot/state/sessions/
+.claude/pilot/state/autonomous.json
+.claude/pilot/kb/
 
 # Internal development (dogfooding Pilot AGI on itself)
 .pilot-internal/
