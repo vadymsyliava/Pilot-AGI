@@ -24,10 +24,11 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-// Import session, policy, and cache utilities
+// Import session, policy, cache, and teleport utilities
 const session = require('./lib/session');
 const { loadPolicy } = require('./lib/policy');
 const cache = require('./lib/cache');
+const teleport = require('./lib/teleport');
 
 // =============================================================================
 // VERSION CHECK (REMOVED - handled by npm/CLI)
@@ -233,6 +234,29 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
+  // 1b. Teleport Resume Detection (new in v2.1)
+  // -------------------------------------------------------------------------
+
+  // Check if this session was resumed via teleport
+  if (teleport.isTeleportResume()) {
+    const teleportContext = teleport.loadTeleportContext();
+    if (teleportContext) {
+      context.teleport_resume = true;
+      context.teleport_context = teleportContext;
+      messages.push('TELEPORTED: Context restored');
+
+      // Add resume instructions
+      const resumeMsg = teleport.buildTeleportResumeMessage();
+      if (resumeMsg) {
+        context.teleport_resume_message = resumeMsg;
+      }
+
+      // Clear teleport context after loading (one-time use)
+      teleport.clearTeleportContext();
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 2. Policy Loading (new in v2)
   // -------------------------------------------------------------------------
 
@@ -320,6 +344,11 @@ async function main() {
 
   if (messages.length > 0) {
     output.systemMessage = messages.join(' | ');
+  }
+
+  // Add teleport resume message if present
+  if (context.teleport_resume_message) {
+    output.systemMessage = context.teleport_resume_message + '\n\n' + (output.systemMessage || '');
   }
 
   // Add context as additional data in output

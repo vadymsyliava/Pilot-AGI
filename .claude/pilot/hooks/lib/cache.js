@@ -396,10 +396,50 @@ function needsRefresh() {
 }
 
 /**
- * Build context for injection into Claude
- * Returns formatted string ready for injection
+ * Find tasks that semantically match keywords from a prompt
+ * Returns array of matching tasks with relevance score
  */
-function buildGuardianContext() {
+function findMatchingTasks(prompt, tasks) {
+  if (!prompt || !tasks.length) return [];
+
+  // Extract keywords from prompt (simple tokenization)
+  const keywords = prompt.toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 3)
+    .filter(w => !['this', 'that', 'with', 'from', 'have', 'will', 'would', 'could', 'should'].includes(w));
+
+  // Score each task by keyword matches
+  const scored = tasks.map(task => {
+    const titleLower = task.title.toLowerCase();
+    const matches = keywords.filter(kw => titleLower.includes(kw));
+    return {
+      ...task,
+      score: matches.length
+    };
+  }).filter(t => t.score > 0);
+
+  // Return top 3 matches sorted by score
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+}
+
+/**
+ * Build context for injection into Claude (Semantic Guardian)
+ *
+ * UNIQUE DIFFERENTIATOR: This is Pilot AGI's value-add over Claude Code.
+ * While Claude Code provides raw AI coding power, Pilot AGI's semantic
+ * guardian ensures governance through:
+ *
+ * 1. Workflow bypass detection - catches attempts to do work outside tasks
+ * 2. Task suggestion - shows relevant existing tasks
+ * 3. State-aware guidance - knows what step is next
+ * 4. Audit preparation - ensures work is tracked
+ *
+ * Returns formatted string ready for injection (~300 tokens)
+ */
+function buildGuardianContext(prompt) {
   const summary = loadProjectSummary();
   const activeTask = getActiveTask();
   const readyTasks = getReadyTasks();
@@ -432,8 +472,21 @@ function buildGuardianContext() {
     lines.push('Ready tasks: none');
   }
 
+  // Find matching tasks if prompt provided (smart suggestion)
+  if (prompt && readyTasks.length > 0) {
+    const matches = findMatchingTasks(prompt, readyTasks);
+    if (matches.length > 0 && !activeTask) {
+      lines.push('');
+      lines.push('Possibly related tasks:');
+      matches.forEach(m => {
+        lines.push(`  → [${m.id}] ${m.title}`);
+      });
+    }
+  }
+
   lines.push('');
-  lines.push('Evaluate this prompt:');
+  lines.push('SEMANTIC GUARDIAN EVALUATION:');
+  lines.push('');
 
   if (activeTask) {
     // State-aware guidance
@@ -452,12 +505,16 @@ function buildGuardianContext() {
         break;
     }
     lines.push('- If prompt is about the active task → proceed with work');
-    lines.push('- If requesting DIFFERENT work → guide to /pilot-new-task');
+    lines.push('- If requesting DIFFERENT/UNRELATED work → guide to /pilot-new-task');
+    lines.push('- GOVERNANCE: All work should be tracked. Shadow work is not compliant.');
   } else {
     lines.push('- If requesting NEW work not matching any task → guide user to /pilot-new-task');
-    lines.push('- If matches an existing ready task → suggest /pilot-next');
+    lines.push('- If matches an existing ready task → suggest /pilot-next or claim that task');
+    lines.push('- GOVERNANCE: Creating a task first ensures audit trail and approval workflow');
   }
   lines.push('- If question/clarification → proceed normally');
+  lines.push('');
+  lines.push('Pilot AGI ensures governance over Claude Code for compliance.');
   lines.push('</pilot-context>');
 
   return lines.join('\n');
@@ -542,6 +599,7 @@ module.exports = {
   needsRefresh,
   buildGuardianContext,
   buildTaskListSummary,
+  findMatchingTasks,
   ensureCacheDir,
   getCacheDir
 };

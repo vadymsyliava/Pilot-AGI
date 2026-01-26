@@ -29,6 +29,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { loadPolicy, isException, matchesPattern } = require('./lib/policy');
+const session = require('./lib/session');
 
 const APPROVED_PLANS_DIR = '.claude/pilot/state/approved-plans';
 
@@ -145,6 +146,23 @@ function checkEnforcement(filePath, policy) {
     }
   }
 
+  // R5: area_locking check (multi-session coordination)
+  if (policy.enforcement?.area_locking !== false) {
+    const area = session.getAreaForPath(relativePath);
+    if (area) {
+      // Get current session ID from environment or session state
+      const currentSessionId = process.env.PILOT_SESSION_ID || null;
+      const areaLock = session.isAreaLocked(area, currentSessionId);
+
+      if (areaLock) {
+        return {
+          allowed: false,
+          reason: `Area locked: '${area}' is being edited by another session (${areaLock.session_id}).\n\nFile: ${relativePath}\nTask: ${areaLock.task_id || 'unknown'}\n\nWait for the other session to finish or coordinate work.`
+        };
+      }
+    }
+  }
+
   // R1: require_active_task check
   if (policy.enforcement?.require_active_task) {
     // Check exception first
@@ -195,6 +213,13 @@ async function main() {
   } catch (e) {
     // No stdin or invalid JSON - allow through
     process.exit(0);
+  }
+
+  // Update heartbeat (keeps session alive during active work)
+  try {
+    session.heartbeat();
+  } catch (e) {
+    // Best effort - don't block on heartbeat failure
   }
 
   const toolName = hookInput.tool_name || '';
