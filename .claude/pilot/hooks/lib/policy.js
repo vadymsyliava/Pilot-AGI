@@ -191,6 +191,15 @@ function getDefaultPolicy() {
       no_task_required: ['runs/*.md'],
       no_plan_required: ['runs/*.md', '*.md'],
       never_edit: ['.env', '.env.*', '*.pem', '*.key']
+    },
+    worktree: {
+      enabled: false,
+      base_dir: '.worktrees',
+      branch_prefix: 'pilot/',
+      merge_strategy: 'squash',
+      conflict_action: 'flag',
+      auto_cleanup: true,
+      base_branch: 'main'
     }
   };
 }
@@ -207,7 +216,8 @@ function mergeWithDefaults(policy) {
     execution: { ...defaults.execution, ...policy.execution },
     areas: policy.areas || defaults.areas,
     session: { ...defaults.session, ...policy.session },
-    exceptions: { ...defaults.exceptions, ...policy.exceptions }
+    exceptions: { ...defaults.exceptions, ...policy.exceptions },
+    worktree: { ...defaults.worktree, ...policy.worktree }
   };
 }
 
@@ -221,8 +231,9 @@ function matchesPattern(filePath, patterns) {
   for (const pattern of patterns) {
     const regex = pattern
       .replace(/\./g, '\\.')
-      .replace(/\*\*/g, '.*')
-      .replace(/\*/g, '[^/]*');
+      .replace(/\*\*/g, '\x00')
+      .replace(/\*/g, '[^/]*')
+      .replace(/\x00/g, '.*');
 
     if (new RegExp(`^${regex}$`).test(filePath)) {
       return true;

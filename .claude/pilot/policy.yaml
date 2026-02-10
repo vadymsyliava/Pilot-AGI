@@ -401,6 +401,32 @@ session:
     enabled: true
 
 # =============================================================================
+# WORKTREE ENGINE (Phase 2.1)
+# Git worktree isolation for multi-agent parallel development
+# =============================================================================
+worktree:
+  # Master switch for worktree isolation
+  enabled: true
+
+  # Directory for linked worktrees (relative to project root)
+  base_dir: ".worktrees"
+
+  # Branch prefix for agent worktree branches
+  branch_prefix: "pilot/"
+
+  # Merge strategy when completing a task: squash | merge
+  merge_strategy: "squash"
+
+  # What to do when merge conflicts are detected: flag | abort
+  conflict_action: "flag"
+
+  # Automatically clean up orphaned worktrees on session start
+  auto_cleanup: true
+
+  # Base branch to create worktrees from
+  base_branch: "main"
+
+# =============================================================================
 # QUALITY GATES (optional, disabled by default)
 # Pre-commit quality checks - these duplicate Claude Code native functionality
 # Enable only if you need stricter checks than Claude Code provides
@@ -442,7 +468,7 @@ exceptions:
   no_plan_required:
     - "runs/*.md"
     - ".gitignore"
-    - "*.md"                # Documentation
+    - "**/*.md"             # Documentation (nested paths too)
 
   # Files that are always blocked from editing (security)
   never_edit:
