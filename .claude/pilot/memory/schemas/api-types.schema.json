@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["endpoints"],
+  "properties": {
+    "endpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "method"],
+        "properties": {
+          "path": { "type": "string" },
+          "method": { "type": "string" },
+          "requestType": { "type": "string" },
+          "responseType": { "type": "string" },
+          "description": { "type": "string" }
+        }
+      }
+    }
+  }
+}

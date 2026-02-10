@@ -48,6 +48,10 @@
         "**/*.spec.*"
       ],
       "model_preference": "opus",
+      "memory": {
+        "publishes": ["component-registry"],
+        "consumes": ["design-tokens", "api-types"]
+      },
       "decomposition": {
         "atomic_actions": [
           "create_component",
@@ -110,6 +114,10 @@
         "**/*.spec.*"
       ],
       "model_preference": "opus",
+      "memory": {
+        "publishes": ["api-types"],
+        "consumes": ["component-registry"]
+      },
       "decomposition": {
         "atomic_actions": [
           "create_api_route",
@@ -166,6 +174,10 @@
       ],
       "excluded_patterns": [],
       "model_preference": "sonnet",
+      "memory": {
+        "publishes": [],
+        "consumes": ["api-types", "component-registry"]
+      },
       "decomposition": {
         "atomic_actions": [
           "write_unit_tests",
@@ -219,6 +231,10 @@
         "**/node_modules/**/*"
       ],
       "model_preference": "opus",
+      "memory": {
+        "publishes": [],
+        "consumes": []
+      },
       "decomposition": {
         "atomic_actions": [
           "audit_authentication",
@@ -270,6 +286,10 @@
         "**/*.lock"
       ],
       "model_preference": "sonnet",
+      "memory": {
+        "publishes": [],
+        "consumes": ["design-tokens"]
+      },
       "decomposition": {
         "atomic_actions": [
           "review_code_quality",
