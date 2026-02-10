@@ -339,7 +339,31 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
-  // 8. Build Output
+  // 8. Shared Memory Context (Phase 2.2)
+  // -------------------------------------------------------------------------
+
+  try {
+    const memory = require('./lib/memory');
+    const channels = memory.listChannels();
+    const summaries = [];
+
+    for (const channel of channels) {
+      const summary = memory.readSummary(channel);
+      if (summary && summary.summary) {
+        summaries.push(`${channel} (v${summary.version}): ${summary.summary}`);
+      }
+    }
+
+    if (summaries.length > 0) {
+      context.shared_memory = summaries;
+      messages.push(`Memory: ${summaries.length} channel(s)`);
+    }
+  } catch (e) {
+    // Shared memory not available, continue without
+  }
+
+  // -------------------------------------------------------------------------
+  // 9. Build Output
   // -------------------------------------------------------------------------
 
   if (messages.length > 0) {

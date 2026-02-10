@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["colors", "spacing", "typography"],
+  "properties": {
+    "colors": {
+      "type": "object",
+      "description": "Color palette tokens"
+    },
+    "spacing": {
+      "type": "object",
+      "description": "Spacing scale tokens"
+    },
+    "typography": {
+      "type": "object",
+      "description": "Typography tokens (fonts, sizes, weights)"
+    },
+    "shadows": {
+      "type": "object",
+      "description": "Box shadow tokens"
+    },
+    "radii": {
+      "type": "object",
+      "description": "Border radius tokens"
+    },
+    "breakpoints": {
+      "type": "object",
+      "description": "Responsive breakpoint tokens"
+    },
+    "zIndex": {
+      "type": "object",
+      "description": "Z-index layer tokens"
+    },
+    "animation": {
+      "type": "object",
+      "description": "Animation/transition tokens"
+    }
+  }
+}

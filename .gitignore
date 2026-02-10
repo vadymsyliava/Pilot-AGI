@@ -27,6 +27,9 @@ coverage/
 .env.local
 .env.*.local
 
+# Git worktrees (multi-agent isolation)
+.worktrees/
+
 # Pilot AGI local state (for users of this framework)
 # These are created when using Pilot AGI, not part of the product
 .beads/
@@ -40,7 +43,9 @@ work/SEMANTIC_GUARDIAN.md
 .claude/pilot/cache/
 .claude/pilot/state/sessions/
 .claude/pilot/state/autonomous.json
+.claude/pilot/state/approved-plans/
 .claude/pilot/kb/
+.claude/pilot/memory/agents/
 
 # Internal development (dogfooding Pilot AGI on itself)
 .pilot-internal/

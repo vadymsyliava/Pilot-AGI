@@ -1,0 +1,38 @@
+{
+  "channel": "design-tokens",
+  "version": 1,
+  "publishedBy": "system",
+  "sessionId": null,
+  "publishedAt": "2026-02-10T23:10:00Z",
+  "summary": "Seed tokens: 5 colors (primary, secondary, accent, background, foreground), 6 spacing steps (1-6), 3 font sizes (sm, base, lg)",
+  "data": {
+    "colors": {
+      "primary": "#6366f1",
+      "secondary": "#8b5cf6",
+      "accent": "#f59e0b",
+      "background": "#ffffff",
+      "foreground": "#0f172a"
+    },
+    "spacing": {
+      "1": "0.25rem",
+      "2": "0.5rem",
+      "3": "0.75rem",
+      "4": "1rem",
+      "5": "1.5rem",
+      "6": "2rem"
+    },
+    "typography": {
+      "fontFamily": "Inter, system-ui, sans-serif",
+      "sizes": {
+        "sm": "0.875rem",
+        "base": "1rem",
+        "lg": "1.125rem"
+      },
+      "weights": {
+        "normal": 400,
+        "medium": 500,
+        "bold": 700
+      }
+    }
+  }
+}
