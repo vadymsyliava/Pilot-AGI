@@ -24,11 +24,12 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-// Import session, policy, cache, and teleport utilities
+// Import session, policy, cache, teleport, and worktree utilities
 const session = require('./lib/session');
 const { loadPolicy } = require('./lib/policy');
 const cache = require('./lib/cache');
 const teleport = require('./lib/teleport');
+const worktreeEngine = require('./lib/worktree');
 
 // =============================================================================
 // VERSION CHECK (REMOVED - handled by npm/CLI)
@@ -339,6 +340,28 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
+  // 7b. Worktree Context (Phase 2.1)
+  // -------------------------------------------------------------------------
+
+  try {
+    var wtConfig = worktreeEngine.getConfig();
+    if (wtConfig.enabled) {
+      var activeWorktrees = worktreeEngine.listWorktrees();
+      if (activeWorktrees.length > 0) {
+        context.worktrees = activeWorktrees.map(function(wt) {
+          return {
+            branch: wt.branch,
+            locked: !!wt.locked
+          };
+        });
+        messages.push(activeWorktrees.length + ' worktree(s) active');
+      }
+    }
+  } catch (e) {
+    // Worktree context failed, continue without
+  }
+
+  // -------------------------------------------------------------------------
   // 8. Shared Memory Context (Phase 2.2)
   // -------------------------------------------------------------------------
 
@@ -360,6 +383,45 @@ async function main() {
     }
   } catch (e) {
     // Shared memory not available, continue without
+  }
+
+  // -------------------------------------------------------------------------
+  // 8b. Inter-Agent Messaging Context (Phase 2.3)
+  // -------------------------------------------------------------------------
+
+  try {
+    const messaging = require('./lib/messaging');
+
+    // Initialize cursor for this session (starts at bus EOF)
+    messaging.initializeCursor(sessionId);
+
+    // Check for pending messages
+    const { messages: pendingMsgs } = messaging.readMessages(sessionId);
+    if (pendingMsgs.length > 0) {
+      const blocking = pendingMsgs.filter(m => m.priority === 'blocking');
+      const normal = pendingMsgs.filter(m => m.priority === 'normal');
+
+      context.pending_messages = pendingMsgs.length;
+      if (blocking.length > 0) {
+        context.blocking_messages = blocking.length;
+        messages.push(`${blocking.length} BLOCKING message(s) waiting`);
+      }
+      if (normal.length > 0) {
+        messages.push(`${normal.length} message(s) pending`);
+      }
+    }
+
+    // Bus stats for context
+    const stats = messaging.getBusStats();
+    if (stats.bus_exists) {
+      context.message_bus = {
+        messages: stats.message_count,
+        size_bytes: stats.bus_size_bytes,
+        needs_compaction: stats.needs_compaction
+      };
+    }
+  } catch (e) {
+    // Messaging not available yet, skip
   }
 
   // -------------------------------------------------------------------------
