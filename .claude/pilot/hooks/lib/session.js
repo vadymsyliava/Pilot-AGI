@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { loadPolicy } = require('./policy');
+const worktree = require('./worktree');
 
 const EVENT_STREAM_FILE = 'runs/sessions.jsonl';
 const SESSION_STATE_DIR = '.claude/pilot/state/sessions';
@@ -571,6 +572,29 @@ function cleanupStaleSessions() {
     }
   }
 
+  // Clean up orphaned worktrees (if enabled)
+  if (policy.worktree && policy.worktree.auto_cleanup) {
+    try {
+      var activeSessions = allSessions.filter(function(s) {
+        return s.status === 'active' && isSessionActive(s, policy);
+      });
+      worktree.cleanupOrphanedWorktrees(activeSessions);
+    } catch (e) {
+      // Best effort — don't break session cleanup
+    }
+  }
+
+  // Clean up messaging cursors for ended sessions
+  try {
+    const messaging = require('./messaging');
+    const activeIds = allSessions
+      .filter(s => s.status === 'active' && isSessionActive(s, policy))
+      .map(s => s.session_id);
+    messaging.cleanupCursors(activeIds);
+  } catch (e) {
+    // Messaging module not available yet, skip
+  }
+
   return cleaned;
 }
 
@@ -653,6 +677,14 @@ function claimTask(sessionId, taskId, leaseDurationMs = DEFAULT_LEASE_DURATION_M
     session.lease_expires_at = expiresAt.toISOString();
     session.last_heartbeat = now.toISOString();
 
+    // Create worktree for isolated development (if enabled)
+    var wtResult = worktree.createWorktree(taskId, sessionId);
+    if (wtResult.success) {
+      session.worktree_path = wtResult.path;
+      session.worktree_branch = wtResult.branch;
+      session.worktree_created_at = now.toISOString();
+    }
+
     fs.writeFileSync(sessionFile, JSON.stringify(session, null, 2));
 
     // Log the claim event
@@ -660,7 +692,8 @@ function claimTask(sessionId, taskId, leaseDurationMs = DEFAULT_LEASE_DURATION_M
       type: 'task_claimed',
       session_id: sessionId,
       task_id: taskId,
-      lease_expires_at: expiresAt.toISOString()
+      lease_expires_at: expiresAt.toISOString(),
+      worktree: wtResult.success ? { path: wtResult.path, branch: wtResult.branch } : null
     });
 
     return {
@@ -670,7 +703,8 @@ function claimTask(sessionId, taskId, leaseDurationMs = DEFAULT_LEASE_DURATION_M
         task_id: taskId,
         claimed_at: now.toISOString(),
         lease_expires_at: expiresAt.toISOString()
-      }
+      },
+      worktree: wtResult.success ? wtResult : null
     };
   } catch (e) {
     return {
@@ -712,11 +746,20 @@ function releaseTask(sessionId) {
     const releasedAreas = session.locked_areas || [];
     const releasedFiles = session.locked_files || [];
 
+    // Remove worktree if one exists for this task
+    var wtResult = null;
+    if (session.worktree_path) {
+      wtResult = worktree.removeWorktree(releasedTask);
+    }
+
     session.claimed_task = null;
     session.claimed_at = null;
     session.lease_expires_at = null;
     session.locked_areas = [];
     session.locked_files = [];
+    session.worktree_path = null;
+    session.worktree_branch = null;
+    session.worktree_created_at = null;
     session.last_heartbeat = new Date().toISOString();
 
     fs.writeFileSync(sessionFile, JSON.stringify(session, null, 2));
@@ -727,14 +770,16 @@ function releaseTask(sessionId) {
       session_id: sessionId,
       task_id: releasedTask,
       released_areas: releasedAreas,
-      released_files: releasedFiles
+      released_files: releasedFiles,
+      worktree_removed: wtResult ? wtResult.success : false
     });
 
     return {
       success: true,
       released_task: releasedTask,
       released_areas: releasedAreas,
-      released_files: releasedFiles
+      released_files: releasedFiles,
+      worktree: wtResult
     };
   } catch (e) {
     return {
