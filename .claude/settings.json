@@ -41,6 +41,17 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/pilot/hooks/post-tool-use.js"
+          }
+        ]
+      }
     ]
   }
 }
