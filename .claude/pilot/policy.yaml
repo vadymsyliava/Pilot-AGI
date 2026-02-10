@@ -427,6 +427,50 @@ worktree:
   base_branch: "main"
 
 # =============================================================================
+# PM ORCHESTRATOR (Phase 2.4)
+# Controls for the PM team-lead agent coordination
+# =============================================================================
+orchestrator:
+  # Drift threshold: ratio of unplanned file edits that triggers alert
+  # 0.3 = if 30% or more of modified files weren't in the plan, flag drift
+  drift_threshold: 0.3
+
+  # Require PM approval before merging agent work back to base branch
+  require_merge_approval: true
+
+  # Automatically reassign tasks from stale agents (lease expired + heartbeat gone)
+  auto_reassign_stale: true
+
+  # Maximum agents that can work in parallel
+  max_concurrent_agents: 4
+
+  # Require tests to pass before merge approval
+  require_tests_pass: false
+
+  # Cost tracking (token usage per agent/task)
+  cost_tracking:
+    enabled: true
+    warn_threshold_tokens: 500000   # Warn at 500k tokens per task
+    block_threshold_tokens: 2000000 # Block at 2M tokens per task
+
+# =============================================================================
+# CONTEXT CHECKPOINT (Phase 2.2.1)
+# Proactive context window management for agent continuity
+# =============================================================================
+checkpoint:
+  # Master switch for checkpoint system
+  enabled: true
+
+  # Context pressure threshold (percentage) — nudge agent at this level
+  pressure_threshold_pct: 60
+
+  # Automatically save checkpoint before context compaction
+  auto_save_before_compact: true
+
+  # Maximum checkpoint versions to keep per session (older ones rotated out)
+  max_checkpoints_per_session: 5
+
+# =============================================================================
 # QUALITY GATES (optional, disabled by default)
 # Pre-commit quality checks - these duplicate Claude Code native functionality
 # Enable only if you need stricter checks than Claude Code provides
