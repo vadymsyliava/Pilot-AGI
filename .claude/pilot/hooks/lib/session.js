@@ -1017,6 +1017,13 @@ function cleanupStaleSessions() {
   let cleaned = 0;
 
   for (const session of allSessions) {
+    // Fix zombie sessions: ended_at set but status still 'active'
+    if (session.status === 'active' && session.ended_at) {
+      endSession(session.session_id, session.end_reason || 'zombie_cleanup');
+      cleaned++;
+      continue;
+    }
+
     if (session.status === 'active' && !isSessionActive(session, policy)) {
       // Before marking stale, check if the actual Claude process is still alive.
       // The heartbeat may be outdated (e.g. during long tool calls) but the
@@ -1033,6 +1040,23 @@ function cleanupStaleSessions() {
         }
         continue;
       }
+      // Phase 3.8: Assess recovery strategy before ending
+      try {
+        const recovery = require('./recovery');
+        if (session.claimed_task) {
+          const assessment = recovery.assessRecovery(session.session_id);
+          if (assessment.strategy === recovery.STRATEGIES.RESUME) {
+            // Checkpoint exists — log recoverable event before ending
+            recovery.logRecoveryEvent(session.session_id, 'stale_with_checkpoint', {
+              task_id: session.claimed_task,
+              plan_step: assessment.checkpoint?.plan_step
+            });
+          }
+        }
+      } catch (e) {
+        // Recovery module not available, continue with normal cleanup
+      }
+
       endSession(session.session_id, 'stale');
       cleaned++;
     }
