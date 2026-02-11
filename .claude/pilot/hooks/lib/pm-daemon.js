@@ -28,6 +28,7 @@ const session = require('./session');
 const { loadPolicy } = require('./policy');
 const pmDecisions = require('./pm-decisions');
 const agentLogger = require('./agent-logger');
+const processSpawner = require('./process-spawner');
 
 // ============================================================================
 // CONSTANTS
@@ -437,126 +438,83 @@ class PmDaemon {
 
   /**
    * Spawn a headless Claude agent process for a task.
+   * Phase 4.2: Uses ProcessSpawner v2 for context-aware spawning.
    *
-   * @param {object} task - { id, title }
+   * @param {object} task - { id, title, description, labels }
    * @returns {{ success: boolean, pid?: number }}
    */
   _spawnAgent(task) {
-    if (this.opts.dryRun) {
-      this.log.info('DRY RUN: Would spawn agent', { task_id: task.id, title: task.title });
-      return { success: true, dry_run: true };
-    }
-
     // Determine agent type from skill registry
     const agentType = this._resolveAgentType(task);
 
-    // Build spawn command — headless claude session
-    const prompt = [
-      `You are an autonomous agent spawned by the PM daemon.`,
-      `Your assigned task is: ${task.id} — ${task.title || ''}`,
-      `Run the full canonical loop: claim the task, plan, execute all steps, commit, and close.`,
-      `Use /pilot-next if you need to pick up the task, then /pilot-plan, /pilot-exec, /pilot-commit, /pilot-close.`,
-      `Work autonomously — do not ask questions. If blocked, log the issue and move on.`
-    ].join('\n');
+    // Phase 4.2: Use ProcessSpawner v2 for context-aware spawning
+    const result = processSpawner.spawnAgent(task, {
+      projectRoot: this.projectRoot,
+      agentType: agentType || undefined,
+      budgetUsd: this.opts.budgetPerAgentUsd,
+      dryRun: this.opts.dryRun,
+      logger: this.log
+    });
 
-    const args = ['-p', prompt, '--permission-mode', 'acceptEdits'];
-
-    // Set model from agent registry if available
-    if (agentType) {
-      args.push('--agent', agentType);
-      try {
-        const registry = require('./orchestrator').loadSkillRegistry();
-        const roleConfig = registry?.roles?.[agentType];
-        if (roleConfig?.model) {
-          args.push('--model', roleConfig.model);
-        }
-      } catch (e) { /* use default model */ }
+    if (!result.success) {
+      return result;
     }
 
-    // Budget limit per agent if configured
-    if (this.opts.budgetPerAgentUsd) {
-      args.push('--max-budget-usd', String(this.opts.budgetPerAgentUsd));
+    if (this.opts.dryRun) {
+      return result;
     }
 
-    try {
-      const child = spawn('claude', args, {
-        cwd: this.projectRoot,
-        detached: true,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          PILOT_DAEMON_SPAWNED: '1',
-          PILOT_TASK_HINT: task.id
+    const child = result.process;
+
+    // Track the spawned process
+    this.spawnedAgents.set(child.pid, {
+      taskId: task.id,
+      taskTitle: task.title,
+      agentType: agentType || 'general',
+      spawnedAt: new Date().toISOString(),
+      process: child,
+      exitCode: null,
+      logPath: result.logPath || null,
+      isResume: result.isResume || false,
+      worktreePath: result.worktree?.path || null,
+      contextFile: result.contextFile || null
+    });
+
+    // Collect stderr for error reporting
+    let stderr = '';
+    child.stderr.on('data', (data) => {
+      stderr += data.toString().slice(0, 2048);
+    });
+
+    child.on('exit', (code, signal) => {
+      const entry = this.spawnedAgents.get(child.pid);
+      if (entry) {
+        entry.exitCode = code;
+        entry.exitSignal = signal;
+        entry.exitedAt = new Date().toISOString();
+        if (code !== 0) {
+          entry.stderr = stderr.slice(0, 500);
         }
-      });
-
-      child.unref();
-
-      // Phase 4.5: Attach logger to capture stdout/stderr to per-task log file
-      let logInfo = null;
-      try {
-        logInfo = agentLogger.attachLogger(this.projectRoot, task.id, child);
-      } catch (e) {
-        this.log.warn('Failed to attach agent logger', { task_id: task.id, error: e.message });
       }
 
-      // Track the spawned process
-      this.spawnedAgents.set(child.pid, {
-        taskId: task.id,
-        taskTitle: task.title,
-        agentType: agentType || 'general',
-        spawnedAt: new Date().toISOString(),
-        process: child,
-        exitCode: null,
-        logPath: logInfo?.logPath || null
-      });
-
-      // Collect stderr for error reporting (in addition to log file)
-      let stderr = '';
-      child.stderr.on('data', (data) => {
-        stderr += data.toString().slice(0, 2048);
-      });
-
-      child.on('exit', (code, signal) => {
-        const entry = this.spawnedAgents.get(child.pid);
-        if (entry) {
-          entry.exitCode = code;
-          entry.exitSignal = signal;
-          entry.exitedAt = new Date().toISOString();
-          if (code !== 0) {
-            entry.stderr = stderr.slice(0, 500);
-          }
-        }
-
-        this.log.info('Agent process exited', {
-          pid: child.pid,
-          task_id: task.id,
-          code,
-          signal
-        });
-
-        // Phase 4.1: Mark the agent's session as ended
-        this._onAgentExit(child.pid, task.id, code, signal);
-      });
-
-      this.lastSpawnTime = Date.now();
-      this.state.agents_spawned++;
-
-      this.log.info('Agent spawned', {
+      this.log.info('Agent process exited', {
         pid: child.pid,
         task_id: task.id,
-        title: task.title,
-        agent_type: agentType || 'general'
+        code,
+        signal
       });
 
-      return { success: true, pid: child.pid };
-    } catch (e) {
-      this.log.error('Agent spawn failed', {
-        task_id: task.id,
-        error: e.message
-      });
-      return { success: false, error: e.message };
-    }
+      // Clean up spawn context file
+      processSpawner.cleanupContextFile(task.id, this.projectRoot);
+
+      // Phase 4.1: Mark the agent's session as ended
+      this._onAgentExit(child.pid, task.id, code, signal);
+    });
+
+    this.lastSpawnTime = Date.now();
+    this.state.agents_spawned++;
+
+    return { success: true, pid: child.pid };
   }
 
   /**
