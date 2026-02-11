@@ -1,0 +1,10 @@
+{
+  "$description": "Responsive breakpoint tokens — mobile-first breakpoints",
+  "breakpoint": {
+    "sm":  { "$value": "640px",  "$type": "dimension", "$description": "Small devices (landscape phones)" },
+    "md":  { "$value": "768px",  "$type": "dimension", "$description": "Medium devices (tablets)" },
+    "lg":  { "$value": "1024px", "$type": "dimension", "$description": "Large devices (laptops)" },
+    "xl":  { "$value": "1280px", "$type": "dimension", "$description": "Extra large (desktops)" },
+    "2xl": { "$value": "1536px", "$type": "dimension", "$description": "2X large (wide screens)" }
+  }
+}

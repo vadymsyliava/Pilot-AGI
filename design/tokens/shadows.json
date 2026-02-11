@@ -1,0 +1,42 @@
+{
+  "$description": "Shadow tokens — elevation and depth",
+  "shadow": {
+    "none": {
+      "$type": "shadow",
+      "$value": { "color": "#00000000", "offsetX": "0px", "offsetY": "0px", "blur": "0px", "spread": "0px" }
+    },
+    "sm": {
+      "$type": "shadow",
+      "$value": { "color": "#0000000d", "offsetX": "0px", "offsetY": "1px", "blur": "2px", "spread": "0px" }
+    },
+    "md": {
+      "$type": "shadow",
+      "$value": [
+        { "color": "#0000001a", "offsetX": "0px", "offsetY": "4px", "blur": "6px", "spread": "-1px" },
+        { "color": "#0000000d", "offsetX": "0px", "offsetY": "2px", "blur": "4px", "spread": "-2px" }
+      ]
+    },
+    "lg": {
+      "$type": "shadow",
+      "$value": [
+        { "color": "#0000001a", "offsetX": "0px", "offsetY": "10px", "blur": "15px", "spread": "-3px" },
+        { "color": "#0000000d", "offsetX": "0px", "offsetY": "4px", "blur": "6px", "spread": "-4px" }
+      ]
+    },
+    "xl": {
+      "$type": "shadow",
+      "$value": [
+        { "color": "#0000001a", "offsetX": "0px", "offsetY": "20px", "blur": "25px", "spread": "-5px" },
+        { "color": "#0000000d", "offsetX": "0px", "offsetY": "8px", "blur": "10px", "spread": "-6px" }
+      ]
+    },
+    "2xl": {
+      "$type": "shadow",
+      "$value": { "color": "#00000040", "offsetX": "0px", "offsetY": "25px", "blur": "50px", "spread": "-12px" }
+    },
+    "inner": {
+      "$type": "shadow",
+      "$value": { "color": "#0000000d", "offsetX": "inset 0px", "offsetY": "2px", "blur": "4px", "spread": "0px" }
+    }
+  }
+}

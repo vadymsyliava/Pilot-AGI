@@ -1,0 +1,15 @@
+{
+  "$description": "Z-index tokens — stacking layer order",
+  "zIndex": {
+    "hide":     { "$value": "-1",   "$type": "number", "$description": "Hidden below base" },
+    "base":     { "$value": "0",    "$type": "number", "$description": "Default stacking" },
+    "raised":   { "$value": "1",    "$type": "number", "$description": "Slightly above base" },
+    "dropdown": { "$value": "1000", "$type": "number", "$description": "Dropdown menus" },
+    "sticky":   { "$value": "1100", "$type": "number", "$description": "Sticky headers" },
+    "fixed":    { "$value": "1200", "$type": "number", "$description": "Fixed navigation" },
+    "overlay":  { "$value": "1300", "$type": "number", "$description": "Background overlays" },
+    "modal":    { "$value": "1400", "$type": "number", "$description": "Modal dialogs" },
+    "popover":  { "$value": "1500", "$type": "number", "$description": "Popovers, menus" },
+    "tooltip":  { "$value": "1600", "$type": "number", "$description": "Tooltips (topmost)" }
+  }
+}
