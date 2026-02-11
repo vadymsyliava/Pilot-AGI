@@ -15,8 +15,10 @@ const worktree = require('./worktree');
 const EVENT_STREAM_FILE = 'runs/sessions.jsonl';
 const SESSION_STATE_DIR = '.claude/pilot/state/sessions';
 const SESSION_LOCK_DIR = '.claude/pilot/state/locks';
+const AGENT_REGISTRY_PATH = '.claude/pilot/agent-registry.json';
 const HEARTBEAT_STALE_MULTIPLIER = 2; // Session stale after 2x heartbeat interval
 const DEFAULT_LEASE_DURATION_MS = 30 * 60 * 1000; // 30 minutes
+const VALID_ROLES = ['frontend', 'backend', 'testing', 'security', 'pm', 'design', 'review', 'infra'];
 
 /**
  * Generate a unique session ID
@@ -180,6 +182,199 @@ function logEvent(event) {
 /**
  * Register a new session
  */
+/**
+ * Resolve agent role from explicit value, env var, or null.
+ * Returns a valid role string or null.
+ */
+function resolveAgentRole(explicitRole) {
+  // 1. Explicit role passed in context
+  if (explicitRole && VALID_ROLES.includes(explicitRole)) {
+    return explicitRole;
+  }
+  // 2. Environment variable (set by PM or agent config)
+  const envRole = process.env.PILOT_AGENT_ROLE;
+  if (envRole && VALID_ROLES.includes(envRole)) {
+    return envRole;
+  }
+  // 3. Reclaim from most recent ended session with same parent PID
+  try {
+    const parentPid = getParentClaudePID();
+    const allSessions = getAllSessionStates();
+    const previous = allSessions
+      .filter(s => s.status === 'ended' && s.parent_pid === parentPid && s.role)
+      .sort((a, b) => (b.ended_at || b.started_at || '').localeCompare(a.ended_at || a.started_at || ''));
+    if (previous.length > 0) {
+      return previous[0].role;
+    }
+  } catch (e) {
+    // Best effort reclaim
+  }
+  return null;
+}
+
+/**
+ * Generate human-readable agent name from role.
+ * Format: "{role}-{N}" where N is the count of active agents with same role + 1.
+ * Falls back to session ID suffix if no role.
+ */
+function generateAgentName(role, sessionId) {
+  if (!role) {
+    // No role — use last 4 chars of session ID
+    return `agent-${sessionId.slice(-4)}`;
+  }
+  // Count active sessions with same role
+  try {
+    const active = getActiveSessions(sessionId);
+    const sameRole = active.filter(s => s.role === role);
+    return `${role}-${sameRole.length + 1}`;
+  } catch (e) {
+    return `${role}-1`;
+  }
+}
+
+/**
+ * Load the agent registry to look up capabilities for a role.
+ */
+function loadAgentRegistry() {
+  const registryPath = path.join(process.cwd(), AGENT_REGISTRY_PATH);
+  try {
+    return JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Get capabilities for a given role from the agent registry.
+ */
+function getAgentCapabilities(role) {
+  if (!role) return [];
+  const registry = loadAgentRegistry();
+  if (!registry || !registry.agents || !registry.agents[role]) return [];
+  return registry.agents[role].capabilities || [];
+}
+
+/**
+ * Set or update the role for an existing session.
+ */
+function setSessionRole(sessionId, role) {
+  if (!VALID_ROLES.includes(role)) {
+    return { success: false, error: `Invalid role: ${role}. Valid: ${VALID_ROLES.join(', ')}` };
+  }
+  const agentName = generateAgentName(role, sessionId);
+  const updated = updateSession(sessionId, { role, agent_name: agentName });
+  if (!updated) return { success: false, error: 'Session not found' };
+  return { success: true, role, agent_name: agentName };
+}
+
+/**
+ * Get active sessions filtered by role.
+ * @param {string} role - Agent role to filter by
+ * @param {string} [excludeSessionId] - Session to exclude (e.g., caller)
+ * @returns {Array} Active sessions with matching role
+ */
+function getSessionsByRole(role, excludeSessionId = null) {
+  const active = getActiveSessions(excludeSessionId);
+  if (!role) return active;
+  return active.filter(s => s.role === role);
+}
+
+/**
+ * Get available agents (active sessions with a role, not busy with a claimed task).
+ * @param {string} [excludeSessionId] - Session to exclude
+ * @returns {Array} Available agent sessions with role, agent_name, capabilities
+ */
+function getAvailableAgents(excludeSessionId = null) {
+  const active = getActiveSessions(excludeSessionId);
+  return active
+    .filter(s => s.role && !s.claimed_task)
+    .map(s => ({
+      session_id: s.session_id,
+      role: s.role,
+      agent_name: s.agent_name || `${s.role}-?`,
+      capabilities: getAgentCapabilities(s.role),
+      claimed_task: s.claimed_task
+    }));
+}
+
+// =============================================================================
+// AGENT AFFINITY TRACKING (Phase 3.1)
+// =============================================================================
+
+const AFFINITY_DIR = '.claude/pilot/memory/agents';
+
+/**
+ * Record a task outcome for an agent role to build affinity data.
+ * Tracks which files/areas an agent works on and whether tasks succeed.
+ *
+ * @param {string} role - Agent role
+ * @param {string} taskId - Completed task ID
+ * @param {string} outcome - 'completed' | 'reassigned' | 'failed'
+ * @param {string[]} [files] - Files touched during the task
+ */
+function recordAgentAffinity(role, taskId, outcome, files = []) {
+  if (!role) return;
+
+  const affinityDir = path.join(process.cwd(), AFFINITY_DIR, role);
+  if (!fs.existsSync(affinityDir)) {
+    fs.mkdirSync(affinityDir, { recursive: true });
+  }
+
+  const affinityFile = path.join(affinityDir, 'affinity.jsonl');
+  const entry = JSON.stringify({
+    ts: new Date().toISOString(),
+    task_id: taskId,
+    outcome,
+    files: files.slice(0, 20) // Cap to avoid bloat
+  }) + '\n';
+
+  fs.appendFileSync(affinityFile, entry);
+}
+
+/**
+ * Get affinity summary for an agent role.
+ * Returns success rate, frequently touched files, and task count.
+ *
+ * @param {string} role - Agent role
+ * @returns {{ task_count: number, success_rate: number, top_files: string[] }}
+ */
+function getAgentAffinity(role) {
+  if (!role) return { task_count: 0, success_rate: 0, top_files: [] };
+
+  const affinityFile = path.join(process.cwd(), AFFINITY_DIR, role, 'affinity.jsonl');
+  if (!fs.existsSync(affinityFile)) {
+    return { task_count: 0, success_rate: 0, top_files: [] };
+  }
+
+  try {
+    const lines = fs.readFileSync(affinityFile, 'utf8').trim().split('\n').filter(Boolean);
+    const entries = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+
+    const completed = entries.filter(e => e.outcome === 'completed').length;
+    const total = entries.length;
+
+    // Count file frequencies
+    const fileCounts = {};
+    for (const e of entries) {
+      for (const f of (e.files || [])) {
+        fileCounts[f] = (fileCounts[f] || 0) + 1;
+      }
+    }
+    const topFiles = Object.entries(fileCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([f]) => f);
+
+    return {
+      task_count: total,
+      success_rate: total > 0 ? completed / total : 0,
+      top_files: topFiles
+    };
+  } catch (e) {
+    return { task_count: 0, success_rate: 0, top_files: [] };
+  }
+}
+
 function registerSession(sessionId, context = {}) {
   // Log to event stream
   logEvent({
@@ -199,11 +394,17 @@ function registerSession(sessionId, context = {}) {
   // Resolve parent claude PID for accurate liveness checks
   const parentPid = getParentClaudePID();
 
+  // Resolve agent role: explicit > env > auto-detect > null
+  const role = resolveAgentRole(context.role);
+  const agentName = generateAgentName(role, sessionId);
+
   const sessionState = {
     session_id: sessionId,
     started_at: new Date().toISOString(),
     last_heartbeat: new Date().toISOString(),
     status: 'active',
+    role: role,
+    agent_name: agentName,
     claimed_task: null,
     lease_expires_at: null,
     locked_areas: [],
@@ -995,5 +1196,17 @@ module.exports = {
   getParentClaudePID,
   createSessionLock,
   removeSessionLock,
-  isSessionAlive
+  isSessionAlive,
+  // Agent identity (Phase 3.1)
+  VALID_ROLES,
+  resolveAgentRole,
+  generateAgentName,
+  loadAgentRegistry,
+  getAgentCapabilities,
+  setSessionRole,
+  getSessionsByRole,
+  getAvailableAgents,
+  // Agent affinity (Phase 3.1)
+  recordAgentAffinity,
+  getAgentAffinity
 };

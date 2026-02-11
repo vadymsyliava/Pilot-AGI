@@ -1,0 +1,74 @@
+{
+  "version": "1.0",
+  "description": "Runtime skill registry for task-to-agent matching. Derived from agent-registry.json but optimized for scoring.",
+
+  "roles": {
+    "frontend": {
+      "skills": ["react", "nextjs", "css", "tailwind", "components", "accessibility", "state-management"],
+      "languages": ["typescript", "javascript", "css", "scss"],
+      "areas": ["ui", "components", "pages", "layouts", "styles", "animations"],
+      "task_keywords": ["component", "page", "ui", "button", "form", "modal", "layout", "responsive", "style", "css", "tailwind", "animation", "design system"],
+      "file_patterns": ["**/*.tsx", "**/*.jsx", "**/components/**", "**/app/**/*.tsx", "**/*.css", "**/*.scss"]
+    },
+    "backend": {
+      "skills": ["nodejs", "api-design", "database", "authentication", "prisma", "server-actions"],
+      "languages": ["typescript", "javascript", "sql"],
+      "areas": ["api", "server", "database", "auth", "middleware", "services"],
+      "task_keywords": ["api", "endpoint", "database", "query", "mutation", "server action", "authentication", "authorization", "middleware", "prisma", "schema"],
+      "file_patterns": ["**/api/**", "**/server/**", "**/lib/**", "**/services/**", "**/db/**", "**/prisma/**"]
+    },
+    "testing": {
+      "skills": ["vitest", "playwright", "unit-testing", "integration-testing", "e2e", "mocking"],
+      "languages": ["typescript", "javascript"],
+      "areas": ["tests", "fixtures", "mocks", "e2e"],
+      "task_keywords": ["test", "testing", "unit test", "integration test", "e2e", "coverage", "vitest", "playwright", "mock", "fixture"],
+      "file_patterns": ["**/*.test.*", "**/*.spec.*", "**/tests/**", "**/e2e/**", "**/__tests__/**"]
+    },
+    "security": {
+      "skills": ["security-audit", "vulnerability-detection", "input-sanitization", "auth-review", "dependency-audit"],
+      "languages": ["typescript", "javascript"],
+      "areas": ["auth", "validation", "encryption", "secrets"],
+      "task_keywords": ["security", "vulnerability", "auth", "permission", "xss", "injection", "encryption", "secrets", "audit", "owasp"],
+      "file_patterns": ["**/*"]
+    },
+    "pm": {
+      "skills": ["task-assignment", "coordination", "drift-detection", "work-review", "merge-approval"],
+      "languages": [],
+      "areas": ["orchestration", "planning", "review"],
+      "task_keywords": ["coordinate", "manage", "assign", "review", "approve", "orchestrate", "pm", "team lead", "merge"],
+      "file_patterns": ["**/*"]
+    },
+    "design": {
+      "skills": ["token-governance", "component-audit", "design-system", "accessibility-review"],
+      "languages": ["css", "json"],
+      "areas": ["design-tokens", "design-system", "styles", "colors", "typography", "spacing"],
+      "task_keywords": ["design tokens", "design system", "token audit", "component audit", "design drift", "color palette", "typography", "spacing"],
+      "file_patterns": ["design/**", "**/tokens/**", "**/design-system/**", "**/styles/**"]
+    },
+    "review": {
+      "skills": ["code-review", "quality-check", "pattern-compliance", "performance-review"],
+      "languages": ["typescript", "javascript"],
+      "areas": ["quality", "patterns", "performance", "documentation"],
+      "task_keywords": ["review", "quality", "refactor", "cleanup", "optimize", "improve", "code smell", "lint", "pr review"],
+      "file_patterns": ["**/*"]
+    },
+    "infra": {
+      "skills": ["ci-cd", "deployment", "docker", "configuration", "monitoring"],
+      "languages": ["yaml", "json", "bash", "dockerfile"],
+      "areas": ["ci", "deployment", "docker", "config", "monitoring"],
+      "task_keywords": ["ci", "cd", "deploy", "docker", "pipeline", "github actions", "infrastructure", "monitoring", "config"],
+      "file_patterns": [".github/**", "**/Dockerfile*", "docker-compose*", "*.yaml", "*.yml"]
+    }
+  },
+
+  "scoring": {
+    "weights": {
+      "keyword_match": 0.35,
+      "file_pattern_match": 0.30,
+      "area_match": 0.20,
+      "affinity_bonus": 0.15
+    },
+    "confidence_threshold": 0.3,
+    "multi_agent_threshold": 0.5
+  }
+}
