@@ -840,6 +840,7 @@ function extendLease(sessionId, leaseDurationMs = DEFAULT_LEASE_DURATION_MS) {
 module.exports = {
   generateSessionId,
   registerSession,
+  getAllSessionStates,
   getActiveSessions,
   getLockedFiles,
   getLockedAreas,

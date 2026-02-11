@@ -425,6 +425,43 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
+  // 8c. PM Orchestrator Context (Phase 2.4)
+  // -------------------------------------------------------------------------
+
+  try {
+    const orchestrator = require('./lib/orchestrator');
+
+    // Load PM state if this is a PM session or PM exists
+    const pmState = orchestrator.loadPmState();
+    if (pmState) {
+      context.pm_active = true;
+      context.pm_session = pmState.pm_session_id;
+    }
+
+    // Check for recent PM decisions that affect this agent
+    const memory = require('./lib/memory');
+    try {
+      const pmChannel = memory.read('pm-decisions');
+      if (pmChannel && pmChannel.data && pmChannel.data.decisions) {
+        const recent = pmChannel.data.decisions.slice(-5);
+        const relevant = recent.filter(d =>
+          d.assigned_to === sessionId ||
+          d.session_id === sessionId ||
+          d.type === 'agent_blocked'
+        );
+        if (relevant.length > 0) {
+          context.pm_decisions = relevant;
+          messages.push(`PM: ${relevant.length} decision(s) affecting you`);
+        }
+      }
+    } catch (e) {
+      // PM decisions channel not available
+    }
+  } catch (e) {
+    // Orchestrator not available, skip
+  }
+
+  // -------------------------------------------------------------------------
   // 9. Build Output
   // -------------------------------------------------------------------------
 

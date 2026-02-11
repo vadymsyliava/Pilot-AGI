@@ -19,6 +19,12 @@
       "publisher": "frontend",
       "consumers": ["testing", "review"],
       "schema": null
+    },
+    "pm-decisions": {
+      "description": "PM orchestrator decisions: task assignments, merge approvals, agent blocks, drift alerts",
+      "publisher": "pm",
+      "consumers": ["frontend", "backend", "testing", "security", "review"],
+      "schema": "schemas/pm-decisions.schema.json"
     }
   }
 }
