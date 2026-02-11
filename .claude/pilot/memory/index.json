@@ -25,6 +25,12 @@
       "publisher": "pm",
       "consumers": ["frontend", "backend", "testing", "security", "review"],
       "schema": "schemas/pm-decisions.schema.json"
+    },
+    "research-findings": {
+      "description": "PM auto-research outputs: best practices, patterns, technology decisions per task",
+      "publisher": "pm",
+      "consumers": ["frontend", "backend", "testing", "security", "review", "design"],
+      "schema": "schemas/research-findings.schema.json"
     }
   }
 }
