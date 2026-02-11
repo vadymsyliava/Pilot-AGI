@@ -212,6 +212,22 @@ async function main() {
       hook_session_id: hookInput.session_id // Claude's session ID
     });
     context.session_id = sessionId;
+
+    // Announce new session to event stream + message bus
+    try {
+      session.logEvent({
+        type: 'session_announced',
+        session_id: sessionId,
+        pid: process.pid
+      });
+      const messaging = require('./lib/messaging');
+      messaging.sendBroadcast(sessionId, 'session_announced', {
+        session_id: sessionId,
+        message: `New agent joined: ${sessionId}`
+      });
+    } catch (announceErr) {
+      // Best effort — don't block startup
+    }
   } catch (e) {
     // Continue without registration
   }
@@ -220,7 +236,24 @@ async function main() {
   const activeSessions = session.getActiveSessions(sessionId);
   if (activeSessions.length > 0) {
     context.active_sessions = activeSessions.length;
-    messages.push(`${activeSessions.length} other session(s) active`);
+
+    // Build rich agent awareness status
+    const maxSessions = policy?.session?.max_concurrent_sessions || 6;
+    const agentLines = activeSessions.map(s => {
+      const task = s.claimed_task
+        ? `working on [${s.claimed_task}]`
+        : 'idle';
+      const areas = (s.locked_areas || []).length > 0
+        ? ` (locked: ${s.locked_areas.join(', ')})`
+        : '';
+      return `  ${s.session_id}: ${task}${areas}`;
+    });
+
+    messages.push(
+      `You are Agent ${activeSessions.length + 1} of ${maxSessions} max\n` +
+      `Active peers (${activeSessions.length}):\n` +
+      agentLines.join('\n')
+    );
 
     // Get locked files and areas
     const lockedFiles = session.getLockedFiles(activeSessions);
@@ -231,6 +264,7 @@ async function main() {
     }
     if (lockedAreas.length > 0) {
       context.locked_areas = lockedAreas;
+      messages.push(`Locked areas: ${lockedAreas.join(', ')}`);
     }
   }
 
