@@ -618,6 +618,62 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
+  // 8d. Per-Agent Persistent Memory (Phase 3.7)
+  // -------------------------------------------------------------------------
+
+  try {
+    const memory = require('./lib/memory');
+
+    // Determine this agent's role from the session we just registered
+    const agentRole = context.session_id
+      ? (() => {
+          try {
+            const sessFile = path.join(process.cwd(), '.claude/pilot/state/sessions', `${sessionId}.json`);
+            const sess = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+            return sess.role || null;
+          } catch (e) { return null; }
+        })()
+      : null;
+
+    if (agentRole) {
+      const agentMemory = {};
+
+      // Load preferences
+      const prefs = memory.getAgentMemory(agentRole, 'preferences');
+      if (prefs) {
+        agentMemory.preferences = prefs;
+      }
+
+      // Load recent decisions (last 10, token-efficient)
+      const decisions = memory.getDecisions(agentRole, { limit: 10 });
+      if (decisions.length > 0) {
+        agentMemory.recent_decisions = decisions;
+      }
+
+      // Load recent discoveries (last 10)
+      const discoveries = memory.getDiscoveries(agentRole).slice(-10);
+      if (discoveries.length > 0) {
+        agentMemory.recent_discoveries = discoveries;
+      }
+
+      // Load recent errors (last 5)
+      const errors = memory.getErrors(agentRole, { limit: 5 });
+      if (errors.length > 0) {
+        agentMemory.recent_errors = errors;
+      }
+
+      if (Object.keys(agentMemory).length > 0) {
+        context.agent_memory = agentMemory;
+        context.agent_memory_role = agentRole;
+        const entryCount = (decisions.length || 0) + (discoveries.length || 0) + (errors.length || 0) + (prefs ? 1 : 0);
+        messages.push(`Agent memory: ${entryCount} entries for ${agentRole}`);
+      }
+    }
+  } catch (e) {
+    // Agent memory not available, continue without
+  }
+
+  // -------------------------------------------------------------------------
   // 9. Build Output
   // -------------------------------------------------------------------------
 
