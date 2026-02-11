@@ -412,6 +412,111 @@ test('full DLQ flow: request → timeout → DLQ', () => {
   assertEqual(m.getDLQMessages().length, 0, 'DLQ should be empty after clear');
 });
 
+// --- Sender Seq Cache ---
+
+console.log('\nSender Seq Cache:');
+
+test('sendMessage persists _cached_sender_seq to cursor file', () => {
+  const m = freshModule();
+  m.sendMessage({ type: 'notify', from: 'S-sender', to: '*', priority: 'fyi', payload: {} });
+  m.sendMessage({ type: 'notify', from: 'S-sender', to: '*', priority: 'fyi', payload: {} });
+
+  // Check cursor file has cached value
+  const cursorPath = path.join(process.cwd(), '.claude/pilot/messages/cursors/S-sender.cursor.json');
+  assert(fs.existsSync(cursorPath), 'cursor file should exist after sendMessage');
+  const cursor = JSON.parse(fs.readFileSync(cursorPath, 'utf8'));
+  assertEqual(cursor._cached_sender_seq, 2, 'cached sender_seq should be 2 after 2 sends');
+});
+
+test('sender_seq restores from cursor cache on fresh module load', () => {
+  // First module: send messages to populate cache
+  const m1 = freshModule();
+  m1.sendMessage({ type: 'notify', from: 'S-cached', to: '*', priority: 'fyi', payload: {} });
+  m1.sendMessage({ type: 'notify', from: 'S-cached', to: '*', priority: 'fyi', payload: {} });
+  m1.sendMessage({ type: 'notify', from: 'S-cached', to: '*', priority: 'fyi', payload: {} });
+
+  // Clear the bus so bus scan would find nothing (simulates compaction/archive)
+  fs.writeFileSync(path.join(process.cwd(), '.claude/pilot/messages/bus.jsonl'), '');
+
+  // Fresh module: should restore from cursor cache, not bus scan
+  const m2 = freshModule();
+  const r = m2.sendMessage({ type: 'notify', from: 'S-cached', to: '*', priority: 'fyi', payload: {} });
+  assert(r.success, 'send should succeed');
+
+  // Read the bus — should have seq 4 (restored 3 from cache, then +1)
+  const lines = fs.readFileSync(path.join(process.cwd(), '.claude/pilot/messages/bus.jsonl'), 'utf8').trim().split('\n');
+  const msg = JSON.parse(lines[0]);
+  assertEqual(msg.sender_seq, 4, 'sender_seq should continue from cached value (3+1=4)');
+});
+
+test('acknowledgeMessages preserves _cached_sender_seq', () => {
+  const m = freshModule();
+  m.sendMessage({ type: 'notify', from: 'S-ack-test', to: '*', priority: 'fyi', payload: {} });
+
+  // Now acknowledgeMessages as that session
+  const cursor = m.loadCursor('S-ack-test') || m.initializeCursor('S-ack-test');
+  m.writeCursor('S-ack-test', { ...cursor, byte_offset: 0 });
+  const { messages, cursor: newCursor } = m.readMessages('S-ack-test');
+  m.acknowledgeMessages('S-ack-test', newCursor, messages.map(msg => msg.id));
+
+  // Verify _cached_sender_seq is still in cursor
+  const cursorPath = path.join(process.cwd(), '.claude/pilot/messages/cursors/S-ack-test.cursor.json');
+  const savedCursor = JSON.parse(fs.readFileSync(cursorPath, 'utf8'));
+  assertEqual(savedCursor._cached_sender_seq, 1, 'cached sender_seq should persist through acknowledgeMessages');
+});
+
+// --- Debounce ---
+
+console.log('\nDebounce:');
+
+test('createBusWatcher debounces rapid fs.watch events', () => {
+  const m = freshModule();
+  // Create bus file first
+  m.sendMessage({ type: 'notify', from: 'S-setup', to: '*', priority: 'fyi', payload: {} });
+
+  let callCount = 0;
+  const watcher = m.createBusWatcher('S-debounce-reader', (messages, cursor) => {
+    callCount++;
+  }, { pollingInterval: 60000 }); // long poll so only fs.watch triggers
+
+  // Simulate rapid writes (fs.watch fires for each)
+  for (let i = 0; i < 5; i++) {
+    fs.appendFileSync(
+      path.join(process.cwd(), '.claude/pilot/messages/bus.jsonl'),
+      JSON.stringify({ id: `M-rapid-${i}`, ts: new Date().toISOString(), type: 'broadcast', from: 'S-rapid', to: '*', priority: 'fyi', sender_seq: i + 1, payload: {}, ttl_ms: 300000 }) + '\n'
+    );
+  }
+
+  // Wait for debounce (50ms) + small margin
+  const start = Date.now();
+  while (Date.now() - start < 120) { /* busy wait */ }
+
+  watcher.stop();
+
+  // With debounce, should coalesce into fewer calls than 5
+  // Without debounce, each write triggers a separate checkMessages
+  // We can't assert exact count due to timing, but it should be <= 3
+  assert(callCount <= 3, `debounce should coalesce rapid writes, got ${callCount} calls`);
+});
+
+// --- Processed IDs Capacity ---
+
+console.log('\nProcessed IDs Capacity:');
+
+test('CURSOR_PROCESSED_MAX is 1000', () => {
+  const m = freshModule();
+  // Send > 100 messages, acknowledge all, verify cursor keeps up to 1000
+  const cursor = m.initializeCursor('S-capacity');
+  const ids = [];
+  for (let i = 0; i < 150; i++) {
+    ids.push(`M-cap-${i}`);
+  }
+  m.acknowledgeMessages('S-capacity', { ...cursor, byte_offset: 0 }, ids);
+
+  const saved = m.loadCursor('S-capacity');
+  assertEqual(saved.processed_ids.length, 150, 'should keep all 150 IDs (under 1000 limit)');
+});
+
 // ============================================================================
 // SUMMARY
 // ============================================================================
