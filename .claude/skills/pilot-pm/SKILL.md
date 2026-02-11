@@ -1,7 +1,7 @@
 ---
 name: pilot-pm
 description: PM Orchestrator terminal interface. Coordinates agents, assigns tasks, detects drift, manages merge approvals. Run in a dedicated terminal as the team lead.
-argument-hint: [scan | assign | review | block | merge | status]
+argument-hint: [scan | assign | review | block | merge | status | activate | stop]
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Task, TaskOutput, AskUserQuestion
 ---
 
@@ -19,6 +19,8 @@ You are the PM Orchestrator — the team lead coordinating multiple Claude Code 
 /pilot-pm block        → Block a drifting agent
 /pilot-pm merge        → Approve/reject merge
 /pilot-pm status       → Quick status overview
+/pilot-pm activate     → Start PM daemon (autonomous mode)
+/pilot-pm stop         → Stop running PM daemon
 ```
 
 ## Architecture
@@ -58,6 +60,8 @@ Check `$ARGUMENTS` for subcommand:
 - "review" → Step 6 (Review)
 - "block" → Step 7 (Block)
 - "merge" → Step 8 (Merge)
+- "activate" → Step 9 (Start PM Daemon)
+- "stop" → Step 10 (Stop PM Daemon)
 
 ---
 
@@ -357,6 +361,102 @@ const state = orch.initializePm(currentSession);
 console.log('PM initialized:', JSON.stringify(state, null, 2));
 " 2>/dev/null
 ```
+
+## Step 9: Activate PM Daemon
+
+Start the PM daemon for fully autonomous operation.
+
+### 9.1: Check if Already Running
+
+```bash
+node -e "
+const { isDaemonRunning, readDaemonPid, loadDaemonState } = require('./.claude/pilot/hooks/lib/pm-daemon');
+const running = isDaemonRunning(process.cwd());
+const pid = readDaemonPid(process.cwd());
+const state = loadDaemonState(process.cwd());
+console.log(JSON.stringify({ running, pid, state }, null, 2));
+"
+```
+
+If already running, show:
+```
+PM Daemon is already running (PID: {pid}).
+Use /pilot-pm stop to stop it first.
+```
+
+### 9.2: Start Daemon in Background
+
+```bash
+nohup node .claude/pilot/hooks/lib/pm-daemon.js --watch > /dev/null 2>&1 &
+echo "PID: $!"
+```
+
+### 9.3: Verify Started
+
+Wait 2 seconds, then check:
+
+```bash
+node -e "
+const { isDaemonRunning, readDaemonPid } = require('./.claude/pilot/hooks/lib/pm-daemon');
+const running = isDaemonRunning(process.cwd());
+const pid = readDaemonPid(process.cwd());
+console.log(JSON.stringify({ running, pid }, null, 2));
+"
+```
+
+Display:
+```
+╔══════════════════════════════════════════════════════════════╗
+║  PM DAEMON ACTIVATED                                         ║
+╚══════════════════════════════════════════════════════════════╝
+
+  PID:        {pid}
+  Mode:       watch (polling every 30s)
+  Max agents: {max_agents}
+  Log:        .claude/pilot/logs/pm-daemon.log
+
+  The daemon will:
+  • Spawn agents for ready tasks automatically
+  • Process bus messages and route decisions
+  • Auto-review completed work
+  • Recover crashed agents
+
+  Use /pilot-pm stop to stop the daemon.
+  Use /pilot-pm status to check daemon health.
+────────────────────────────────────────────────────────────────
+```
+
+---
+
+## Step 10: Stop PM Daemon
+
+### 10.1: Stop Running Daemon
+
+```bash
+node .claude/pilot/hooks/lib/pm-daemon.js --stop 2>&1
+```
+
+### 10.2: Verify Stopped
+
+```bash
+node -e "
+const { isDaemonRunning } = require('./.claude/pilot/hooks/lib/pm-daemon');
+console.log(JSON.stringify({ running: isDaemonRunning(process.cwd()) }));
+"
+```
+
+Display:
+```
+╔══════════════════════════════════════════════════════════════╗
+║  PM DAEMON STOPPED                                           ║
+╚══════════════════════════════════════════════════════════════╝
+
+  Daemon has been stopped gracefully.
+  Spawned agents may still be running until they complete.
+────────────────────────────────────────────────────────────────
+```
+
+---
 
 ## Important Rules
 
