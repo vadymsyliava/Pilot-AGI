@@ -38,7 +38,7 @@ This returns JSON with:
 - `claimed_by_others` — how many are taken by other agents
 
 If `my_claimed_task` is set, this session already has work — offer to resume it.
-If `available` is empty and `claimed_by_others > 0`, tell the user "All ready tasks are claimed by other agents" and offer to wait or show claimed status.
+If `available` is empty and `claimed_by_others > 0`, tell the user "All ready tasks are claimed by other agents" and offer to wait or show claimed status. **CRITICAL**: Do NOT attempt to investigate, release, or take over another agent's claimed task. You must respect their claim.
 
 ## Step 3: Decision Tree
 
@@ -286,6 +286,9 @@ Suggest topics based on task, then:
 3. **Be proactive** - Ask "Do this?" not "Run this command"
 4. **Seamless flow** - One choice leads to the next action automatically
 5. **User controls pace** - But you do the work
+6. **NEVER release, modify, or override another agent's claimed task** - If a task is claimed by another session, you MUST NOT: release their claim, write to their session file, mark their session as abandoned, or call release-task.js with their session ID. Only the PM orchestrator can release another agent's task.
+7. **NEVER judge another session as "abandoned" or "stale"** - That is the PM's job. If all tasks are claimed, offer to wait or ask the user — do not investigate other sessions to take over their work.
+8. **Respect claim-task.js rejections** - If claim-task.js says the task is already claimed, accept it. Do not attempt workarounds.
 
 ## Status Flow
 

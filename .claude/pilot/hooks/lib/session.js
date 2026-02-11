@@ -1172,7 +1172,14 @@ function getClaimedTaskIds(excludeSessionId = null) {
 
   for (const session of allSessions) {
     if (excludeSessionId && session.session_id === excludeSessionId) continue;
-    if (!isSessionActive(session, policy)) continue;
+    if (session.ended_at) continue;
+    // Two-tier liveness: heartbeat check OR process-alive fallback
+    // (matches getActiveSessions logic to prevent false negatives)
+    if (!isSessionActive(session, policy)) {
+      if (!(session.status === 'active' && isSessionAlive(session.session_id))) {
+        continue;
+      }
+    }
     if (!session.claimed_task) continue;
 
     // Check lease expiry
@@ -1197,8 +1204,14 @@ function isTaskClaimed(taskId) {
   const now = Date.now();
 
   for (const session of allSessions) {
-    // Skip inactive sessions
-    if (!isSessionActive(session, policy)) continue;
+    if (session.ended_at) continue;
+    // Two-tier liveness: heartbeat check OR process-alive fallback
+    // (matches getActiveSessions logic to prevent false negatives)
+    if (!isSessionActive(session, policy)) {
+      if (!(session.status === 'active' && isSessionAlive(session.session_id))) {
+        continue;
+      }
+    }
 
     // Check if this session has the task claimed
     if (session.claimed_task === taskId) {
@@ -1303,9 +1316,21 @@ function claimTask(sessionId, taskId, leaseDurationMs = DEFAULT_LEASE_DURATION_M
  * Release a claimed task
  *
  * @param {string} sessionId - The session releasing the task
+ * @param {object} [opts] - Options
+ * @param {string} [opts.callerSessionId] - The session requesting the release (for ownership check)
+ * @param {boolean} [opts.pmOverride] - If true, skip ownership check (PM-only)
  * @returns {{ success: boolean, error?: string, released_task?: string }}
  */
-function releaseTask(sessionId) {
+function releaseTask(sessionId, opts = {}) {
+  const { callerSessionId, pmOverride } = opts;
+
+  // Ownership check: only the owning session or PM can release a task
+  if (callerSessionId && callerSessionId !== sessionId && !pmOverride) {
+    return {
+      success: false,
+      error: `Session ${callerSessionId} cannot release task owned by ${sessionId}. Only the owning session or PM can release tasks.`
+    };
+  }
   const stateDir = getSessionStateDir();
   const sessionFile = path.join(stateDir, `${sessionId}.json`);
 

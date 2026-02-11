@@ -6,8 +6,11 @@
  * Called by /pilot-release or /pilot-close.
  * Performs release: session.releaseTask() + messaging.sendBroadcast().
  *
- * Usage: node release-task.js [--session <session-id>]
+ * Usage: node release-task.js [--session <session-id>] [--pm-override]
  * Output: JSON { success, released_task?, error?, broadcast? }
+ *
+ * Ownership: By default, only the calling session can release its own task.
+ * Use --session <id> with --pm-override to release another session's task (PM only).
  */
 
 const path = require('path');
@@ -18,25 +21,32 @@ const session = require(path.join(libDir, 'session'));
 
 // Parse args
 const args = process.argv.slice(2);
-let sessionId = null;
+let targetSessionId = null;
+const pmOverride = args.includes('--pm-override');
 
 const sessionIdx = args.indexOf('--session');
 if (sessionIdx !== -1 && args[sessionIdx + 1]) {
-  sessionId = args[sessionIdx + 1];
+  targetSessionId = args[sessionIdx + 1];
 }
 
 // Resolve current session via PID matching (not mtime — multi-agent safe)
-if (!sessionId) {
-  sessionId = session.resolveCurrentSession();
+const callerSessionId = session.resolveCurrentSession();
+
+// If no target specified, release caller's own task
+if (!targetSessionId) {
+  targetSessionId = callerSessionId;
 }
 
-if (!sessionId) {
+if (!targetSessionId) {
   console.log(JSON.stringify({ success: false, error: 'No active session found' }));
   process.exit(1);
 }
 
-// Release the task
-const result = session.releaseTask(sessionId);
+// Release the task (with ownership check)
+const result = session.releaseTask(targetSessionId, {
+  callerSessionId: callerSessionId,
+  pmOverride: pmOverride
+});
 
 if (!result.success) {
   console.log(JSON.stringify(result));
@@ -47,9 +57,9 @@ if (!result.success) {
 let broadcastResult = null;
 try {
   const messaging = require(path.join(libDir, 'messaging'));
-  broadcastResult = messaging.sendBroadcast(sessionId, 'task_released', {
+  broadcastResult = messaging.sendBroadcast(callerSessionId || targetSessionId, 'task_released', {
     task_id: result.released_task,
-    released_by: sessionId
+    released_by: callerSessionId || targetSessionId
   });
 } catch (e) {
   broadcastResult = { error: e.message };
@@ -57,7 +67,7 @@ try {
 
 console.log(JSON.stringify({
   success: true,
-  session_id: sessionId,
+  session_id: targetSessionId,
   released_task: result.released_task,
   released_areas: result.released_areas,
   broadcast: broadcastResult ? 'sent' : 'skipped'
