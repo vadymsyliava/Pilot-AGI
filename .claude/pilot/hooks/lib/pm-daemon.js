@@ -26,6 +26,8 @@ const { PmWatcher } = require('./pm-watcher');
 const { PmLoop } = require('./pm-loop');
 const session = require('./session');
 const { loadPolicy } = require('./policy');
+const pmDecisions = require('./pm-decisions');
+const agentLogger = require('./agent-logger');
 
 // ============================================================================
 // CONSTANTS
@@ -113,6 +115,7 @@ function createLogger(projectRoot) {
         ts: new Date().toISOString(),
         level,
         msg,
+        decision_type: data.decision_type || 'mechanical',
         ...data
       };
       try {
@@ -489,6 +492,14 @@ class PmDaemon {
 
       child.unref();
 
+      // Phase 4.5: Attach logger to capture stdout/stderr to per-task log file
+      let logInfo = null;
+      try {
+        logInfo = agentLogger.attachLogger(this.projectRoot, task.id, child);
+      } catch (e) {
+        this.log.warn('Failed to attach agent logger', { task_id: task.id, error: e.message });
+      }
+
       // Track the spawned process
       this.spawnedAgents.set(child.pid, {
         taskId: task.id,
@@ -496,10 +507,11 @@ class PmDaemon {
         agentType: agentType || 'general',
         spawnedAt: new Date().toISOString(),
         process: child,
-        exitCode: null
+        exitCode: null,
+        logPath: logInfo?.logPath || null
       });
 
-      // Collect stderr for error reporting
+      // Collect stderr for error reporting (in addition to log file)
       let stderr = '';
       child.stderr.on('data', (data) => {
         stderr += data.toString().slice(0, 2048);
@@ -871,7 +883,10 @@ Options:
   --tick <ms>         Tick interval in ms (default: ${DEFAULT_TICK_INTERVAL_MS})
   --dry-run           Log actions without executing
   --root <path>       Project root (default: cwd)
-  --status            Show daemon status and exit
+  --status            Show full daemon state as JSON
+  --ps                Show process table of spawned agents
+  --kill <taskId>     Gracefully stop an agent working on <taskId>
+  --tail <taskId>     Stream agent log (delegates to agent-logger)
   --stop              Stop running daemon and exit
   -h, --help          Show this help`);
     process.exit(0);
@@ -883,13 +898,206 @@ Options:
     || args[args.indexOf('--root') + 1]
     || process.cwd();
 
-  // --status: show daemon status and exit
+  // --status: show full daemon state (replaces /pilot-pm session need)
   if (args.includes('--status')) {
     const state = loadDaemonState(projectRoot);
     const running = isDaemonRunning(projectRoot);
     const pidInfo = readDaemonPid(projectRoot);
-    console.log(JSON.stringify({ running, pid: pidInfo?.pid, ...state }, null, 2));
+
+    // Gather active sessions for a complete picture
+    let sessions = [];
+    try {
+      const sessionMod = require('./session');
+      sessions = sessionMod.getActiveSessions().map(s => ({
+        session_id: s.session_id,
+        claimed_task: s.claimed_task || null,
+        status: s.status || 'unknown',
+        last_heartbeat: s.last_heartbeat || null
+      }));
+    } catch (e) { /* session module may not be available */ }
+
+    // Read recent action log
+    let recentActions = [];
+    try {
+      const logPath = path.join(projectRoot, '.claude/pilot/state/orchestrator/action-log.jsonl');
+      if (fs.existsSync(logPath)) {
+        const lines = fs.readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean);
+        recentActions = lines.slice(-10).map(l => {
+          try { return JSON.parse(l); } catch (e) { return null; }
+        }).filter(Boolean);
+      }
+    } catch (e) { /* best effort */ }
+
+    const fullStatus = {
+      running,
+      pid: pidInfo?.pid || null,
+      started_at: pidInfo?.started_at || state?.started_at || null,
+      uptime_ms: running && state?.started_at
+        ? Date.now() - new Date(state.started_at).getTime()
+        : 0,
+      ...state,
+      sessions,
+      recent_actions: recentActions
+    };
+
+    console.log(JSON.stringify(fullStatus, null, 2));
     process.exit(0);
+  }
+
+  // --ps: process table of spawned agents
+  if (args.includes('--ps')) {
+    const asJson = args.includes('--json');
+    const state = loadDaemonState(projectRoot);
+
+    // Read session states to find active agents
+    let agents = [];
+    try {
+      const sessionMod = require('./session');
+      const sessions = sessionMod.getActiveSessions();
+      agents = sessions.map(s => ({
+        session_id: s.session_id,
+        task_id: s.claimed_task || '-',
+        status: s.status || 'unknown',
+        last_heartbeat: s.last_heartbeat || null
+      }));
+    } catch (e) { /* session module may not be available */ }
+
+    if (asJson) {
+      console.log(JSON.stringify({ agents, daemon_state: state }, null, 2));
+    } else {
+      // Table format
+      console.log('PID        TASK              STATUS     DURATION');
+      console.log('-'.repeat(60));
+      for (const a of agents) {
+        const duration = a.last_heartbeat
+          ? Math.round((Date.now() - new Date(a.last_heartbeat).getTime()) / 1000) + 's ago'
+          : '-';
+        console.log(
+          `${(a.session_id || '-').padEnd(10)} ` +
+          `${(a.task_id || '-').padEnd(17)} ` +
+          `${(a.status || '-').padEnd(10)} ` +
+          `${duration}`
+        );
+      }
+      if (agents.length === 0) {
+        console.log('  No active agents.');
+      }
+    }
+    process.exit(0);
+  }
+
+  // --kill <taskId>: gracefully stop an agent working on a task
+  const killIdx = args.indexOf('--kill');
+  if (killIdx >= 0) {
+    const taskId = args[killIdx + 1];
+    if (!taskId) {
+      console.error('Usage: --kill <taskId>');
+      process.exit(1);
+    }
+
+    // Find the agent session working on this task
+    let targetSession = null;
+    try {
+      const sessionMod = require('./session');
+      const sessions = sessionMod.getAllSessionStates();
+      targetSession = sessions.find(s => s.claimed_task === taskId);
+    } catch (e) { /* session module may not be available */ }
+
+    if (!targetSession) {
+      console.error(`No agent found working on task: ${taskId}`);
+      process.exit(1);
+    }
+
+    // Find PID from session state
+    const pid = targetSession.pid;
+    if (!pid) {
+      console.error(`No PID found for agent on task: ${taskId}`);
+      process.exit(1);
+    }
+
+    // Graceful kill: SIGTERM first, then SIGKILL after 5s
+    try {
+      process.kill(pid, 'SIGTERM');
+      console.log(`Sent SIGTERM to agent (PID: ${pid}, task: ${taskId})`);
+      console.log('Waiting 5s for graceful shutdown...');
+
+      // Check if still alive after 5s
+      setTimeout(() => {
+        try {
+          process.kill(pid, 0); // Test if alive
+          console.log('Agent still alive, sending SIGKILL...');
+          try {
+            process.kill(pid, 'SIGKILL');
+            console.log('SIGKILL sent.');
+          } catch (e2) { /* already dead */ }
+        } catch (e2) {
+          console.log('Agent exited gracefully.');
+        }
+
+        // Release task claim
+        try {
+          const sessionMod = require('./session');
+          sessionMod.releaseTask(targetSession.session_id);
+          console.log(`Released task claim for ${taskId}`);
+        } catch (e2) { /* best effort */ }
+
+        // Update bd status back to open
+        try {
+          const { execFileSync: execBd } = require('child_process');
+          execBd('bd', ['update', taskId, '--status', 'open'], {
+            cwd: projectRoot,
+            encoding: 'utf8',
+            timeout: 5000,
+            stdio: ['pipe', 'pipe', 'pipe']
+          });
+          console.log(`Reset task ${taskId} status to open`);
+        } catch (e2) { /* best effort */ }
+
+        process.exit(0);
+      }, 5000);
+
+      // Keep process alive for the timeout
+      setTimeout(() => {}, 6000);
+    } catch (e) {
+      console.error(`Failed to kill agent: ${e.message}`);
+      process.exit(1);
+    }
+    return; // Don't fall through to daemon start
+  }
+
+  // --tail <taskId>: stream agent log
+  const tailIdx = args.indexOf('--tail');
+  if (tailIdx >= 0) {
+    const taskId = args[tailIdx + 1];
+    if (!taskId) {
+      console.error('Usage: --tail <taskId>');
+      process.exit(1);
+    }
+
+    const logFilePath = agentLogger.getLogPath(projectRoot, taskId);
+    if (!fs.existsSync(logFilePath)) {
+      console.error(`No agent log found at: ${logFilePath}`);
+      console.error('Tip: Agent logs are created when agents are spawned by the PM daemon.');
+      process.exit(1);
+    }
+
+    // Show last 50 lines of existing content, then stream new lines
+    const existing = agentLogger.readLastLines(logFilePath, 50);
+    if (existing.length > 0) {
+      console.log(existing.join('\n'));
+    }
+
+    console.log(`\n--- Tailing ${logFilePath} (Ctrl+C to stop) ---\n`);
+    const tailer = agentLogger.tailLog(logFilePath, (line) => {
+      console.log(line);
+    });
+
+    process.on('SIGINT', () => {
+      tailer.stop();
+      process.exit(0);
+    });
+
+    return; // Don't fall through to daemon start
   }
 
   // --stop: stop running daemon and exit
