@@ -484,6 +484,25 @@ orchestrator:
     # Enforcement mode: "soft" = warn only, "hard" = block edits
     enforcement: "soft"
 
+  # Intelligent Task Scheduler — Phase 3.4
+  scheduling:
+    # Score weights (must sum to 1.0)
+    skill_weight: 0.55          # Skill match from scoreAgentForTask
+    load_weight: 0.20           # Agent availability / load balance
+    affinity_weight: 0.15       # Historical success with similar tasks
+    cost_weight: 0.10           # Token cost efficiency
+
+    # Load balancing
+    max_tasks_per_agent: 3      # Soft cap on concurrent tasks
+    complexity_multiplier:
+      S: 1
+      M: 2
+      L: 3
+
+    # Starvation prevention
+    starvation_threshold_sec: 300   # 5 min wait before priority boost
+    starvation_boost_per_sec: 0.001 # Boost per second past threshold
+
 # =============================================================================
 # AUTONOMY (Full Agent Loop)
 # Controls whether agents run continuously without human intervention

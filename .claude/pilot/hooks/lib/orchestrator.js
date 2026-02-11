@@ -1263,6 +1263,24 @@ function decomposeAndAssign(task, projectRoot, pmSessionId) {
 }
 
 // ============================================================================
+// INTELLIGENT SCHEDULER INTEGRATION (Phase 3.4)
+// ============================================================================
+
+/**
+ * Batch-schedule all ready tasks to available agents using the intelligent scheduler.
+ * Returns assignments with context packages, ready for pm-loop to execute.
+ *
+ * @param {object[]} readyTasks - Tasks from bd ready
+ * @param {string} pmSessionId - PM session ID (excluded from assignment)
+ * @param {string} projectRoot - Project root directory
+ * @returns {{ assignments: object[], unassigned_tasks: object[] }}
+ */
+function scheduleBatch(readyTasks, pmSessionId, projectRoot) {
+  const scheduler = require('./scheduler');
+  return scheduler.schedule(readyTasks, pmSessionId, projectRoot);
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
@@ -1312,6 +1330,9 @@ module.exports = {
 
   // Shared memory
   publishDecision,
+
+  // Intelligent scheduler (Phase 3.4)
+  scheduleBatch,
 
   // Constants
   PM_DECISIONS_CHANNEL,
