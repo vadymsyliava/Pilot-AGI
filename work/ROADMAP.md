@@ -1,0 +1,276 @@
+# Roadmap
+
+## Overview
+
+Pilot AGI is an AI-powered development orchestrator for Claude Code. It coordinates multiple AI agents across terminals to build products autonomously with governance, shared memory, and design consistency.
+
+---
+
+## Milestone 1: Governance Foundation (COMPLETE)
+
+**Goal**: Build the core governance layer — hooks, session management, task coordination, policy enforcement
+**Status**: Complete (42/42 tasks closed, Jan 2026)
+
+### What Was Delivered
+- 4 governance hooks (session-start, pre-tool-use, user-prompt-submit, quality-gate)
+- Session management with heartbeats, area locking, task leasing
+- Policy-as-code engine (policy.yaml)
+- Agent registry with 5 specialized agents and routing rules
+- Event stream (sessions.jsonl) for audit trail
+- 15+ skills for the canonical workflow loop
+- Teleport support for session continuity
+- npm package (pilot-agi v0.0.4)
+
+---
+
+## Milestone 2: Multi-Agent Platform + Diamond Design System (COMPLETE)
+
+**Goal**: Enable unlimited parallel Claude Code terminals working on the same project with shared memory, isolated worktrees, design token governance, and a PM orchestrator agent
+**Status**: Complete (all 10 phases closed, Feb 2026)
+**Target**: v1.0.0
+
+### Stream A: Multi-Agent Infrastructure
+
+#### Phase 2.1: Worktree Engine
+- Git worktree lifecycle (create/remove per session)
+- Branch-per-task automation (claim task = get worktree)
+- Merge-back protocol with conflict detection
+- Worktree cleanup on session end or task close
+- Integration with existing session-start hook
+
+#### Phase 2.2: Shared Memory Layer
+- `.claude/pilot/memory/` directory structure
+- Global shared memory (shared.json) for cross-agent knowledge
+- Per-agent memory files for learned preferences
+- Publish/subscribe API for knowledge updates
+- Schema contracts (agent A publishes, agent B consumes)
+- Design tokens as first shared memory consumer
+
+#### Phase 2.3: Inter-Agent Messaging
+- Message queue via event stream (type: "agent_message")
+- Cross-terminal message delivery (file-based polling)
+- Agents can create bd tasks for other agents
+- Request/response protocol with priority levels
+- Notification system for blocking requests
+
+#### Phase 2.4: PM Orchestrator Agent
+- Dedicated "team lead" terminal role
+- Reads all session states, assigns tasks from bd
+- Reviews completed work before merge approval
+- Drift detection (agent vs. approved plan)
+- Can reassign or block agents
+- Human-facing coordination interface
+
+#### Phase 2.5: Visibility Dashboard
+- `/pilot-dashboard` skill for terminal-based overview
+- Active agents, tasks, locked areas, worktree status
+- Cost tracking per agent/task
+- Drift alerts and health monitoring
+- Optional local web UI (localhost)
+
+### Stream B: Diamond Design System
+
+#### Phase 2.6: Diamond Design Research
+- User/business research framework (diamond methodology)
+- Core user persona and business context analysis
+- Design token schema specification (JSON format)
+- Atomic design hierarchy definition (atoms > molecules > organisms > templates > pages)
+- Design principles documentation
+
+#### Phase 2.7: Token System
+- Design tokens JSON files (single source of truth)
+- Token categories: colors, spacing, padding, shadows, corner-radius, typography, breakpoints, z-index, animation
+- Tailwind CSS integration (tokens map to Tailwind config)
+- shadcn/ui integration (components consume tokens, not hardcoded values)
+- Token validation and linting
+
+#### Phase 2.8: Design Agent
+- New agent in registry: "design" agent
+- Token enforcement rules (YAML, like existing frontend/backend rules)
+- Component audit capability (scan for hardcoded values)
+- Design drift detection (changes that bypass tokens)
+- Shared memory integration (tokens published as shared knowledge)
+- Controls consistency across all UI work
+
+#### Phase 2.9: Cross-Platform Token Export
+- Web: CSS custom properties + Tailwind config generation
+- iOS: SwiftUI Color/Font asset generation
+- Android: XML resource file generation
+- Automated conversion scripts (token JSON -> platform files)
+- CI hook for regeneration on token changes
+
+### Dependencies
+```
+Independent (Wave 1): 2.1, 2.2, 2.3, 2.6
+Wave 2: 2.4 (needs 2.1+2.3), 2.7 (needs 2.2+2.6)
+Wave 3: 2.5 (needs 2.4), 2.8 (needs 2.7), 2.9 (needs 2.7)
+```
+
+### What Was Delivered
+- Worktree engine with branch-per-task isolation
+- Shared memory with 4 channels (design-tokens, api-types, component-registry, pm-decisions)
+- Inter-agent message bus (bus.jsonl) with cursor-based reading
+- PM orchestrator with drift detection, review, merge approval
+- Visibility dashboard with health monitoring
+- Diamond design research + token system (8 DTCG categories)
+- Design agent with token enforcement and audit
+- Cross-platform token export (web/iOS/Android) + CI validation
+- Session Guardian with lockfile liveness and auto-claim
+- Autonomous PM loop with watcher, queue, and stdin injection (2,522 lines)
+- Pre-commit token enforcement hook + cost tracking per agent/task
+
+### Success Criteria (validated 2026-02-11)
+- [x] 4+ Claude Code terminals working in parallel without conflicts (6 max, worktree isolation)
+- [x] Shared memory layer passes data between agents (4 channels, pub/sub, schema-validated)
+- [x] Design tokens are SSOT consumed by all UI agents (203 tokens, 8 categories, pre-commit enforcement)
+- [x] PM agent detects drift and coordinates work (30% threshold, assign/block/review/merge)
+- [x] Dashboard shows real-time status of all active agents (7 views, 7 alert types, cost tracking)
+- [x] Cross-platform token export produces valid assets (web/iOS/Android, 36 tests, CI validation)
+- [x] shadcn/ui components enforced to use design tokens (4 must_not rules, audit + drift scripts)
+
+---
+
+## Milestone 3: Full Autonomy — "Open 5 Terminals and Walk Away"
+
+**Goal**: Enable truly autonomous multi-agent operation. One PM terminal + N executor terminals that self-organize, self-heal, and deliver without human intervention. PM auto-researches best practices, decomposes big tasks, assigns to specialized agents, and manages the full lifecycle.
+**Target**: v2.0.0
+
+### Vision
+```
+You: Open 5 terminals, type "/pilot-start" in each
+     Open 1 PM terminal, give it a big task
+     Walk away. Come back to merged PRs.
+```
+
+### Stream A: Intelligent PM Brain
+
+#### Phase 3.1: Agent Identity & Skill Registry
+- Named agent roles: frontend, backend, testing, design, infra (not anonymous session IDs)
+- Skill declaration on session start: "I can do X, Y, Z"
+- Agent capability matching for task routing
+- Session role persistence (agent restarts keep their identity)
+- Agent affinity: prefer assigning related tasks to same agent
+- Deliverables: Updated session.js with role field, skill registry JSON, agent-task matching algorithm
+
+#### Phase 3.2: PM Auto-Research
+- PM researches best practices before planning (web search, docs)
+- Research output stored in `work/research/` and linked to task
+- Pattern library: common solutions indexed for reuse
+- Technology decision log: "we use X because Y"
+- Automated dependency analysis (what packages/APIs needed)
+- Deliverables: Research skill for PM, auto-research trigger on task assignment, research memory channel
+
+#### Phase 3.3: Task Auto-Decomposition
+- PM takes large task → breaks into subtasks with dependencies
+- Subtask creation in bd with proper parent-child links
+- Dependency graph: which subtasks can run in parallel
+- Size estimation: classify tasks as S/M/L based on scope
+- Re-decomposition: if subtask is still too large, break further
+- Deliverables: Decomposition engine, bd subtask creation, dependency DAG builder
+
+#### Phase 3.4: Intelligent Task Scheduler
+- Skill-based routing: match task requirements to agent capabilities
+- Load balancing: spread work across available agents
+- Priority-aware: critical path tasks assigned first
+- Dependency-aware: only assign tasks whose deps are complete
+- Pre-loading: inject relevant memory context with task assignment
+- Deliverables: Scheduler module, context injection on assign, priority queue
+
+### Stream B: Agent Autonomy
+
+#### Phase 3.5: Agent Self-Activation
+- Agents auto-start workflow on terminal open (`/pilot-start` → auto-claim → auto-plan → auto-exec)
+- stdin injection from PM watcher triggers agent actions
+- Agent polls inbox, picks up delegations, starts working
+- No human intervention needed after initial terminal open
+- Graceful idle: if no work, agent sleeps and wakes on bus event
+- Deliverables: Auto-start hook, inbox polling loop, wake-on-message
+
+#### Phase 3.6: Per-Agent Persistent Memory
+- Each agent type maintains learned knowledge across sessions
+- Decision log: "chose library X because Y" (survives restarts)
+- Issue log: "task Z failed because of W" (prevents repeat mistakes)
+- Project context: agent's understanding of the codebase evolves
+- Memory loading on session start: agent resumes with full context
+- Cross-agent memory queries: "what did the design agent decide about colors?"
+- Deliverables: Agent memory writer in post-tool-use hook, memory loader in session-start, query API
+
+#### Phase 3.7: Self-Healing & Recovery
+- Agent crash → auto-detect → restore checkpoint → resume work
+- Context compaction recovery: checkpoint saves before compaction
+- Stale agent → auto-release task → reassign to healthy agent
+- Merge conflict → auto-rebase or escalate with clear diff
+- Failed tests → auto-diagnose → fix or escalate
+- Deliverables: Recovery protocol, checkpoint-on-crash, auto-reassign on stale
+
+#### Phase 3.8: Agent-to-Agent Collaboration
+- Direct agent communication without PM intermediary
+- "Hey frontend agent, what's the API contract?" → response
+- Shared working context: agents on related tasks see each other's progress
+- Blocking requests: "I need backend API done before I can proceed"
+- Deliverables: Direct messaging protocol, shared context view, blocking request handler
+
+### Stream C: Reliability & Observability
+
+#### Phase 3.9: Reliable Message Bus
+- ACK/NACK protocol: guaranteed message delivery
+- Dead letter queue: failed messages get retried or escalated
+- Message ordering guarantees within same sender
+- Bus compaction: archive old messages, keep bus size bounded
+- Priority queue: blocking messages processed before FYI
+- Deliverables: ACK protocol, DLQ, compaction job, priority processing
+
+#### Phase 3.10: Cost & Budget Management
+- Token usage tracking per agent, per task, per session
+- Budget limits: max tokens per task, per agent, per day
+- Cost alerts: PM notified when agent approaches budget
+- Efficiency metrics: tokens-per-line-of-code, tokens-per-task
+- Budget-aware scheduling: cheaper agents for simple tasks
+- Deliverables: Token counter hook, budget config, cost dashboard
+
+#### Phase 3.11: Auto-Escalation Rules
+- Configurable escalation policies (YAML)
+- Drift detected → warning → block → reassign (progressive)
+- Test failure → retry once → escalate to PM → escalate to human
+- Budget exceeded → pause agent → notify PM → human decision
+- Merge conflict → auto-rebase → manual merge → escalate
+- Deliverables: Escalation engine, policy YAML schema, escalation event types
+
+#### Phase 3.12: Performance Analytics
+- Agent performance tracking: success rate, avg time, rework count
+- Task complexity scoring: predicted vs actual effort
+- Bottleneck detection: which tasks/agents slow down the pipeline
+- Learning loop: PM uses history to optimize future assignments
+- Sprint retrospective: auto-generated report on what went well/badly
+- Deliverables: Analytics collector, performance dashboard, retrospective generator
+
+### Dependencies
+```
+Independent (Wave 1): 3.1, 3.6, 3.9
+Wave 2: 3.2 (needs 3.1), 3.5 (needs 3.1), 3.8 (needs 3.9)
+Wave 3: 3.3 (needs 3.2), 3.7 (needs 3.6+3.9), 3.10 (needs 3.9)
+Wave 4: 3.4 (needs 3.1+3.3), 3.11 (needs 3.10), 3.12 (needs 3.10)
+```
+
+### Success Criteria
+- [ ] Open 5 executor terminals + 1 PM terminal → system self-organizes without human input
+- [ ] PM decomposes "build authentication system" into 8+ subtasks automatically
+- [ ] PM researches best practices (web search) before assigning tasks
+- [ ] Agents remember decisions and issues from previous sessions
+- [ ] Crashed agent auto-recovers and resumes from checkpoint
+- [ ] Messages have guaranteed delivery with ACK protocol
+- [ ] Token budget enforced — agents stop when budget exceeded
+- [ ] Performance improves over time as PM learns from history
+
+---
+
+## Future Milestones
+- Milestone 4: Cloud Sync — remote agent coordination, team-based workflows, CI/CD integration
+- Milestone 5: Marketplace — shareable agent configs, design systems, governance policies
+
+---
+
+## Notes
+- Tasks live in beads (bd), not in this document
+- This document is for high-level planning only
+- Update as milestones are completed
