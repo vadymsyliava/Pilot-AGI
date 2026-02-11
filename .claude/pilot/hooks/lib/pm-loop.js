@@ -498,65 +498,32 @@ class PmLoop {
       const readyTasks = this._getAllReadyTasks();
       if (readyTasks.length === 0) return results;
 
-      const assignedAgents = new Set();
-
+      // Phase 3.2 + 3.3: Pre-process tasks (research + decomposition) before scheduling
+      const schedulableTasks = [];
       for (const readyTask of readyTasks) {
-        // Use skill-based routing to find best agent for this task
-        const routing = orchestrator.routeTaskToAgent(readyTask, this.pmSessionId);
-
-        let targetAgent = null;
-
-        if (routing.agent && !assignedAgents.has(routing.agent.session_id)) {
-          // Skill-matched agent available
-          targetAgent = routing.agent;
-        } else {
-          // Fallback: find any idle agent not yet assigned this scan
-          const activeSessions = session.getActiveSessions();
-          const fallback = activeSessions.find(s =>
-            !s.claimed_task && s.status === 'active' && !assignedAgents.has(s.session_id)
-          );
-          if (fallback) {
-            targetAgent = { session_id: fallback.session_id, role: fallback.role, agent_name: fallback.agent_name };
-          }
-        }
-
-        if (!targetAgent) continue;
-
-        // Phase 3.2: Auto-research before assignment
-        let researchContext = null;
         const complexity = pmResearch.classifyTaskComplexity(readyTask);
 
+        // Auto-research non-trivial tasks
         if (complexity !== 'S') {
-          // Check cache first, then run research if needed
           const cached = pmResearch.checkResearchCache(readyTask.id);
           if (!cached) {
             try {
               pmResearch.runAutoResearch(readyTask, this.projectRoot);
-              this.logAction('auto_research_completed', {
-                task_id: readyTask.id,
-                complexity
-              });
+              this.logAction('auto_research_completed', { task_id: readyTask.id, complexity });
             } catch (e) {
-              this.logAction('auto_research_error', {
-                task_id: readyTask.id,
-                error: e.message
-              });
-              // Continue with assignment even if research fails
+              this.logAction('auto_research_error', { task_id: readyTask.id, error: e.message });
             }
           }
-          researchContext = pmResearch.buildResearchContext(readyTask.id);
         }
 
-        // Phase 3.3: Auto-decompose large tasks before assignment
+        // Auto-decompose large tasks
         if (complexity === 'L') {
           try {
             const decompResult = decomposition.decomposeTask(readyTask, this.projectRoot);
             if (decompResult.decomposed && decompResult.subtasks.length >= 3) {
-              // Create subtasks in bd
               const bdResult = decomposition.createSubtasksInBd(
                 readyTask.id, decompResult.subtasks, this.projectRoot
               );
-
               this.logAction('auto_decomposed', {
                 task_id: readyTask.id,
                 subtask_count: decompResult.subtasks.length,
@@ -565,7 +532,6 @@ class PmLoop {
                 bd_created: bdResult.created,
                 bd_errors: bdResult.errors.length
               });
-
               results.push({
                 action: 'task_decomposed',
                 task_id: readyTask.id,
@@ -573,68 +539,82 @@ class PmLoop {
                 waves: decompResult.dag.waves.length,
                 domain: decompResult.domain.domain
               });
-
-              // Skip direct assignment — subtasks will be picked up in next scan
-              continue;
+              continue; // Subtasks picked up in next scan
             }
           } catch (e) {
-            this.logAction('auto_decompose_error', {
-              task_id: readyTask.id,
-              error: e.message
-            });
-            // Fall through to normal assignment if decomposition fails
+            this.logAction('auto_decompose_error', { task_id: readyTask.id, error: e.message });
           }
         }
+
+        schedulableTasks.push(readyTask);
+      }
+
+      if (schedulableTasks.length === 0) return results;
+
+      // Phase 3.4: Intelligent batch scheduling
+      const schedule = orchestrator.scheduleBatch(schedulableTasks, this.pmSessionId, this.projectRoot);
+
+      for (const assignment of schedule.assignments) {
+        const { task, agent, score, breakdown, context } = assignment;
 
         if (this.opts.dryRun) {
           results.push({
             action: 'task_scan',
             dry_run: true,
-            would_assign: readyTask.id,
-            to: targetAgent.session_id,
-            match_reason: routing.reason || 'fallback_idle_agent',
-            confidence: routing.confidence || 0,
-            complexity,
-            researched: !!researchContext
+            would_assign: task.id,
+            to: agent.session_id,
+            match_reason: `scheduler: score ${score.toFixed(2)}`,
+            confidence: score,
+            breakdown,
+            researched: !!context?.research
           });
-          assignedAgents.add(targetAgent.session_id);
           continue;
         }
 
         const assignResult = orchestrator.assignTask(
-          readyTask.id,
-          targetAgent.session_id,
+          task.id,
+          agent.session_id,
           this.pmSessionId,
           {
-            title: readyTask.title,
-            description: readyTask.description,
-            reason: routing.agent ? `skill_match: ${routing.reason}` : 'fallback_idle_agent',
-            research_context: researchContext
+            title: task.title,
+            description: task.description,
+            reason: `scheduler: ${agent.agent_name} (${agent.role}) scored ${score.toFixed(2)}`,
+            research_context: context?.research,
+            scheduler_context: context
           }
         );
 
         if (assignResult.success) {
-          assignedAgents.add(targetAgent.session_id);
           this.logAction('auto_assigned', {
-            task_id: readyTask.id,
-            agent: targetAgent.session_id,
-            agent_name: targetAgent.agent_name,
-            role: targetAgent.role,
-            match_reason: routing.reason || 'fallback',
-            confidence: routing.confidence || 0,
-            complexity,
-            researched: !!researchContext
+            task_id: task.id,
+            agent: agent.session_id,
+            agent_name: agent.agent_name,
+            role: agent.role,
+            match_reason: `scheduler_score: ${score.toFixed(2)}`,
+            confidence: score,
+            breakdown,
+            researched: !!context?.research
           });
           results.push({
             action: 'task_scan',
-            assigned: readyTask.id,
-            to: targetAgent.session_id,
-            agent_name: targetAgent.agent_name,
-            match_reason: routing.reason || 'fallback',
-            complexity,
-            researched: !!researchContext
+            assigned: task.id,
+            to: agent.session_id,
+            agent_name: agent.agent_name,
+            match_reason: `scheduler: ${score.toFixed(2)}`,
+            breakdown,
+            researched: !!context?.research
           });
         }
+      }
+
+      // Log unassigned tasks for visibility
+      for (const unassigned of schedule.unassigned_tasks) {
+        this.logAction('task_unassigned', {
+          task_id: unassigned.task?.id,
+          reason: unassigned.reason,
+          blocking: unassigned.blocking,
+          best_score: unassigned.best_score
+        });
       }
     } catch (e) {
       this.logAction('task_scan_error', { error: e.message });
