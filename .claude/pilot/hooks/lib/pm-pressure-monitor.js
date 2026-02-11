@@ -209,6 +209,71 @@ function buildPmCheckpointData(projectRoot) {
   return data;
 }
 
+/**
+ * Save PM orchestrator checkpoint.
+ * Gathers PM state via buildPmCheckpointData and persists it
+ * using the checkpoint module.
+ *
+ * @param {string} projectRoot
+ * @param {string} pmSessionId - PM's session ID
+ * @returns {{ success: boolean, version: number }|{ success: false, error: string }}
+ */
+function savePmCheckpoint(projectRoot, pmSessionId) {
+  if (!pmSessionId) {
+    return { success: false, error: 'pmSessionId is required' };
+  }
+
+  try {
+    const checkpoint = require('./checkpoint');
+    const data = buildPmCheckpointData(projectRoot);
+    return checkpoint.saveCheckpoint(pmSessionId, data);
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Check PM's own pressure and auto-checkpoint if needed.
+ * Called from the PM watcher loop on each cycle.
+ *
+ * @param {string} projectRoot
+ * @param {string} pmSessionId
+ * @returns {{ checkpointed: boolean, pct: number }}
+ */
+function checkPmSelfPressure(projectRoot, pmSessionId) {
+  const result = { checkpointed: false, pct: 0 };
+
+  try {
+    const sessDir = path.join(projectRoot, SESSION_STATE_DIR);
+    const pressureFile = path.join(sessDir, `${pmSessionId}.pressure.json`);
+
+    if (!fs.existsSync(pressureFile)) return result;
+
+    const pressureData = JSON.parse(fs.readFileSync(pressureFile, 'utf8'));
+    const bytes = pressureData.bytes || 0;
+    const estimatedCapacity = 800 * 1024;
+    result.pct = Math.min(100, Math.round((bytes / estimatedCapacity) * 100));
+
+    if (result.pct >= PM_NUDGE_THRESHOLD) {
+      const saveResult = savePmCheckpoint(projectRoot, pmSessionId);
+      if (saveResult.success) {
+        result.checkpointed = true;
+        // Reset pressure counters after checkpoint
+        try {
+          const pressure = require('./pressure');
+          pressure.resetPressure(pmSessionId);
+        } catch (e) {
+          // Best effort
+        }
+      }
+    }
+  } catch (e) {
+    // Best effort
+  }
+
+  return result;
+}
+
 // =============================================================================
 // EXPORTS
 // =============================================================================
@@ -217,5 +282,7 @@ module.exports = {
   checkAllAgentPressure,
   sendPressureNudges,
   buildPmCheckpointData,
+  savePmCheckpoint,
+  checkPmSelfPressure,
   PM_NUDGE_THRESHOLD
 };

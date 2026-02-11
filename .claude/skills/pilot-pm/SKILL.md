@@ -82,15 +82,46 @@ TASKS
   Open:        {count}
   Blocked:     {count}
 
+CONTEXT PRESSURE
+────────────────────────────────────────────────────────────────
+  PM:        {pct}%  {checkpointed ? "auto-checkpointed" : ""}
+  Agents:    {healthy} healthy, {alerts} above threshold
+  Threshold: 70% (auto-checkpoint triggers at 60%)
+
 ALERTS
 ────────────────────────────────────────────────────────────────
-  {any drift alerts, stale agents, or issues}
+  {any drift alerts, stale agents, pressure warnings, or issues}
 
 RECENT EVENTS (last 5)
 ────────────────────────────────────────────────────────────────
   {timestamp} {event_type} {details}
   ...
 ────────────────────────────────────────────────────────────────
+```
+
+### 3.0: Check Context Pressure (Phase 3.5)
+
+On each dashboard load, run pressure monitoring:
+
+```bash
+node -e "
+const pmMon = require('./.claude/pilot/hooks/lib/pm-pressure-monitor');
+const projectRoot = process.cwd();
+// Check all agents
+const agentPressure = pmMon.checkAllAgentPressure(projectRoot);
+// Check PM self
+const pmSelf = pmMon.checkPmSelfPressure(projectRoot, process.env.SESSION_ID || 'PM');
+// Send nudges to agents above threshold
+if (agentPressure.alerts.length > 0) {
+  pmMon.sendPressureNudges(projectRoot, process.env.SESSION_ID || 'PM', agentPressure.alerts);
+}
+console.log(JSON.stringify({ agentPressure, pmSelf }, null, 2));
+" 2>/dev/null
+```
+
+Display pressure info in the CONTEXT PRESSURE section. If PM checkpointed, show notification:
+```
+⚠ PM auto-checkpointed at {pct}% pressure. Run /compact to free context.
 ```
 
 Status icons:
@@ -141,6 +172,7 @@ console.log(JSON.stringify(results, null, 2));
   ├── Task: {task_id}
   ├── Drift: {score} {drifted ? "⚠ DRIFTED" : "✓ OK"}
   │   └── Unplanned files: {list if any}
+  ├── Pressure: {pct}% {pct >= 70 ? "⚠ HIGH" : "✓ OK"}
   └── Lease: {remaining}s remaining
 
   ...
