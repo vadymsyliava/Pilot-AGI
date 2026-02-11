@@ -734,6 +734,70 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
+  // 8e. Agent Self-Activation (Phase 3.6)
+  // -------------------------------------------------------------------------
+
+  try {
+    const { isAutonomousEnabled, loadAutonomousConfig } = require('./lib/agent-loop');
+
+    // Determine this agent's role
+    let autoRole = null;
+    try {
+      const sessFile = path.join(process.cwd(), '.claude/pilot/state/sessions', `${sessionId}.json`);
+      if (fs.existsSync(sessFile)) {
+        const sess = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+        autoRole = sess.role || null;
+      }
+    } catch (e) { /* no role */ }
+
+    if (autoRole && isAutonomousEnabled(autoRole)) {
+      const config = loadAutonomousConfig(autoRole);
+      context.autonomous_mode = true;
+      context.autonomous_config = {
+        auto_claim: config.auto_claim,
+        auto_plan: config.auto_plan,
+        auto_exec: config.auto_exec,
+        checkpoint_at_pressure_pct: config.checkpoint_at_pressure_pct
+      };
+      messages.push(`AUTONOMOUS MODE active (${autoRole})`);
+
+      // Check for pending delegations on the bus
+      try {
+        const messaging = require('./lib/messaging');
+        const { messages: busMessages } = messaging.readMessages(sessionId, {
+          role: autoRole,
+          types: ['task_delegate', 'notify']
+        });
+        const delegations = busMessages.filter(m =>
+          m.type === 'task_delegate' || m.topic === 'task.assign'
+        );
+        if (delegations.length > 0) {
+          context.pending_delegations = delegations.length;
+          const first = delegations[0];
+          const taskId = first.payload?.data?.bd_task_id || first.payload?.data?.task_id;
+          messages.push(`${delegations.length} delegation(s) waiting${taskId ? ` — top: ${taskId}` : ''}`);
+        }
+      } catch (e) {
+        // Bus not available
+      }
+
+      // Check for pending agent actions from a previous session
+      try {
+        const agentActions = require('./lib/agent-actions');
+        if (agentActions.hasPendingActions(sessionId)) {
+          const stats = agentActions.getQueueStats(sessionId);
+          context.pending_agent_actions = stats.pending;
+          messages.push(`${stats.pending} queued action(s)`);
+        }
+      } catch (e) {
+        // Agent actions not available
+      }
+    }
+  } catch (e) {
+    // Agent loop module not available, continue without
+  }
+
+  // -------------------------------------------------------------------------
   // 9. Build Output
   // -------------------------------------------------------------------------
 

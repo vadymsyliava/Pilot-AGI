@@ -437,6 +437,16 @@ async function main() {
     process.exit(0);
   }
 
+  // Update heartbeat (keeps session alive during active work)
+  // Fix: post-tool-use was missing heartbeat, causing sessions to go stale
+  // during long tool calls (>2min) when only pre-tool-use updated it.
+  try {
+    const session = require('./lib/session');
+    session.heartbeat();
+  } catch (e) {
+    // Best effort - don't block on heartbeat failure
+  }
+
   // Estimate output bytes from tool result
   const toolResult = hookInput.tool_result || '';
   const outputBytes = typeof toolResult === 'string'
