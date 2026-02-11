@@ -14,6 +14,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const checkpoint = require('../.claude/pilot/hooks/lib/checkpoint');
 
 let passed = 0;
 let failed = 0;
@@ -127,6 +128,94 @@ test('buildPmCheckpointData returns valid checkpoint data', () => {
 });
 
 // =============================================================================
+// 2b. PM SELF-CHECKPOINT TESTS
+// =============================================================================
+
+console.log('\n=== PM Self-Checkpoint Tests ===\n');
+
+test('savePmCheckpoint saves PM orchestrator state', () => {
+  const PM_TEST_SESSION = 'S-test-pm-' + Date.now().toString(36);
+  const result = pmMonitor.savePmCheckpoint(process.cwd(), PM_TEST_SESSION);
+  assert(result.success === true, 'should save successfully');
+  assert(typeof result.version === 'number', 'should return version number');
+
+  // Verify the saved data
+  const loaded = checkpoint.loadCheckpoint(PM_TEST_SESSION);
+  assert(loaded !== null, 'should load PM checkpoint');
+  assert(loaded.task_id === 'PM-orchestrator', 'task_id should be PM-orchestrator');
+  assert(loaded.task_title === 'PM Orchestrator State', 'title should be PM state');
+
+  // Cleanup
+  try { checkpoint.deleteCheckpoint(PM_TEST_SESSION); } catch (e) {}
+});
+
+test('savePmCheckpoint rejects missing sessionId', () => {
+  const result = pmMonitor.savePmCheckpoint(process.cwd(), '');
+  assert(result.success === false, 'should fail without sessionId');
+});
+
+test('checkPmSelfPressure returns valid structure', () => {
+  const result = pmMonitor.checkPmSelfPressure(process.cwd(), 'S-test-nonexistent');
+  assert(typeof result === 'object', 'should return object');
+  assert(typeof result.checkpointed === 'boolean', 'checkpointed should be boolean');
+  assert(typeof result.pct === 'number', 'pct should be number');
+});
+
+test('checkPmSelfPressure exported correctly', () => {
+  assert(typeof pmMonitor.checkPmSelfPressure === 'function', 'checkPmSelfPressure should be exported');
+  assert(typeof pmMonitor.savePmCheckpoint === 'function', 'savePmCheckpoint should be exported');
+});
+
+// =============================================================================
+// 2c. AUTO-RESUME (SESSION-START) TESTS
+// =============================================================================
+
+console.log('\n=== Auto-Resume Tests ===\n');
+
+test('checkpoint.loadCheckpoint returns null for unknown session', () => {
+  const result = checkpoint.loadCheckpoint('S-nonexistent-0000');
+  assert(result === null, 'should return null for unknown session');
+});
+
+test('checkpoint save then load round-trip preserves restoration fields', () => {
+  const RESUME_SESSION = 'S-test-resume-' + Date.now().toString(36);
+  const saveData = {
+    task_id: 'Pilot AGI-resume-test',
+    task_title: 'Resume Flow Test',
+    plan_step: 3,
+    total_steps: 5,
+    completed_steps: [
+      { step: 1, description: 'Init', result: 'done' },
+      { step: 2, description: 'Build', result: 'done' }
+    ],
+    files_modified: ['src/a.js', 'src/b.js'],
+    current_context: 'Testing auto-resume restoration',
+    key_decisions: ['Use checkpoint v2 format'],
+    important_findings: ['Found edge case in pressure calc']
+  };
+
+  checkpoint.saveCheckpoint(RESUME_SESSION, saveData);
+  const loaded = checkpoint.loadCheckpoint(RESUME_SESSION);
+
+  assert(loaded !== null, 'should load');
+  assert(loaded.task_id === 'Pilot AGI-resume-test', 'task_id preserved');
+  assert(loaded.plan_step === 3, 'plan_step preserved');
+  assert(loaded.total_steps === 5, 'total_steps preserved');
+  assert(loaded.completed_steps.length === 2, 'completed_steps preserved');
+  assert(loaded.files_modified.length === 2, 'files_modified preserved');
+  assert(loaded.key_decisions.length === 1, 'key_decisions preserved');
+
+  // Verify buildRestorationPrompt includes all context
+  const prompt = checkpoint.buildRestorationPrompt(loaded);
+  assert(prompt.includes('Pilot AGI-resume-test'), 'prompt includes task ID');
+  assert(prompt.includes('Resume Flow Test'), 'prompt includes title');
+  assert(prompt.includes('Step 3'), 'prompt includes plan step');
+  assert(prompt.includes('src/a.js'), 'prompt includes files');
+
+  try { checkpoint.deleteCheckpoint(RESUME_SESSION); } catch (e) {}
+});
+
+// =============================================================================
 // 3. STDIN-INJECTOR COMPACT REQUEST TEST
 // =============================================================================
 
@@ -154,7 +243,6 @@ test('actionToPrompt handles compact_request', () => {
 
 console.log('\n=== Auto-Checkpoint Round-Trip Tests ===\n');
 
-const checkpoint = require('../.claude/pilot/hooks/lib/checkpoint');
 const TEST_SESSION = 'S-test-autocp-' + Date.now().toString(36);
 
 test('auto-gathered data can be saved and loaded', () => {
