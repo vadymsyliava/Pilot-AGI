@@ -533,13 +533,15 @@ function discoverAgentByFile(filePath, excludeSessionId) {
 
 /**
  * Simple glob matcher for ** and * patterns.
+ * Escapes dots first, then replaces glob patterns with regex equivalents.
  */
 function simpleGlobMatch(filePath, pattern) {
+  // Escape dots before replacing glob patterns to avoid double-escaping
   let regex = pattern
+    .replace(/\./g, '\\.')
     .replace(/\*\*/g, '<<<GLOBSTAR>>>')
     .replace(/\*/g, '[^/]*')
-    .replace(/<<<GLOBSTAR>>>/g, '.*')
-    .replace(/\./g, '\\.');
+    .replace(/<<<GLOBSTAR>>>/g, '.*');
 
   try {
     return new RegExp(`^${regex}$`).test(filePath) ||

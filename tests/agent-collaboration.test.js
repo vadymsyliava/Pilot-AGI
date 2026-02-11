@@ -73,9 +73,9 @@ function freshMessaging() {
 }
 
 function freshAgentContext() {
-  // Clear all related caches
+  // Clear all related caches including messaging (agent-context may reference it)
   const mods = [
-    'agent-context.js', 'memory.js', 'session.js', 'policy.js', 'worktree.js'
+    'agent-context.js', 'memory.js', 'session.js', 'policy.js', 'worktree.js', 'messaging.js'
   ];
   for (const mod of mods) {
     const p = path.join(ORIGINAL_CWD, '.claude/pilot/hooks/lib', mod);
@@ -444,6 +444,202 @@ test('request with to_role passes validation', () => {
     payload: {}
   });
   assert(validation.valid, `Request with to_role should be valid: ${validation.errors.join(', ')}`);
+});
+
+// --- Dependency Blocking Protocol ---
+
+console.log('\nDependency Blocking Protocol:');
+
+test('sendBlockOnTask creates block_on_task message', () => {
+  const m = freshMessaging();
+  const result = m.sendBlockOnTask('S-frontend-1', 'TASK-123', 'Need API done first');
+  assert(result.success, 'sendBlockOnTask should succeed');
+
+  const bus = fs.readFileSync(path.join(TEST_DIR, '.claude/pilot/messages/bus.jsonl'), 'utf8');
+  const msg = JSON.parse(bus.trim().split('\n').pop());
+  assertEqual(msg.type, 'block_on_task', 'Type should be block_on_task');
+  assertEqual(msg.priority, 'blocking', 'Should be blocking priority');
+  assertEqual(msg.payload.data.blocked_task_id, 'TASK-123', 'Should contain blocked task ID');
+});
+
+test('notifyTaskComplete broadcasts task.completed', () => {
+  const m = freshMessaging();
+  const result = m.notifyTaskComplete('S-backend-1', 'TASK-123', {
+    summary: 'API endpoints done',
+    files_changed: ['src/api/users.ts']
+  });
+  assert(result.success, 'notifyTaskComplete should succeed');
+
+  const bus = fs.readFileSync(path.join(TEST_DIR, '.claude/pilot/messages/bus.jsonl'), 'utf8');
+  const msg = JSON.parse(bus.trim().split('\n').pop());
+  assertEqual(msg.type, 'broadcast', 'Should be a broadcast');
+  assertEqual(msg.topic, 'task.completed', 'Topic should be task.completed');
+  assertEqual(msg.payload.data.task_id, 'TASK-123', 'Should contain task ID');
+});
+
+test('block_on_task type is valid in message validation', () => {
+  const m = freshMessaging();
+  const validation = m.validateMessage({
+    type: 'block_on_task',
+    from: 'S-sender',
+    to: '*',
+    priority: 'blocking',
+    payload: { action: 'block_on_task', data: { blocked_task_id: 'T-1' } }
+  });
+  assert(validation.valid, `block_on_task should be valid: ${(validation.errors || []).join(', ')}`);
+});
+
+// --- Escalation Chain ---
+
+console.log('\nEscalation Chain:');
+
+test('sendWithEscalation sends request with escalation metadata', () => {
+  const m = freshMessaging();
+  const result = m.sendWithEscalation('S-fe-1', 'S-be-1', 'api.contract', { need: 'user endpoint' });
+  assert(result.success, 'sendWithEscalation should succeed');
+  assert(Array.isArray(result.escalation_chain), 'Should return escalation chain');
+
+  const bus = fs.readFileSync(path.join(TEST_DIR, '.claude/pilot/messages/bus.jsonl'), 'utf8');
+  const msg = JSON.parse(bus.trim().split('\n').pop());
+  assertEqual(msg.priority, 'blocking', 'Should be blocking priority');
+  assert(msg.ack && msg.ack.escalation_chain, 'Should have escalation chain in ack');
+  assertEqual(msg.ack.current_level, 0, 'Should be at level 0');
+});
+
+test('DEFAULT_ESCALATION_CHAIN has 3 levels', () => {
+  const m = freshMessaging();
+  assertEqual(m.DEFAULT_ESCALATION_CHAIN.length, 3, 'Chain should have 3 levels');
+  assertEqual(m.DEFAULT_ESCALATION_CHAIN[0].level, 'peer', 'Level 0 should be peer');
+  assertEqual(m.DEFAULT_ESCALATION_CHAIN[1].level, 'pm', 'Level 1 should be pm');
+  assertEqual(m.DEFAULT_ESCALATION_CHAIN[2].level, 'human', 'Level 2 should be human');
+});
+
+// --- Delegated Tasks ---
+
+console.log('\nDelegated Tasks:');
+
+test('getDelegatedTasks finds delegation messages on bus', () => {
+  const m = freshMessaging();
+  const ctx = freshAgentContext();
+
+  m.delegateTask('S-pm-1', 'S-fe-1', { title: 'Build login page', description: 'Create login form' });
+
+  const fromPm = ctx.getDelegatedTasks('S-pm-1', 'from');
+  assert(fromPm.length >= 1, 'PM should have 1 delegated task');
+
+  const toFe = ctx.getDelegatedTasks('S-fe-1', 'to');
+  assert(toFe.length >= 1, 'Frontend should receive 1 delegated task');
+});
+
+// --- Context Injection ---
+
+console.log('\nContext Injection:');
+
+test('getAgentContext includes decisions and discoveries', () => {
+  const ctx = freshAgentContext();
+  ctx.publishProgress('S-be-1', { taskId: 'T-1', status: 'working' });
+
+  const agentCtx = ctx.getAgentContext('S-be-1');
+  assert(agentCtx, 'Should return agent context');
+  assertEqual(agentCtx.task_id, 'T-1', 'Should have task_id');
+  assert(Array.isArray(agentCtx.recent_decisions), 'Should have decisions array');
+  assert(Array.isArray(agentCtx.recent_discoveries), 'Should have discoveries array');
+});
+
+test('getRelatedContext finds related tasks on overlapping files', () => {
+  const ctx = freshAgentContext();
+
+  ctx.publishProgress('S-be-1', {
+    taskId: 'T-1',
+    filesModified: ['src/api/users.ts'],
+    status: 'working'
+  });
+
+  const related = ctx.getRelatedContext({
+    files: ['src/api/users.ts'],
+    from: 'S-fe-1',
+    topic: 'api.query'
+  });
+
+  assert(related, 'Should return related context');
+  assert(Array.isArray(related.peer_decisions), 'Should have peer_decisions');
+  assert(Array.isArray(related.related_tasks), 'Should have related_tasks');
+  assert(related.related_tasks.length >= 1, 'Should find related task on overlapping file');
+});
+
+test('injectContext enriches messages with _context', () => {
+  const ctx = freshAgentContext();
+
+  ctx.publishProgress('S-be-1', {
+    taskId: 'T-1',
+    filesModified: ['src/api/users.ts'],
+    status: 'working'
+  });
+
+  const messages = [{
+    id: 'M-1',
+    from: 'S-fe-1',
+    topic: 'api.query',
+    payload: { data: { files: ['src/api/users.ts'] } }
+  }];
+
+  const enriched = ctx.injectContext('S-be-1', messages);
+  assertEqual(enriched.length, 1, 'Should have 1 message');
+  assert(enriched[0]._context, 'Message should have _context');
+  assert(enriched[0]._context.related_tasks.length >= 1, 'Should have related tasks');
+});
+
+// --- Service Discovery by File ---
+
+console.log('\nService Discovery by File:');
+
+test('discoverAgentByFile matches file patterns from registry', () => {
+  const ctx = freshAgentContext();
+  const sess = freshSession();
+
+  fs.writeFileSync(path.join(TEST_DIR, '.claude/pilot/agent-registry.json'), JSON.stringify({
+    version: '1.1',
+    agents: {
+      frontend: {
+        name: 'Frontend Agent',
+        capabilities: ['react'],
+        file_patterns: ['**/*.tsx', '**/components/**/*'],
+        excluded_patterns: ['**/*.test.*']
+      },
+      backend: {
+        name: 'Backend Agent',
+        capabilities: ['api-design'],
+        file_patterns: ['**/api/**/*', '**/server/**/*'],
+        excluded_patterns: []
+      }
+    }
+  }, null, 2));
+
+  sess.registerSession('S-fe-1', { role: 'frontend' });
+
+  const result = ctx.discoverAgentByFile('src/components/Button.tsx');
+  assert(result, 'Should find a matching agent');
+  assertEqual(result.role, 'frontend', 'Should match frontend agent');
+});
+
+// --- Human Escalation ---
+
+console.log('\nHuman Escalation:');
+
+test('recordHumanEscalation writes to JSONL file', () => {
+  const ctx = freshAgentContext();
+
+  const entry = ctx.recordHumanEscalation({
+    from: 'S-pm-1',
+    reason: 'All automated levels failed',
+    original_message_id: 'M-test-1'
+  });
+
+  assert(entry.ts, 'Should have timestamp');
+  assertEqual(entry.resolved, false, 'Should be unresolved');
+
+  const pending = ctx.getPendingHumanEscalations();
+  assertEqual(pending.length, 1, 'Should have 1 pending escalation');
 });
 
 // ============================================================================

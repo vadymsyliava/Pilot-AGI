@@ -462,7 +462,11 @@ function isSessionActive(session, policy) {
 }
 
 /**
- * Get active sessions (excluding current)
+ * Get active sessions (excluding current).
+ * A session is considered active if:
+ * 1. Its heartbeat is fresh (isSessionActive), OR
+ * 2. Its status is 'active' AND the Claude process is still alive (isSessionAlive)
+ * This prevents falsely excluding sessions with stale heartbeats but live processes.
  */
 function getActiveSessions(currentSessionId = null) {
   const policy = loadPolicy();
@@ -472,7 +476,10 @@ function getActiveSessions(currentSessionId = null) {
     if (currentSessionId && session.session_id === currentSessionId) {
       return false;
     }
-    return isSessionActive(session, policy);
+    if (isSessionActive(session, policy)) return true;
+    // Fallback: if heartbeat is stale but process is alive, still include it
+    if (session.status === 'active' && isSessionAlive(session.session_id)) return true;
+    return false;
   });
 }
 
@@ -769,6 +776,20 @@ function updateHeartbeat(sessionId) {
     const session = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
     session.last_heartbeat = new Date().toISOString();
     fs.writeFileSync(sessionFile, JSON.stringify(session, null, 2));
+
+    // Publish agent status to shared working context (Phase 3.9)
+    try {
+      const agentContext = require('./agent-context');
+      agentContext.publishProgress(sessionId, {
+        taskId: session.claimed_task || null,
+        taskTitle: session.claimed_task_title || null,
+        status: session.claimed_task ? 'working' : 'idle',
+        filesModified: session.locked_files || []
+      });
+    } catch (e) {
+      // Non-critical — don't fail heartbeat if agent-context has issues
+    }
+
     return true;
   } catch (e) {
     return false;
@@ -864,6 +885,14 @@ function endSession(sessionId, reason = 'user_exit') {
   // Remove lockfile on clean exit
   removeSessionLock(sessionId);
 
+  // Remove from shared working context (Phase 3.9)
+  try {
+    const agentContext = require('./agent-context');
+    agentContext.removeAgent(sessionId);
+  } catch (e) {
+    // Non-critical
+  }
+
   // Log event
   logEvent({
     type: 'session_ended',
@@ -895,6 +924,21 @@ function cleanupStaleSessions() {
 
   for (const session of allSessions) {
     if (session.status === 'active' && !isSessionActive(session, policy)) {
+      // Before marking stale, check if the actual Claude process is still alive.
+      // The heartbeat may be outdated (e.g. during long tool calls) but the
+      // process can still be running. Don't kill live sessions.
+      if (isSessionAlive(session.session_id)) {
+        // Process is alive — refresh heartbeat instead of killing it
+        try {
+          const sessFile = path.join(getSessionStateDir(), `${session.session_id}.json`);
+          const data = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+          data.last_heartbeat = new Date().toISOString();
+          fs.writeFileSync(sessFile, JSON.stringify(data, null, 2));
+        } catch (e) {
+          // Best effort refresh
+        }
+        continue;
+      }
       endSession(session.session_id, 'stale');
       cleaned++;
     }
@@ -1195,6 +1239,117 @@ function extendLease(sessionId, leaseDurationMs = DEFAULT_LEASE_DURATION_MS) {
   }
 }
 
+// =============================================================================
+// AGENT DISCOVERY (Phase 3.9)
+// =============================================================================
+
+/**
+ * Discover agents by capability (searches agent registry + active sessions).
+ *
+ * @param {string} capability - Capability to search for (e.g., 'api_design')
+ * @param {string} [excludeSessionId] - Session to exclude
+ * @returns {object[]} Active agents with the requested capability
+ */
+function discoverAgentByCap(capability, excludeSessionId) {
+  const registry = loadAgentRegistry();
+  if (!registry || !registry.agents) return [];
+
+  const matchingRoles = [];
+  for (const [role, config] of Object.entries(registry.agents)) {
+    const caps = config.capabilities || [];
+    if (caps.includes(capability)) {
+      matchingRoles.push(role);
+    }
+  }
+
+  if (matchingRoles.length === 0) return [];
+
+  const activeSessions = getActiveSessions(excludeSessionId);
+  return activeSessions
+    .filter(s => s.role && matchingRoles.includes(s.role))
+    .map(s => ({
+      session_id: s.session_id,
+      agent_name: s.agent_name,
+      role: s.role,
+      claimed_task: s.claimed_task,
+      capabilities: getAgentCapabilities(s.role)
+    }));
+}
+
+/**
+ * Discover agent by file pattern match.
+ * Uses agent-registry.json file_patterns.
+ *
+ * @param {string} filePath - File path to match
+ * @param {string} [excludeSessionId] - Session to exclude
+ * @returns {object|null} Best matching agent or null
+ */
+function discoverAgentByFile(filePath, excludeSessionId) {
+  const registry = loadAgentRegistry();
+  if (!registry || !registry.agents) return null;
+
+  let bestRole = null;
+  let bestScore = 0;
+
+  for (const [role, config] of Object.entries(registry.agents)) {
+    const patterns = config.file_patterns || [];
+    const excluded = config.excluded_patterns || [];
+
+    const isExcluded = excluded.some(p => _simpleGlobMatch(filePath, p));
+    if (isExcluded) continue;
+
+    for (const pattern of patterns) {
+      if (_simpleGlobMatch(filePath, pattern)) {
+        const score = _patternSpecificity(pattern);
+        if (score > bestScore) {
+          bestScore = score;
+          bestRole = role;
+        }
+      }
+    }
+  }
+
+  if (!bestRole) return null;
+
+  const activeSessions = getActiveSessions(excludeSessionId);
+  const match = activeSessions.find(s => s.role === bestRole);
+
+  if (!match) {
+    return { role: bestRole, session_id: null, agent_name: null, active: false };
+  }
+
+  return {
+    session_id: match.session_id,
+    agent_name: match.agent_name,
+    role: bestRole,
+    capabilities: getAgentCapabilities(bestRole),
+    active: true
+  };
+}
+
+function _simpleGlobMatch(filePath, pattern) {
+  let regex = pattern
+    .replace(/\*\*/g, '<<<GLOBSTAR>>>')
+    .replace(/\*/g, '[^/]*')
+    .replace(/<<<GLOBSTAR>>>/g, '.*')
+    .replace(/\./g, '\\.');
+  try {
+    return new RegExp(regex).test(filePath);
+  } catch (e) {
+    return false;
+  }
+}
+
+function _patternSpecificity(pattern) {
+  let score = 1;
+  const parts = pattern.split('/');
+  for (const part of parts) {
+    if (part !== '**' && part !== '*') score += 2;
+    if (part.includes('.')) score += 1;
+  }
+  return score;
+}
+
 module.exports = {
   generateSessionId,
   registerSession,
@@ -1239,5 +1394,8 @@ module.exports = {
   getAvailableAgents,
   // Agent affinity (Phase 3.1)
   recordAgentAffinity,
-  getAgentAffinity
+  getAgentAffinity,
+  // Agent discovery (Phase 3.9)
+  discoverAgentByCap,
+  discoverAgentByFile
 };
