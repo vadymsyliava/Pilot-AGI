@@ -33,6 +33,8 @@ const TASK_SCAN_INTERVAL_MS = 10000;      // 10s between task assignment scans
 const DRIFT_SCAN_INTERVAL_MS = 120000;    // 2min between drift scans
 const PRESSURE_SCAN_INTERVAL_MS = 60000;  // 60s between pressure scans (Phase 3.5)
 const COST_SCAN_INTERVAL_MS = 60000;      // 60s between cost/budget scans (Phase 3.11)
+const ESCALATION_SCAN_INTERVAL_MS = 60000; // 60s between escalation scans (Phase 3.12)
+const ANALYTICS_SCAN_INTERVAL_MS = 300000; // 5min between analytics aggregation (Phase 3.13)
 const PRESSURE_NUDGE_THRESHOLD_PCT = 70;  // PM nudges agents above this if no auto-checkpoint
 const MAX_ACTIONS_PER_CYCLE = 10;         // Prevent runaway action storms
 const ACTION_LOG_PATH = '.claude/pilot/state/orchestrator/action-log.jsonl';
@@ -53,6 +55,8 @@ class PmLoop {
     this.lastPressureScan = 0;
     this.lastCostScan = 0;
     this.lastRecoveryScan = 0;
+    this.lastEscalationScan = 0;
+    this.lastAnalyticsScan = 0;
     this.actionQueue = [];  // Used by pm-queue.js for persistence
     this.opts = {
       healthScanIntervalMs: opts.healthScanIntervalMs || HEALTH_SCAN_INTERVAL_MS,
@@ -60,6 +64,8 @@ class PmLoop {
       driftScanIntervalMs: opts.driftScanIntervalMs || DRIFT_SCAN_INTERVAL_MS,
       pressureScanIntervalMs: opts.pressureScanIntervalMs || PRESSURE_SCAN_INTERVAL_MS,
       costScanIntervalMs: opts.costScanIntervalMs || COST_SCAN_INTERVAL_MS,
+      escalationScanIntervalMs: opts.escalationScanIntervalMs || ESCALATION_SCAN_INTERVAL_MS,
+      analyticsScanIntervalMs: opts.analyticsScanIntervalMs || ANALYTICS_SCAN_INTERVAL_MS,
       maxActionsPerCycle: opts.maxActionsPerCycle || MAX_ACTIONS_PER_CYCLE,
       dryRun: opts.dryRun || false,
       ...opts
@@ -163,6 +169,20 @@ class PmLoop {
       this.lastRecoveryScan = now;
       const recoveryResults = this._recoveryScan();
       results.push(...recoveryResults);
+    }
+
+    // Escalation scan (Phase 3.12) — progressive auto-escalation
+    if (now - this.lastEscalationScan >= this.opts.escalationScanIntervalMs) {
+      this.lastEscalationScan = now;
+      const escalationResults = this._escalationScan();
+      results.push(...escalationResults);
+    }
+
+    // Analytics scan (Phase 3.13) — aggregate performance metrics
+    if (now - this.lastAnalyticsScan >= this.opts.analyticsScanIntervalMs) {
+      this.lastAnalyticsScan = now;
+      const analyticsResults = this._analyticsScan();
+      results.push(...analyticsResults);
     }
 
     return results;
@@ -935,6 +955,194 @@ class PmLoop {
       }
     } catch (e) {
       this.logAction('recovery_scan_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  // ==========================================================================
+  // ESCALATION SCAN (Phase 3.12)
+  // ==========================================================================
+
+  /**
+   * Escalation scan: check active agents for conditions that warrant
+   * progressive escalation (drift, test failure, budget, health).
+   *
+   * This scan aggregates signals from other scans and feeds them into
+   * the escalation engine for progressive response.
+   */
+  _escalationScan() {
+    const results = [];
+
+    try {
+      const escalation = require('./escalation');
+      const policy = escalation.loadEscalationPolicy();
+      if (!policy.enabled) return results;
+
+      const activeSessions = session.getActiveSessions();
+      const health = orchestrator.getAgentHealth();
+
+      for (const agent of activeSessions) {
+        const sid = agent.session_id;
+        if (!sid || sid === this.pmSessionId) continue;
+
+        const taskId = agent.claimed_task;
+        const agentHealth = health.find(h => h.session_id === sid);
+
+        // --- Check drift ---
+        if (taskId) {
+          try {
+            const drift = orchestrator.detectDrift(sid);
+            if (drift.drifted) {
+              const esc = escalation.triggerEscalation(
+                escalation.EVENT_TYPES.DRIFT, sid, taskId,
+                { drift_score: drift.score, unplanned: drift.unplanned }
+              );
+              if (esc.action !== 'noop') {
+                const actionResult = escalation.executeAction(esc.action, {
+                  eventType: escalation.EVENT_TYPES.DRIFT,
+                  sessionId: sid, taskId, pmSessionId: this.pmSessionId,
+                  context: { drift_score: drift.score, unplanned: drift.unplanned },
+                  dryRun: this.opts.dryRun
+                });
+                this.logAction('escalation_drift', {
+                  agent: sid, task_id: taskId, level: esc.level,
+                  escalated: esc.escalated, first_time: esc.first_time,
+                  action_result: actionResult
+                });
+                results.push({ action: 'escalation_scan', type: 'drift', agent: sid, level: esc.level });
+              }
+            }
+          } catch (e) { /* best effort */ }
+        }
+
+        // --- Check budget ---
+        if (taskId) {
+          try {
+            const costTracker = require('./cost-tracker');
+            const budget = costTracker.checkBudget(sid, taskId);
+            if (budget.status === 'exceeded') {
+              const esc = escalation.triggerEscalation(
+                escalation.EVENT_TYPES.BUDGET_EXCEEDED, sid, taskId,
+                { task_tokens: budget.task_tokens, details: budget.details }
+              );
+              if (esc.action !== 'noop') {
+                const actionResult = escalation.executeAction(esc.action, {
+                  eventType: escalation.EVENT_TYPES.BUDGET_EXCEEDED,
+                  sessionId: sid, taskId, pmSessionId: this.pmSessionId,
+                  context: { task_tokens: budget.task_tokens, details: budget.details },
+                  dryRun: this.opts.dryRun
+                });
+                this.logAction('escalation_budget', {
+                  agent: sid, task_id: taskId, level: esc.level,
+                  escalated: esc.escalated, tokens: budget.task_tokens
+                });
+                results.push({ action: 'escalation_scan', type: 'budget', agent: sid, level: esc.level });
+              }
+            }
+          } catch (e) { /* best effort */ }
+        }
+
+        // --- Check agent unresponsive ---
+        if (agentHealth && (agentHealth.status === 'stale' || agentHealth.status === 'dead')) {
+          const esc = escalation.triggerEscalation(
+            escalation.EVENT_TYPES.AGENT_UNRESPONSIVE, sid, taskId,
+            { health_status: agentHealth.status }
+          );
+          if (esc.action !== 'noop') {
+            const actionResult = escalation.executeAction(esc.action, {
+              eventType: escalation.EVENT_TYPES.AGENT_UNRESPONSIVE,
+              sessionId: sid, taskId, pmSessionId: this.pmSessionId,
+              context: { health_status: agentHealth.status },
+              dryRun: this.opts.dryRun
+            });
+            this.logAction('escalation_unresponsive', {
+              agent: sid, task_id: taskId, level: esc.level,
+              health_status: agentHealth.status
+            });
+            results.push({ action: 'escalation_scan', type: 'unresponsive', agent: sid, level: esc.level });
+          }
+        }
+      }
+
+      // --- Auto-de-escalation check ---
+      try {
+        const deescalated = escalation.checkAutoDeescalation((eventType, sid, taskId) => {
+          if (eventType === escalation.EVENT_TYPES.DRIFT) {
+            try {
+              const drift = orchestrator.detectDrift(sid);
+              return drift.drifted;
+            } catch (e) { return false; }
+          }
+          if (eventType === escalation.EVENT_TYPES.TEST_FAILURE) {
+            // Test failures are resolved by the agent running tests — can't check from PM
+            return true; // Keep escalation active until agent reports
+          }
+          if (eventType === escalation.EVENT_TYPES.MERGE_CONFLICT) {
+            // Check if agent still has conflict by looking at health
+            const h = health.find(a => a.session_id === sid);
+            return h && h.status !== 'healthy';
+          }
+          return true; // Default: keep escalation active
+        });
+
+        if (deescalated.length > 0) {
+          this.logAction('auto_deescalated', { count: deescalated.length, keys: deescalated });
+          results.push({ action: 'escalation_scan', type: 'deescalation', deescalated });
+        }
+      } catch (e) { /* best effort */ }
+
+    } catch (e) {
+      this.logAction('escalation_scan_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  /**
+   * Analytics scan: aggregate performance metrics, detect bottlenecks,
+   * and publish to shared memory channel.
+   * Phase 3.13 — Performance Analytics
+   */
+  _analyticsScan() {
+    const results = [];
+
+    try {
+      const analytics = require('./analytics');
+
+      // Aggregate daily metrics and write snapshot
+      const snapshot = analytics.aggregateDaily();
+
+      this.logAction('analytics_aggregated', {
+        date: snapshot.date,
+        tasks_completed: snapshot.tasks_completed,
+        success_rate: snapshot.success_rate,
+        queue_depth: snapshot.queue_depth,
+        bottleneck_assessment: snapshot.bottleneck_assessment
+      });
+
+      results.push({
+        action: 'analytics_scan',
+        date: snapshot.date,
+        tasks_completed: snapshot.tasks_completed,
+        bottleneck_assessment: snapshot.bottleneck_assessment
+      });
+
+      // Publish to memory channel for cross-agent visibility
+      if (!this.opts.dryRun) {
+        try { analytics.publishAnalyticsChannel(); } catch (e) { /* best effort */ }
+      }
+
+      // Check for degraded/critical bottleneck state
+      if (snapshot.bottleneck_assessment === 'critical' || snapshot.bottleneck_assessment === 'degraded') {
+        this.logAction('analytics_bottleneck_alert', {
+          assessment: snapshot.bottleneck_assessment,
+          queue_depth: snapshot.queue_depth,
+          blocking_tasks: snapshot.blocking_task_count
+        });
+      }
+    } catch (e) {
+      this.logAction('analytics_scan_error', { error: e.message });
     }
 
     return results;

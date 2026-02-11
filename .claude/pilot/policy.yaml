@@ -503,6 +503,52 @@ orchestrator:
     starvation_threshold_sec: 300   # 5 min wait before priority boost
     starvation_boost_per_sec: 0.001 # Boost per second past threshold
 
+  # Performance Analytics — Phase 3.13
+  analytics:
+    enabled: true
+    scan_interval_sec: 300           # 5 min between analytics aggregation
+    retention_days: 30               # Keep daily snapshots for 30 days
+    slow_task_threshold_min: 30      # Task cycle time to flag as "slow"
+    rework_alert_threshold: 0.3      # Rework rate to flag agents (30%)
+    queue_depth_warning: 5           # Unassigned ready tasks before warning
+
+  # Auto-Escalation Engine — Phase 3.12
+  escalation:
+    # Master switch
+    enabled: true
+
+    # How often PM loop runs escalation scan (seconds)
+    scan_interval_sec: 60
+
+    # Escalation paths — progressive severity per event type
+    # Each path defines ordered levels and cooldown between escalations
+    # Levels: warning → block → reassign → human
+    paths:
+      drift:
+        levels: [warning, block, reassign, human]
+        cooldown_sec: 120           # 2 min between escalation steps
+        auto_deescalate: true       # Resolve if drift clears
+
+      test_failure:
+        levels: [warning, reassign, human]
+        cooldown_sec: 60            # 1 min — test failures need fast response
+        auto_deescalate: true       # Resolve if tests pass again
+
+      budget_exceeded:
+        levels: [warning, block, human]
+        cooldown_sec: 300           # 5 min — budget issues are slow to resolve
+        auto_deescalate: false      # Requires manual budget review
+
+      merge_conflict:
+        levels: [warning, block, reassign, human]
+        cooldown_sec: 60
+        auto_deescalate: true       # Resolve if conflict is fixed
+
+      agent_unresponsive:
+        levels: [warning, reassign, human]
+        cooldown_sec: 30            # 30s — unresponsive needs quick escalation
+        auto_deescalate: false      # Agent must actively recover
+
 # =============================================================================
 # AUTONOMY (Full Agent Loop)
 # Controls whether agents run continuously without human intervention
