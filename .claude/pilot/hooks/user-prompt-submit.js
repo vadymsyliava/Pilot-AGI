@@ -116,6 +116,74 @@ function shouldInjectGuardian(prompt, activeTask) {
 }
 
 // =============================================================================
+// SESSION AWARENESS (Session Guardian)
+// =============================================================================
+
+/**
+ * Build a session awareness summary using lockfile-based liveness.
+ * Shows agent count and what peers are working on.
+ *
+ * @param {string|null} currentSessionId - This session's ID (to mark as "this session")
+ * @returns {string|null} Session awareness context string, or null if only one session
+ */
+function buildSessionAwareness(currentSessionId) {
+  try {
+    const allSessions = session.getAllSessionStates();
+    const policy = loadPolicy();
+    const maxSessions = policy.session?.max_concurrent_sessions || 6;
+
+    // Filter to sessions that are alive (lockfile + PID check)
+    const liveSessions = allSessions.filter(s => {
+      if (s.status !== 'active') return false;
+      return session.isSessionAlive(s.session_id);
+    });
+
+    if (liveSessions.length <= 1) return null;
+
+    const lines = [`Active agents: ${liveSessions.length} of ${maxSessions} max`];
+
+    for (const s of liveSessions) {
+      const isCurrent = s.session_id === currentSessionId;
+      const label = isCurrent ? '(this session)' : '';
+      const task = s.claimed_task
+        ? `working on [${s.claimed_task}]`
+        : 'idle';
+      lines.push(`  ${s.session_id} ${label}: ${task}`);
+    }
+
+    return lines.join('\n');
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Find the current session ID from the most recent active session file.
+ */
+function getCurrentSessionId() {
+  try {
+    const stateDir = path.join(process.cwd(), '.claude/pilot/state/sessions');
+    if (!fs.existsSync(stateDir)) return null;
+
+    const files = fs.readdirSync(stateDir)
+      .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'))
+      .map(f => ({
+        name: f,
+        mtime: fs.statSync(path.join(stateDir, f)).mtime.getTime()
+      }))
+      .sort((a, b) => b.mtime - a.mtime);
+
+    if (files.length === 0) return null;
+
+    const content = fs.readFileSync(path.join(stateDir, files[0].name), 'utf8');
+    const sess = JSON.parse(content);
+    return sess.status === 'active' ? sess.session_id : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// =============================================================================
 // MAIN
 // =============================================================================
 
@@ -167,15 +235,32 @@ async function main() {
   // Get active task
   const activeTask = cache.getActiveTask();
 
+  // Build session awareness (shows peer agents — only when multiple sessions)
+  const currentSessionId = getCurrentSessionId();
+  const sessionAwareness = buildSessionAwareness(currentSessionId);
+
   // Decide whether to inject guardian context
   if (!shouldInjectGuardian(prompt, activeTask)) {
     // Quick heuristics passed - no injection needed
     if (activeTask) {
-      // Just remind about active task
+      // Remind about active task + session awareness
+      let context = `Active task: [${activeTask.id}] ${activeTask.title}`;
+      if (sessionAwareness) {
+        context += '\n' + sessionAwareness;
+      }
       const output = {
         hookSpecificOutput: {
           hookEventName: 'UserPromptSubmit',
-          additionalContext: `Active task: [${activeTask.id}] ${activeTask.title}`
+          additionalContext: context
+        }
+      };
+      console.log(JSON.stringify(output));
+    } else if (sessionAwareness) {
+      // No active task but multiple sessions — still show awareness
+      const output = {
+        hookSpecificOutput: {
+          hookEventName: 'UserPromptSubmit',
+          additionalContext: sessionAwareness
         }
       };
       console.log(JSON.stringify(output));
@@ -186,7 +271,10 @@ async function main() {
   // Uncertain prompt with no active task - inject guardian context
   // Claude will semantically evaluate if this is new work
   // Pass prompt to enable smart task suggestion
-  const guardianContext = cache.buildGuardianContext(prompt);
+  let guardianContext = cache.buildGuardianContext(prompt);
+  if (sessionAwareness) {
+    guardianContext += '\n' + sessionAwareness;
+  }
 
   const output = {
     hookSpecificOutput: {
