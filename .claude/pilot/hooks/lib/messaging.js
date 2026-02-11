@@ -24,7 +24,7 @@ const PENDING_ACKS_PATH = '.claude/pilot/messages/pending_acks.jsonl';
 
 const MSG_SIZE_LIMIT = 4000; // bytes, within PIPE_BUF for safety
 const COMPACTION_THRESHOLD = 100 * 1024; // 100KB (lowered for earlier compaction)
-const CURSOR_PROCESSED_MAX = 100;
+const CURSOR_PROCESSED_MAX = 1000;
 const DEFAULT_TTL_MS = {
   blocking: 30000,   // 30 seconds
   normal: 300000,    // 5 minutes
@@ -141,26 +141,39 @@ const _senderSeqs = {};
 
 /**
  * Get next sequence number for a sender.
- * Lazily reads bus to find max seq for this sender on first call.
+ * First checks cursor cache, then falls back to bus scan on first call.
  */
 function getNextSenderSeq(senderId) {
   if (_senderSeqs[senderId] === undefined) {
-    // Bootstrap from bus
-    const busPath = getBusPath();
+    // Try cursor cache first (avoids full bus scan on restart)
     let maxSeq = 0;
     try {
-      if (fs.existsSync(busPath)) {
-        const lines = fs.readFileSync(busPath, 'utf8').split('\n').filter(l => l.trim());
-        for (const line of lines) {
-          try {
-            const msg = JSON.parse(line);
-            if (msg.from === senderId && msg.sender_seq !== undefined && msg.sender_seq > maxSeq) {
-              maxSeq = msg.sender_seq;
-            }
-          } catch (e) { /* skip */ }
+      const cursorPath = getCursorPath(senderId);
+      if (fs.existsSync(cursorPath)) {
+        const cursor = JSON.parse(fs.readFileSync(cursorPath, 'utf8'));
+        if (typeof cursor._cached_sender_seq === 'number' && cursor._cached_sender_seq > 0) {
+          maxSeq = cursor._cached_sender_seq;
         }
       }
-    } catch (e) { /* start from 0 */ }
+    } catch (e) { /* fall through to bus scan */ }
+
+    // Fall back to bus scan only if no cached value
+    if (maxSeq === 0) {
+      const busPath = getBusPath();
+      try {
+        if (fs.existsSync(busPath)) {
+          const lines = fs.readFileSync(busPath, 'utf8').split('\n').filter(l => l.trim());
+          for (const line of lines) {
+            try {
+              const msg = JSON.parse(line);
+              if (msg.from === senderId && msg.sender_seq !== undefined && msg.sender_seq > maxSeq) {
+                maxSeq = msg.sender_seq;
+              }
+            } catch (e) { /* skip */ }
+          }
+        }
+      } catch (e) { /* start from 0 */ }
+    }
     _senderSeqs[senderId] = maxSeq;
   }
   _senderSeqs[senderId]++;
@@ -214,6 +227,21 @@ function sendMessage(msg) {
 
   // Atomic append (safe for multi-process, empirically verified)
   fs.appendFileSync(busPath, line);
+
+  // Persist sender_seq to cursor cache (avoids full bus scan on restart)
+  try {
+    const cursorDir = getCursorDir();
+    if (!fs.existsSync(cursorDir)) fs.mkdirSync(cursorDir, { recursive: true });
+    const cursorPath = getCursorPath(msg.from);
+    let cursorData = {};
+    if (fs.existsSync(cursorPath)) {
+      cursorData = JSON.parse(fs.readFileSync(cursorPath, 'utf8'));
+    }
+    cursorData._cached_sender_seq = senderSeq;
+    const tmpPath = cursorPath + '.tmp';
+    fs.writeFileSync(tmpPath, JSON.stringify(cursorData, null, 2));
+    fs.renameSync(tmpPath, cursorPath);
+  } catch (e) { /* non-critical — bus scan fallback still works */ }
 
   // Track ACK if required
   if (msg.ack && msg.ack.required) {
@@ -357,7 +385,9 @@ function writeCursor(sessionId, cursorData) {
   const data = {
     ...cursorData,
     session_id: sessionId,
-    updated_at: new Date().toISOString()
+    updated_at: new Date().toISOString(),
+    // Cache sender_seq to avoid full bus scan on restart
+    _cached_sender_seq: _senderSeqs[sessionId] || cursorData._cached_sender_seq || 0
   };
 
   fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
@@ -1273,11 +1303,16 @@ function createBusWatcher(sessionId, handler, opts = {}) {
   let fsWatcher = null;
   let pollTimer = null;
   let stopped = false;
+  let debounceTimer = null;
+  const DEBOUNCE_MS = 50; // Coalesce rapid writes into single read
 
   function checkMessages() {
     if (stopped) return;
     try {
-      const { messages, cursor } = readMessages(sessionId);
+      const { messages, cursor } = readMessages(sessionId, {
+        role: opts.role,
+        agentName: opts.agentName
+      });
       if (messages.length > 0) {
         handler(messages, cursor);
       }
@@ -1286,11 +1321,17 @@ function createBusWatcher(sessionId, handler, opts = {}) {
     }
   }
 
-  // Primary: fs.watch
+  function debouncedCheck() {
+    if (stopped) return;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(checkMessages, DEBOUNCE_MS);
+  }
+
+  // Primary: fs.watch with debounce
   try {
     if (fs.existsSync(busPath)) {
       fsWatcher = fs.watch(busPath, () => {
-        checkMessages();
+        debouncedCheck();
       });
       fsWatcher.on('error', () => {
         // Fall back to polling only
@@ -1307,6 +1348,10 @@ function createBusWatcher(sessionId, handler, opts = {}) {
   return {
     stop() {
       stopped = true;
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
       if (fsWatcher) {
         fsWatcher.close();
         fsWatcher = null;
