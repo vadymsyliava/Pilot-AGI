@@ -149,7 +149,33 @@ When user selects "Start implementation":
 bd update {id} --status in_progress
 ```
 
-### 5.2: Create session capsule
+### 5.2: Claim task in session state (multi-session coordination)
+
+Find and update the current session state file to claim this task.
+This prevents other Claude Code sessions from working on the same task.
+
+```bash
+# Find the most recent active session file
+SESSION_FILE=$(ls -t .claude/pilot/state/sessions/S-*.json 2>/dev/null | head -1)
+
+# Update claimed_task if session file exists
+if [ -n "$SESSION_FILE" ]; then
+  # Use node for reliable JSON manipulation
+  node -e "
+    const fs = require('fs');
+    const f = '$SESSION_FILE';
+    const s = JSON.parse(fs.readFileSync(f, 'utf8'));
+    s.claimed_task = '{task-id}';
+    s.last_heartbeat = new Date().toISOString();
+    fs.writeFileSync(f, JSON.stringify(s, null, 2));
+    console.log('Claimed task in session:', s.session_id);
+  "
+fi
+```
+
+Note: Replace `{task-id}` with the actual task ID being claimed.
+
+### 5.3: Create session capsule
 ```bash
 mkdir -p runs
 echo "## $(date +%Y-%m-%d) Session
@@ -161,7 +187,7 @@ echo "## $(date +%Y-%m-%d) Session
 " >> runs/$(date +%Y-%m-%d).md
 ```
 
-### 5.3: AUTOMATICALLY create implementation plan
+### 5.4: AUTOMATICALLY create implementation plan
 
 Do NOT say "Run /pilot-plan". Instead, immediately:
 
@@ -196,7 +222,7 @@ VERIFICATION
 ────────────────────────────────────────────────────────────────
 ```
 
-### 5.4: Ask for approval
+### 5.5: Ask for approval
 
 Use AskUserQuestion:
 
