@@ -171,6 +171,19 @@ approval_matrix:
       require_human: true
       warn_message: "This action will delete files permanently."
 
+    # Design token changes - auto-approvable but require republish
+    design_token_change:
+      ai_auto_approve: true
+      require_human: false
+      escalate_if:
+        - removes_token_category
+        - changes_semantic_color_mapping
+      checklist:
+        - "Token validation passes?"
+        - "Shared memory republished?"
+        - "CSS and Tailwind config regenerated?"
+        - "Dark mode variants included?"
+
     # External API integrations - review required
     external_api:
       ai_auto_approve: false
@@ -354,6 +367,13 @@ areas:
       - "drizzle/**"
       - "db/**"
     agent: "database-master"
+
+  design:
+    paths:
+      - "design/**"
+      - "**/tokens/**"
+      - "**/design-system/**"
+    agent: "design-master"
 
   infra:
     paths:
