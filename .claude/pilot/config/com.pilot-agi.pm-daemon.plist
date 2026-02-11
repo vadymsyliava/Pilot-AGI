@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS launchd plist template for Pilot AGI PM Daemon.
+
+  Installation:
+    1. Copy this file to ~/Library/LaunchAgents/
+    2. Edit PILOT_PROJECT_ROOT to your project directory
+    3. Load:   launchctl load ~/Library/LaunchAgents/com.pilot-agi.pm-daemon.plist
+    4. Unload: launchctl unload ~/Library/LaunchAgents/com.pilot-agi.pm-daemon.plist
+
+  The daemon will start on login and restart if it crashes.
+  Logs go to .claude/pilot/logs/pm-daemon.log inside the project.
+
+  Part of Phase 3.14 (Pilot AGI-sms)
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.pilot-agi.pm-daemon</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>.claude/pilot/hooks/lib/pm-daemon.js</string>
+    <string>--watch</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <!-- EDIT THIS: Set to your project root -->
+  <string>PILOT_PROJECT_ROOT</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/pilot-agi-pm-daemon.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/pilot-agi-pm-daemon.stderr.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key>
+    <string>production</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>
