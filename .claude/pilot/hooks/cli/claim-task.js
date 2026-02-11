@@ -31,29 +31,8 @@ if (leaseIdx !== -1 && args[leaseIdx + 1]) {
   leaseDurationMs = parseInt(args[leaseIdx + 1], 10) || leaseDurationMs;
 }
 
-// Find current session ID (most recent active session by mtime)
-function getCurrentSessionId() {
-  const fs = require('fs');
-  const stateDir = path.join(process.cwd(), '.claude/pilot/state/sessions');
-  if (!fs.existsSync(stateDir)) return null;
-
-  const files = fs.readdirSync(stateDir)
-    .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'))
-    .map(f => ({
-      name: f,
-      mtime: fs.statSync(path.join(stateDir, f)).mtime.getTime()
-    }))
-    .sort((a, b) => b.mtime - a.mtime);
-
-  if (files.length === 0) return null;
-
-  const content = fs.readFileSync(path.join(stateDir, files[0].name), 'utf8');
-  const sess = JSON.parse(content);
-  return sess.status === 'active' ? sess.session_id : null;
-}
-
-// Main
-const sessionId = getCurrentSessionId();
+// Resolve current session via PID matching (not mtime — multi-agent safe)
+const sessionId = session.resolveCurrentSession();
 if (!sessionId) {
   console.log(JSON.stringify({ success: false, error: 'No active session found' }));
   process.exit(1);

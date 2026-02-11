@@ -22,23 +22,23 @@ You are selecting the next task to work on. Be PROACTIVE - never tell the user t
 bd list --limit 1 2>/dev/null
 ```
 
-## Step 2: Get ready tasks (session-aware)
+## Step 2: Get available tasks (session-aware, deterministic)
 
-Get ready tasks, then filter out any already claimed by other active sessions.
-This prevents multiple agents from picking the same task when starting simultaneously.
-
-```bash
-bd ready --json 2>/dev/null
-```
-
-Then immediately filter against active claims:
+Use the `next-task.js` CLI which does all filtering in code (no manual cross-referencing):
 
 ```bash
-node .claude/pilot/hooks/cli/list-claimed.js 2>/dev/null
+node .claude/pilot/hooks/cli/next-task.js 2>/dev/null
 ```
 
-Remove any task from the `bd ready` list whose `id` appears in the claimed array.
-If all ready tasks are claimed, tell the user "All ready tasks are claimed by other agents" and offer to wait or show claimed status.
+This returns JSON with:
+- `session_id` — this session's ID (resolved by PID, not mtime)
+- `my_claimed_task` — task already claimed by THIS session (if any)
+- `available` — tasks NOT claimed by any other agent (use these)
+- `total_ready` — total tasks bd considers ready
+- `claimed_by_others` — how many are taken by other agents
+
+If `my_claimed_task` is set, this session already has work — offer to resume it.
+If `available` is empty and `claimed_by_others > 0`, tell the user "All ready tasks are claimed by other agents" and offer to wait or show claimed status.
 
 ## Step 3: Decision Tree
 
@@ -299,22 +299,20 @@ The status change happens at the moment of commitment, not at display time.
 
 ### Pre-selection filtering (Step 2)
 
-Before showing tasks to the user, filter out tasks already claimed by other agents:
-- `list-claimed.js` reads all active session state files
-- Returns task IDs with valid (non-expired) leases
-- Agent only sees truly available tasks
+`next-task.js` does all filtering deterministically in code:
+1. Resolves the calling session via PID matching (`resolveCurrentSession()`)
+2. Calls `bd ready --json` to get all candidate tasks
+3. Calls `getClaimedTaskIds(currentSessionId)` to find tasks claimed by OTHER sessions
+4. Returns only unclaimed tasks in the `available` array
 
-This eliminates the race condition where multiple agents see the same "top task".
+This eliminates both the race condition AND the LLM cross-referencing failure.
 
 ### Atomic claiming (Step 5)
 
 When claiming a task via `claim-task.js`, the following happens atomically:
-1. `session.claimTask()` — writes claimed_task + lease to session state file
-2. `messaging.sendBroadcast()` — sends `task_claimed` event to all agents
-3. `session.logEvent()` — writes `task_claimed` to event stream
-
-Other sessions can check `.claude/pilot/state/sessions/*.json` to see:
-- Which tasks are currently claimed
-- Which sessions are active (based on lockfile + PID)
+1. `resolveCurrentSession()` identifies the correct session by PID (not mtime)
+2. `session.claimTask()` — writes claimed_task + lease to session state file
+3. `messaging.sendBroadcast()` — sends `task_claimed` event to all agents
+4. `session.logEvent()` — writes `task_claimed` to event stream
 
 To release a task: `node .claude/pilot/hooks/cli/release-task.js`

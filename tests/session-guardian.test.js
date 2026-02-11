@@ -310,6 +310,179 @@ test('messaging exports broadcast functions', () => {
   assert(typeof messaging.sendNotification === 'function', 'sendNotification');
 });
 
+// ═══════════════════════════════════════════════════
+// resolveCurrentSession — resurrection of ended sessions
+// ═══════════════════════════════════════════════════
+
+console.log('\n--- resolveCurrentSession resurrection ---');
+
+test('resolveCurrentSession resurrects ended session matching parent_pid', () => {
+  const stateDir = path.join(cwd, '.claude/pilot/state/sessions');
+
+  // Create a fake ended session with parent_pid = our actual parent
+  const parentPid = session.getParentClaudePID();
+  const fakeSessionId = 'S-testresurrect-aaaa';
+  const fakeFile = path.join(stateDir, `${fakeSessionId}.json`);
+  const fakeState = {
+    session_id: fakeSessionId,
+    started_at: new Date().toISOString(),
+    last_heartbeat: new Date(Date.now() - 5000).toISOString(),
+    status: 'ended',
+    ended_at: new Date(Date.now() - 1000).toISOString(),
+    end_reason: 'test_setup',
+    claimed_task: 'test-resurrection-task',
+    lease_expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    locked_areas: [],
+    locked_files: [],
+    pid: 99999,
+    parent_pid: parentPid
+  };
+  fs.writeFileSync(fakeFile, JSON.stringify(fakeState, null, 2));
+
+  // Temporarily end all active sessions that match our parent_pid
+  // so that only the ended one is findable
+  const activeFiles = fs.readdirSync(stateDir)
+    .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure') && !f.includes('testresurrect'));
+  const originals = {};
+  for (const f of activeFiles) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(stateDir, f), 'utf8'));
+      if (data.status === 'active' && data.parent_pid === parentPid) {
+        originals[f] = JSON.stringify(data, null, 2);
+        data.parent_pid = -1; // Temporarily hide
+        fs.writeFileSync(path.join(stateDir, f), JSON.stringify(data, null, 2));
+      }
+    } catch (e) { /* skip */ }
+  }
+
+  try {
+    // Clear env to force PID resolution
+    const savedEnv = process.env.PILOT_SESSION_ID;
+    delete process.env.PILOT_SESSION_ID;
+
+    // Force fresh require to clear any module state
+    const freshSession = (() => {
+      const modPath = require.resolve('../.claude/pilot/hooks/lib/session');
+      delete require.cache[modPath];
+      // Also clear transitive deps
+      const policyPath = require.resolve('../.claude/pilot/hooks/lib/policy');
+      delete require.cache[policyPath];
+      const worktreePath = require.resolve('../.claude/pilot/hooks/lib/worktree');
+      delete require.cache[worktreePath];
+      return require(modPath);
+    })();
+
+    const resolved = freshSession.resolveCurrentSession();
+    assert(resolved === fakeSessionId,
+      `Should resurrect ended session, got: ${resolved}`);
+
+    // Verify state was updated
+    const updated = JSON.parse(fs.readFileSync(fakeFile, 'utf8'));
+    assert(updated.status === 'active', 'Resurrected session should be active');
+    assert(updated.ended_at === undefined, 'ended_at should be cleared');
+    assert(updated.end_reason === undefined, 'end_reason should be cleared');
+    assert(updated.claimed_task === 'test-resurrection-task', 'Claimed task should be preserved');
+
+    // Restore env
+    if (savedEnv) process.env.PILOT_SESSION_ID = savedEnv;
+  } finally {
+    // Restore original sessions
+    for (const [f, content] of Object.entries(originals)) {
+      fs.writeFileSync(path.join(stateDir, f), content);
+    }
+    // Clean up fake session
+    try { fs.unlinkSync(fakeFile); } catch (e) { /* ignore */ }
+    const lockFile = path.join(cwd, '.claude/pilot/state/locks', `${fakeSessionId}.lock`);
+    try { fs.unlinkSync(lockFile); } catch (e) { /* ignore */ }
+  }
+});
+
+test('resolveCurrentSession prefers active session over ended', () => {
+  const stateDir = path.join(cwd, '.claude/pilot/state/sessions');
+  const parentPid = session.getParentClaudePID();
+  const now = Date.now();
+
+  // Create an active session
+  const activeId = 'S-testactive-bbbb';
+  const activeFile = path.join(stateDir, `${activeId}.json`);
+  const activeState = {
+    session_id: activeId,
+    started_at: new Date(now).toISOString(),
+    last_heartbeat: new Date(now).toISOString(),
+    status: 'active',
+    claimed_task: null,
+    locked_areas: [],
+    locked_files: [],
+    pid: process.pid,
+    parent_pid: parentPid
+  };
+  fs.writeFileSync(activeFile, JSON.stringify(activeState, null, 2));
+
+  // Create an ended session with same parent_pid
+  const endedId = 'S-testended-cccc';
+  const endedFile = path.join(stateDir, `${endedId}.json`);
+  const endedState = {
+    session_id: endedId,
+    started_at: new Date(now - 10000).toISOString(),
+    last_heartbeat: new Date(now - 5000).toISOString(),
+    status: 'ended',
+    ended_at: new Date(now - 1000).toISOString(),
+    claimed_task: 'ended-task',
+    pid: 99998,
+    parent_pid: parentPid
+  };
+  fs.writeFileSync(endedFile, JSON.stringify(endedState, null, 2));
+
+  // Temporarily hide other active sessions matching our parent_pid
+  const activeFiles = fs.readdirSync(stateDir)
+    .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure')
+      && !f.includes('testactive') && !f.includes('testended'));
+  const originals = {};
+  for (const f of activeFiles) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(stateDir, f), 'utf8'));
+      if (data.status === 'active' && data.parent_pid === parentPid) {
+        originals[f] = JSON.stringify(data, null, 2);
+        data.parent_pid = -1;
+        fs.writeFileSync(path.join(stateDir, f), JSON.stringify(data, null, 2));
+      }
+    } catch (e) { /* skip */ }
+  }
+
+  try {
+    const savedEnv = process.env.PILOT_SESSION_ID;
+    delete process.env.PILOT_SESSION_ID;
+
+    const freshSession = (() => {
+      const modPath = require.resolve('../.claude/pilot/hooks/lib/session');
+      delete require.cache[modPath];
+      const policyPath = require.resolve('../.claude/pilot/hooks/lib/policy');
+      delete require.cache[policyPath];
+      const worktreePath = require.resolve('../.claude/pilot/hooks/lib/worktree');
+      delete require.cache[worktreePath];
+      return require(modPath);
+    })();
+
+    const resolved = freshSession.resolveCurrentSession();
+    assert(resolved === activeId,
+      `Should prefer active session, got: ${resolved}`);
+
+    // Verify ended session was NOT resurrected
+    const endedCheck = JSON.parse(fs.readFileSync(endedFile, 'utf8'));
+    assert(endedCheck.status === 'ended', 'Ended session should stay ended');
+
+    if (savedEnv) process.env.PILOT_SESSION_ID = savedEnv;
+  } finally {
+    for (const [f, content] of Object.entries(originals)) {
+      fs.writeFileSync(path.join(stateDir, f), content);
+    }
+    try { fs.unlinkSync(activeFile); } catch (e) { /* ignore */ }
+    try { fs.unlinkSync(endedFile); } catch (e) { /* ignore */ }
+    const activeLock = path.join(cwd, '.claude/pilot/state/locks', `${activeId}.lock`);
+    try { fs.unlinkSync(activeLock); } catch (e) { /* ignore */ }
+  }
+});
+
 console.log('\n' + '='.repeat(50));
 console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);
 if (failed > 0) process.exit(1);
