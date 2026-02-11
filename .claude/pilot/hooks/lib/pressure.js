@@ -163,6 +163,45 @@ function checkAndNudge(sessionId, thresholdPct) {
   return { shouldNudge: true, pressure };
 }
 
+// =============================================================================
+// COST TRACKING
+// =============================================================================
+
+// Approximate cost per 1M tokens (input+output blended estimate for Claude)
+const COST_PER_MILLION_TOKENS = 10.0; // $10/1M tokens blended estimate
+const BYTES_PER_TOKEN = 4;            // Rough: 1 token ~ 4 bytes
+
+/**
+ * Get estimated cost for a session based on accumulated bytes.
+ *
+ * @param {string} sessionId
+ * @returns {{ tokens_estimate: number, cost_usd: number, calls: number }}
+ */
+function getCostEstimate(sessionId) {
+  const state = loadPressure(sessionId);
+  const bytes = state.bytes || 0;
+  const tokens = Math.round(bytes / BYTES_PER_TOKEN);
+  const cost = (tokens / 1_000_000) * COST_PER_MILLION_TOKENS;
+
+  return {
+    tokens_estimate: tokens,
+    cost_usd: Math.round(cost * 10000) / 10000, // 4 decimal places
+    calls: state.calls || 0
+  };
+}
+
+/**
+ * Check if session cost exceeds a token threshold.
+ *
+ * @param {string} sessionId
+ * @param {number} thresholdTokens - Token count threshold
+ * @returns {boolean}
+ */
+function isCostOverThreshold(sessionId, thresholdTokens) {
+  const { tokens_estimate } = getCostEstimate(sessionId);
+  return tokens_estimate >= thresholdTokens;
+}
+
 /**
  * Reset pressure counters (after checkpoint save or session start).
  */
@@ -199,8 +238,12 @@ module.exports = {
   resetPressure,
   deletePressure,
   loadPressure,
+  getCostEstimate,
+  isCostOverThreshold,
   // Constants (for testing)
   ESTIMATED_CONTEXT_BYTES,
   DEFAULT_THRESHOLD_PCT,
+  COST_PER_MILLION_TOKENS,
+  BYTES_PER_TOKEN,
   getPressurePath
 };

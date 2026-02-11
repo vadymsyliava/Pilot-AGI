@@ -211,6 +211,7 @@ function mergeWithDefaults(policy) {
   const defaults = getDefaultPolicy();
 
   return {
+    ...policy,
     version: policy.version || defaults.version,
     enforcement: { ...defaults.enforcement, ...policy.enforcement },
     execution: { ...defaults.execution, ...policy.execution },
