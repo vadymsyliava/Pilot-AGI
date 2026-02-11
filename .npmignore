@@ -6,11 +6,27 @@
 .github/
 .husky/
 .commitlintrc.json
+.releaserc.json
+.eslintrc*
 
 # Test files
 tests/
+__tests__
+**/__tests__
+**/__tests__/**
 *.test.js
 *.spec.js
+**/*.test.js
+**/*.spec.js
+
+# Runtime state (user-generated, never ship)
+.claude/pilot/state/
+.claude/pilot/memory/
+runs/
+work/
+
+# Design system source (shipped via tokens only)
+design/
 
 # Documentation source
 docs/
@@ -33,3 +49,6 @@ npm-debug.log*
 
 # Coverage
 coverage/
+
+# Node
+node_modules/
