@@ -392,6 +392,288 @@ function getDiscoveries(agentType) {
 }
 
 // =============================================================================
+// DECISION LOG (Phase 3.7)
+// =============================================================================
+
+/**
+ * Record a decision made by an agent (append-only).
+ * Decisions are choices about libraries, patterns, approaches, etc.
+ *
+ * @param {string} agentType - Agent role (e.g., 'frontend', 'backend')
+ * @param {object} entry - { decision, reason, alternatives_considered, task_id }
+ */
+function recordDecision(agentType, entry) {
+  const agentDir = path.join(getAgentsDir(), agentType);
+  ensureDir(agentDir);
+
+  const filePath = path.join(agentDir, 'decisions.jsonl');
+  const line = JSON.stringify({
+    ts: new Date().toISOString(),
+    ...entry
+  }) + '\n';
+
+  fs.appendFileSync(filePath, line);
+}
+
+/**
+ * Get decisions for an agent, optionally filtered.
+ *
+ * @param {string} agentType - Agent role
+ * @param {object} [opts] - { limit, task_id }
+ * @returns {Array} Decision entries
+ */
+function getDecisions(agentType, opts = {}) {
+  const filePath = path.join(getAgentsDir(), agentType, 'decisions.jsonl');
+
+  if (!fs.existsSync(filePath)) return [];
+
+  try {
+    const content = fs.readFileSync(filePath, 'utf8').trim();
+    if (!content) return [];
+
+    let entries = content.split('\n').map(line => {
+      try { return JSON.parse(line); } catch (e) { return null; }
+    }).filter(Boolean);
+
+    if (opts.task_id) {
+      entries = entries.filter(e => e.task_id === opts.task_id);
+    }
+
+    if (opts.limit) {
+      entries = entries.slice(-opts.limit);
+    }
+
+    return entries;
+  } catch (e) {
+    return [];
+  }
+}
+
+// =============================================================================
+// ERROR/ISSUE LOG (Phase 3.7)
+// =============================================================================
+
+/**
+ * Record an error/issue encountered by an agent (append-only).
+ *
+ * @param {string} agentType - Agent role
+ * @param {object} entry - { error_type, context, resolution, task_id }
+ */
+function recordError(agentType, entry) {
+  const agentDir = path.join(getAgentsDir(), agentType);
+  ensureDir(agentDir);
+
+  const filePath = path.join(agentDir, 'errors.jsonl');
+  const line = JSON.stringify({
+    ts: new Date().toISOString(),
+    ...entry
+  }) + '\n';
+
+  fs.appendFileSync(filePath, line);
+}
+
+/**
+ * Get errors for an agent, optionally filtered.
+ *
+ * @param {string} agentType - Agent role
+ * @param {object} [opts] - { limit, error_type }
+ * @returns {Array} Error entries
+ */
+function getErrors(agentType, opts = {}) {
+  const filePath = path.join(getAgentsDir(), agentType, 'errors.jsonl');
+
+  if (!fs.existsSync(filePath)) return [];
+
+  try {
+    const content = fs.readFileSync(filePath, 'utf8').trim();
+    if (!content) return [];
+
+    let entries = content.split('\n').map(line => {
+      try { return JSON.parse(line); } catch (e) { return null; }
+    }).filter(Boolean);
+
+    if (opts.error_type) {
+      entries = entries.filter(e => e.error_type === opts.error_type);
+    }
+
+    if (opts.limit) {
+      entries = entries.slice(-opts.limit);
+    }
+
+    return entries;
+  } catch (e) {
+    return [];
+  }
+}
+
+// =============================================================================
+// CROSS-AGENT MEMORY QUERIES (Phase 3.7)
+// =============================================================================
+
+/**
+ * Query another agent's memory by category.
+ *
+ * @param {string} agentType - Agent role to query
+ * @param {string} category - 'preferences' | 'decisions' | 'discoveries' | 'errors'
+ * @param {object} [opts] - { limit }
+ * @returns {{ agent: string, category: string, data: any }}
+ */
+function queryAgentMemory(agentType, category, opts = {}) {
+  const limit = opts.limit || 20;
+
+  switch (category) {
+    case 'preferences':
+      return {
+        agent: agentType,
+        category,
+        data: getAgentMemory(agentType, 'preferences')
+      };
+    case 'decisions':
+      return {
+        agent: agentType,
+        category,
+        data: getDecisions(agentType, { limit })
+      };
+    case 'discoveries':
+      return {
+        agent: agentType,
+        category,
+        data: getDiscoveries(agentType).slice(-limit)
+      };
+    case 'errors':
+      return {
+        agent: agentType,
+        category,
+        data: getErrors(agentType, { limit })
+      };
+    default:
+      return { agent: agentType, category, data: null };
+  }
+}
+
+/**
+ * List all agent types that have memory data.
+ * @returns {string[]} Agent type names
+ */
+function listAgentTypes() {
+  const agentsDir = getAgentsDir();
+  if (!fs.existsSync(agentsDir)) return [];
+
+  try {
+    return fs.readdirSync(agentsDir).filter(name => {
+      const fullPath = path.join(agentsDir, name);
+      return fs.statSync(fullPath).isDirectory() && !name.startsWith('S-');
+    });
+  } catch (e) {
+    return [];
+  }
+}
+
+// =============================================================================
+// MEMORY PRUNING (Phase 3.7)
+// =============================================================================
+
+const DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+/**
+ * Prune old entries from an agent's append-only JSONL files.
+ * Removes entries older than TTL. Preferences are never pruned.
+ *
+ * @param {string} agentType - Agent role
+ * @param {object} [opts] - { ttl_ms, categories }
+ * @returns {{ pruned: object }} Counts of pruned entries per file
+ */
+function pruneAgentMemory(agentType, opts = {}) {
+  const ttl = opts.ttl_ms || DEFAULT_TTL_MS;
+  const categories = opts.categories || ['discoveries', 'errors'];
+  const cutoff = new Date(Date.now() - ttl).toISOString();
+  const pruned = {};
+
+  for (const cat of categories) {
+    const filePath = path.join(getAgentsDir(), agentType, `${cat}.jsonl`);
+    if (!fs.existsSync(filePath)) continue;
+
+    try {
+      const content = fs.readFileSync(filePath, 'utf8').trim();
+      if (!content) continue;
+
+      const lines = content.split('\n');
+      const kept = [];
+      let removed = 0;
+
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.ts && entry.ts < cutoff) {
+            removed++;
+          } else {
+            kept.push(line);
+          }
+        } catch (e) {
+          kept.push(line); // Keep unparseable lines
+        }
+      }
+
+      if (removed > 0) {
+        atomicWrite(filePath, kept.join('\n') + (kept.length > 0 ? '\n' : ''));
+        pruned[cat] = removed;
+      }
+    } catch (e) {
+      // Skip files that can't be read
+    }
+  }
+
+  return { pruned };
+}
+
+/**
+ * Get memory stats for an agent.
+ *
+ * @param {string} agentType - Agent role
+ * @returns {{ files: object, total_bytes: number, total_entries: number }}
+ */
+function getMemoryStats(agentType) {
+  const agentDir = path.join(getAgentsDir(), agentType);
+  if (!fs.existsSync(agentDir)) {
+    return { files: {}, total_bytes: 0, total_entries: 0 };
+  }
+
+  const files = {};
+  let totalBytes = 0;
+  let totalEntries = 0;
+
+  try {
+    for (const file of fs.readdirSync(agentDir)) {
+      const filePath = path.join(agentDir, file);
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile()) continue;
+
+      const size = stat.size;
+      let entries = 0;
+
+      if (file.endsWith('.jsonl')) {
+        try {
+          const content = fs.readFileSync(filePath, 'utf8').trim();
+          entries = content ? content.split('\n').length : 0;
+        } catch (e) {
+          // skip
+        }
+      } else if (file.endsWith('.json')) {
+        entries = 1;
+      }
+
+      files[file] = { size, entries };
+      totalBytes += size;
+      totalEntries += entries;
+    }
+  } catch (e) {
+    // skip
+  }
+
+  return { files, total_bytes: totalBytes, total_entries: totalEntries };
+}
+
+// =============================================================================
 // EXPORTS
 // =============================================================================
 
@@ -409,6 +691,19 @@ module.exports = {
   getAgentMemory,
   recordDiscovery,
   getDiscoveries,
+  // Decision log (Phase 3.7)
+  recordDecision,
+  getDecisions,
+  // Error log (Phase 3.7)
+  recordError,
+  getErrors,
+  // Cross-agent queries (Phase 3.7)
+  queryAgentMemory,
+  listAgentTypes,
+  // Memory pruning (Phase 3.7)
+  pruneAgentMemory,
+  getMemoryStats,
+  DEFAULT_TTL_MS,
   // Index
   loadIndex,
   // Utilities

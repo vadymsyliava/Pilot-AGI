@@ -183,6 +183,108 @@ function emitBusEvent(sessionId, topic, data) {
 }
 
 // =============================================================================
+// AGENT MEMORY RECORDING (Phase 3.7)
+// =============================================================================
+
+/**
+ * Record significant events to per-agent persistent memory.
+ * Detects patterns, errors, and discoveries from tool results.
+ * Fire-and-forget — failure here never blocks the agent.
+ *
+ * @param {string} sessionId
+ * @param {object} hookInput - { tool_name, tool_input, tool_result }
+ */
+function recordAgentMemory(sessionId, hookInput) {
+  try {
+    const memory = require('./lib/memory');
+    const toolName = hookInput.tool_name || '';
+    const toolInput = hookInput.tool_input || {};
+    const toolResult = hookInput.tool_result || '';
+    const resultStr = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
+
+    // Resolve agent role from session state
+    const agentType = resolveAgentType(sessionId);
+    if (!agentType) return;
+
+    // Detect git commit — record as discovery (code pattern learned)
+    if (toolName === 'Bash' && typeof toolInput.command === 'string') {
+      const cmd = toolInput.command;
+
+      if (/git\s+commit\b/.test(cmd) && !resultStr.includes('nothing to commit')) {
+        const msgMatch = cmd.match(/-m\s+["']([^"']*)/);
+        const msg = msgMatch ? msgMatch[1].substring(0, 100) : '';
+        const taskMatch = msg.match(/\[([^\]]+)\]/);
+        memory.recordDiscovery(agentType, {
+          type: 'commit',
+          detail: msg,
+          task_id: taskMatch ? taskMatch[1] : null
+        });
+        return;
+      }
+
+      // Detect test failures — record as error
+      if (/npm\s+test|vitest|jest|pytest|npx\s+vitest/.test(cmd) &&
+          /FAIL|Error:|AssertionError|test failed/i.test(resultStr)) {
+        memory.recordError(agentType, {
+          error_type: 'test_failure',
+          context: cmd.substring(0, 100),
+          resolution: null,
+          task_id: getClaimedTaskId(sessionId)
+        });
+        return;
+      }
+
+      // Detect build/lint errors
+      if (/npm\s+run\s+(?:build|lint)|tsc|eslint/.test(cmd) &&
+          /error|Error/i.test(resultStr) && resultStr.length > 50) {
+        memory.recordError(agentType, {
+          error_type: 'build_failure',
+          context: cmd.substring(0, 100),
+          resolution: null,
+          task_id: getClaimedTaskId(sessionId)
+        });
+        return;
+      }
+    }
+  } catch (e) {
+    // Never block — agent memory is best-effort
+  }
+}
+
+/**
+ * Resolve the agent type (role) for the current session.
+ * Falls back to 'backend' if no role is set.
+ */
+function resolveAgentType(sessionId) {
+  try {
+    const sessFile = path.join(process.cwd(), '.claude/pilot/state/sessions', `${sessionId}.json`);
+    if (fs.existsSync(sessFile)) {
+      const data = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+      return data.role || 'backend';
+    }
+  } catch (e) {
+    // ignore
+  }
+  return null;
+}
+
+/**
+ * Get the claimed task ID for a session.
+ */
+function getClaimedTaskId(sessionId) {
+  try {
+    const sessFile = path.join(process.cwd(), '.claude/pilot/state/sessions', `${sessionId}.json`);
+    if (fs.existsSync(sessFile)) {
+      const data = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+      return data.claimed_task || null;
+    }
+  } catch (e) {
+    // ignore
+  }
+  return null;
+}
+
+// =============================================================================
 // AUTO-CHECKPOINT (Phase 3.5)
 // =============================================================================
 
@@ -381,6 +483,11 @@ async function main() {
   // Emit structured events to bus.jsonl for autonomous coordination.
   // Only emit when meaningful state changes are detected.
   emitStatusEvents(sessionId, hookInput);
+
+  // --- Agent memory recording (Phase 3.7) ---
+  // Record significant events to per-agent persistent memory.
+  // Best-effort, never blocks tool execution.
+  recordAgentMemory(sessionId, hookInput);
 
   process.exit(0);
 }
