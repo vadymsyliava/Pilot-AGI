@@ -514,6 +514,8 @@ function getAllSessionStates() {
  */
 function isSessionActive(session, policy) {
   if (session.status !== 'active') return false;
+  // Sessions marked with ended_at are dead even if status wasn't flipped
+  if (session.ended_at) return false;
 
   const heartbeatInterval = policy?.session?.heartbeat_interval_sec || 60;
   const staleThreshold = heartbeatInterval * HEARTBEAT_STALE_MULTIPLIER * 1000;
@@ -538,6 +540,8 @@ function getActiveSessions(currentSessionId = null) {
     if (currentSessionId && session.session_id === currentSessionId) {
       return false;
     }
+    // Sessions with ended_at are definitively dead regardless of other signals
+    if (session.ended_at) return false;
     if (isSessionActive(session, policy)) return true;
     // Fallback: if heartbeat is stale but process is alive, still include it
     if (session.status === 'active' && isSessionAlive(session.session_id)) return true;
@@ -889,7 +893,7 @@ function heartbeat() {
       for (const f of allFiles) {
         try {
           const data = JSON.parse(fs.readFileSync(path.join(stateDir, f.name), 'utf8'));
-          if (data.parent_pid === parentPid && data.status === 'active') {
+          if (data.parent_pid === parentPid && data.status === 'active' && !data.ended_at) {
             sessionFile = path.join(stateDir, f.name);
             session = data;
             break;
@@ -898,12 +902,12 @@ function heartbeat() {
       }
     }
 
-    // Fallback: most recent active session
+    // Fallback: most recent active session (skip ended ones)
     if (!session) {
       for (const f of allFiles) {
         try {
           const data = JSON.parse(fs.readFileSync(path.join(stateDir, f.name), 'utf8'));
-          if (data.status === 'active') {
+          if (data.status === 'active' && !data.ended_at) {
             sessionFile = path.join(stateDir, f.name);
             session = data;
             break;
@@ -1440,6 +1444,90 @@ function _patternSpecificity(pattern) {
   return score;
 }
 
+/**
+ * Transfer a task claim from a dead/stale session to a new session.
+ * Used during recovery to let a new agent resume work on the same task.
+ *
+ * @param {string} deadSessionId - The dead session to recover from
+ * @param {string} newSessionId - The new session taking over
+ * @param {number} [leaseDurationMs] - Lease duration for the new claim
+ * @returns {{ success: boolean, transferred?: object, error?: string }}
+ */
+function recoverSession(deadSessionId, newSessionId, leaseDurationMs = DEFAULT_LEASE_DURATION_MS) {
+  const stateDir = getSessionStateDir();
+  const deadFile = path.join(stateDir, `${deadSessionId}.json`);
+  const newFile = path.join(stateDir, `${newSessionId}.json`);
+
+  if (!fs.existsSync(deadFile)) {
+    return { success: false, error: `Dead session ${deadSessionId} not found` };
+  }
+  if (!fs.existsSync(newFile)) {
+    return { success: false, error: `New session ${newSessionId} not found` };
+  }
+
+  try {
+    const deadState = JSON.parse(fs.readFileSync(deadFile, 'utf8'));
+    const newState = JSON.parse(fs.readFileSync(newFile, 'utf8'));
+
+    if (!deadState.claimed_task) {
+      return { success: false, error: 'Dead session has no claimed task' };
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + leaseDurationMs);
+
+    // Transfer task claim
+    newState.claimed_task = deadState.claimed_task;
+    newState.claimed_at = now.toISOString();
+    newState.lease_expires_at = expiresAt.toISOString();
+    newState.last_heartbeat = now.toISOString();
+
+    // Transfer area locks
+    if (deadState.locked_areas && deadState.locked_areas.length > 0) {
+      newState.locked_areas = deadState.locked_areas;
+    }
+
+    // Transfer worktree reference (don't recreate — reuse existing)
+    if (deadState.worktree_path) {
+      newState.worktree_path = deadState.worktree_path;
+      newState.worktree_branch = deadState.worktree_branch;
+      newState.worktree_created_at = deadState.worktree_created_at;
+    }
+
+    // Clear dead session
+    deadState.claimed_task = null;
+    deadState.claimed_at = null;
+    deadState.lease_expires_at = null;
+    deadState.locked_areas = [];
+    deadState.locked_files = [];
+    deadState.status = 'ended';
+
+    // Write both atomically (new first, then dead)
+    fs.writeFileSync(newFile, JSON.stringify(newState, null, 2));
+    fs.writeFileSync(deadFile, JSON.stringify(deadState, null, 2));
+
+    logEvent({
+      type: 'session_recovered',
+      dead_session: deadSessionId,
+      new_session: newSessionId,
+      task_id: newState.claimed_task,
+      transferred_areas: newState.locked_areas || []
+    });
+
+    return {
+      success: true,
+      transferred: {
+        task_id: newState.claimed_task,
+        locked_areas: newState.locked_areas || [],
+        worktree_path: newState.worktree_path || null,
+        lease_expires_at: expiresAt.toISOString()
+      }
+    };
+  } catch (e) {
+    return { success: false, error: `Recovery failed: ${e.message}` };
+  }
+}
+
 module.exports = {
   generateSessionId,
   registerSession,
@@ -1487,5 +1575,7 @@ module.exports = {
   getAgentAffinity,
   // Agent discovery (Phase 3.9)
   discoverAgentByCap,
-  discoverAgentByFile
+  discoverAgentByFile,
+  // Recovery (Phase 3.8)
+  recoverSession
 };

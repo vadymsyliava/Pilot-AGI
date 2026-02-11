@@ -49,6 +49,7 @@ class PmLoop {
     this.lastTaskScan = 0;
     this.lastDriftScan = 0;
     this.lastPressureScan = 0;
+    this.lastRecoveryScan = 0;
     this.actionQueue = [];  // Used by pm-queue.js for persistence
     this.opts = {
       healthScanIntervalMs: opts.healthScanIntervalMs || HEALTH_SCAN_INTERVAL_MS,
@@ -144,6 +145,13 @@ class PmLoop {
       this.lastPressureScan = now;
       const pressureResults = this._pressureScan();
       results.push(...pressureResults);
+    }
+
+    // Recovery scan (Phase 3.8) — runs at health scan interval
+    if (now - this.lastRecoveryScan >= this.opts.healthScanIntervalMs) {
+      this.lastRecoveryScan = now;
+      const recoveryResults = this._recoveryScan();
+      results.push(...recoveryResults);
     }
 
     return results;
@@ -712,6 +720,105 @@ class PmLoop {
       }
     } catch (e) {
       this.logAction('pressure_scan_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  /**
+   * Recovery scan (Phase 3.8): check for recoverable tasks and delegate
+   * them to idle agents with checkpoint context.
+   */
+  _recoveryScan() {
+    const results = [];
+
+    try {
+      const recoverableTasks = orchestrator.getRecoverableTasks();
+      if (recoverableTasks.length === 0) return results;
+
+      const recovery = require('./recovery');
+      const activeSessions = session.getActiveSessions();
+
+      for (const rt of recoverableTasks) {
+        // Find an idle agent for this task
+        const idleAgent = activeSessions.find(s =>
+          !s.claimed_task && s.status === 'active' && s.session_id !== this.pmSessionId
+        );
+
+        if (!idleAgent) {
+          this.logAction('recovery_no_idle_agent', { task_id: rt.task_id });
+          break; // No more idle agents
+        }
+
+        // Build checkpoint context for the agent
+        let checkpointContext = null;
+        try {
+          checkpointContext = recovery.recoverFromCheckpoint(rt.checkpoint_session);
+        } catch (e) { /* no checkpoint data */ }
+
+        if (this.opts.dryRun) {
+          results.push({
+            action: 'recovery_scan',
+            dry_run: true,
+            would_assign: rt.task_id,
+            to: idleAgent.session_id,
+            has_checkpoint: !!checkpointContext
+          });
+          continue;
+        }
+
+        // Delegate the task with checkpoint context
+        try {
+          const assignResult = orchestrator.assignTask(
+            rt.task_id,
+            idleAgent.session_id,
+            this.pmSessionId
+          );
+
+          if (assignResult.success) {
+            // Send checkpoint context as a follow-up message
+            if (checkpointContext) {
+              messaging.sendMessage({
+                from: this.pmSessionId,
+                to: idleAgent.session_id,
+                type: 'notify',
+                topic: 'recovery.checkpoint_context',
+                priority: 'normal',
+                payload: {
+                  task_id: rt.task_id,
+                  restoration: checkpointContext.restoration,
+                  resume_from_step: checkpointContext.plan_step,
+                  total_steps: checkpointContext.total_steps
+                }
+              });
+            }
+
+            // Remove from recoverable queue
+            orchestrator.removeRecoverableTask(rt.task_id);
+
+            this.logAction('recovery_task_assigned', {
+              task_id: rt.task_id,
+              assigned_to: idleAgent.session_id,
+              has_checkpoint: !!checkpointContext,
+              resume_step: checkpointContext?.plan_step
+            });
+
+            results.push({
+              action: 'recovery_scan',
+              task_id: rt.task_id,
+              assigned_to: idleAgent.session_id,
+              has_checkpoint: !!checkpointContext
+            });
+          }
+        } catch (e) {
+          this.logAction('recovery_assign_error', {
+            task_id: rt.task_id,
+            error: e.message
+          });
+        }
+      }
+    } catch (e) {
+      this.logAction('recovery_scan_error', { error: e.message });
     }
 
     return results;
