@@ -90,7 +90,12 @@ test('publish writes data and bumps version', () => {
   const result = memory.publish('design-tokens', {
     colors: { primary: '#000000', secondary: '#ffffff', accent: '#ff0000', background: '#fff', foreground: '#000' },
     spacing: { '1': '0.25rem' },
-    typography: { fontFamily: 'Mono', sizes: { base: '1rem' }, weights: { normal: 400 } }
+    typography: { fontFamily: 'Mono', sizes: { base: '1rem' }, weights: { normal: 400 } },
+    shadows: { sm: { offsetX: '0px', offsetY: '1px', blur: '2px', spread: '0px', color: '#0000000d' } },
+    radii: { md: '0.375rem' },
+    breakpoints: { sm: '640px' },
+    zIndex: { base: '0' },
+    animation: { duration: { fast: '150ms' } }
   }, { agent: 'design', sessionId: 'S-test', summary: 'Updated colors to dark theme' });
 
   assert(result.version === currentVersion + 1, 'version should be bumped');
@@ -108,7 +113,7 @@ test('publish rejects data missing required fields', () => {
   try {
     memory.publish('design-tokens', {
       colors: { primary: '#000' }
-      // missing spacing and typography
+      // missing spacing, typography, shadows, radii, breakpoints, zIndex, animation
     }, { agent: 'design' });
   } catch (e) {
     threw = true;
