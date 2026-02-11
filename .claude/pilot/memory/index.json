@@ -31,6 +31,12 @@
       "publisher": "pm",
       "consumers": ["frontend", "backend", "testing", "security", "review", "design"],
       "schema": "schemas/research-findings.schema.json"
+    },
+    "task-decompositions": {
+      "description": "Task decomposition DAGs: subtask breakdown, dependency graphs, wave grouping",
+      "publisher": "pm",
+      "consumers": ["frontend", "backend", "testing", "security", "review", "design"],
+      "schema": null
     }
   }
 }

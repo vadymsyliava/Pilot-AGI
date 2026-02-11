@@ -22,6 +22,7 @@ const orchestrator = require('./orchestrator');
 const session = require('./session');
 const messaging = require('./messaging');
 const pmResearch = require('./pm-research');
+const decomposition = require('./decomposition');
 
 // ============================================================================
 // CONSTANTS
@@ -539,6 +540,45 @@ class PmLoop {
             }
           }
           researchContext = pmResearch.buildResearchContext(readyTask.id);
+        }
+
+        // Phase 3.3: Auto-decompose large tasks before assignment
+        if (complexity === 'L') {
+          try {
+            const decompResult = decomposition.decomposeTask(readyTask, this.projectRoot);
+            if (decompResult.decomposed && decompResult.subtasks.length >= 3) {
+              // Create subtasks in bd
+              const bdResult = decomposition.createSubtasksInBd(
+                readyTask.id, decompResult.subtasks, this.projectRoot
+              );
+
+              this.logAction('auto_decomposed', {
+                task_id: readyTask.id,
+                subtask_count: decompResult.subtasks.length,
+                waves: decompResult.dag.waves.length,
+                domain: decompResult.domain.domain,
+                bd_created: bdResult.created,
+                bd_errors: bdResult.errors.length
+              });
+
+              results.push({
+                action: 'task_decomposed',
+                task_id: readyTask.id,
+                subtask_count: decompResult.subtasks.length,
+                waves: decompResult.dag.waves.length,
+                domain: decompResult.domain.domain
+              });
+
+              // Skip direct assignment — subtasks will be picked up in next scan
+              continue;
+            }
+          } catch (e) {
+            this.logAction('auto_decompose_error', {
+              task_id: readyTask.id,
+              error: e.message
+            });
+            // Fall through to normal assignment if decomposition fails
+          }
         }
 
         if (this.opts.dryRun) {

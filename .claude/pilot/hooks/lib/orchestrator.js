@@ -1193,6 +1193,56 @@ function pmCheckpointSelf(pmSessionId) {
 }
 
 // ============================================================================
+// TASK DECOMPOSITION (Phase 3.3)
+// ============================================================================
+
+/**
+ * Convenience function: decompose a large task and create subtasks in bd.
+ * Combines decomposition engine with bd creation and PM decision logging.
+ *
+ * @param {object} task - { id, title, description, labels }
+ * @param {string} projectRoot - absolute path to project root
+ * @param {string} pmSessionId - PM's session ID
+ * @returns {{ decomposed: boolean, subtaskCount: number, bdResult: object|null, reason: string }}
+ */
+function decomposeAndAssign(task, projectRoot, pmSessionId) {
+  const decomposition = require('./decomposition');
+
+  const result = decomposition.decomposeTask(task, projectRoot);
+  if (!result.decomposed) {
+    return { decomposed: false, subtaskCount: 0, bdResult: null, reason: result.reason };
+  }
+
+  // Create subtasks in bd
+  const bdResult = decomposition.createSubtasksInBd(task.id, result.subtasks, projectRoot);
+
+  // Log PM decision
+  publishDecision('task_decomposed', {
+    task_id: task.id,
+    subtask_count: result.subtasks.length,
+    waves: result.dag.waves.length,
+    domain: result.domain.domain,
+    bd_created: bdResult.created,
+    decomposed_by: pmSessionId
+  });
+
+  session.logEvent({
+    type: 'pm_task_decomposed',
+    pm_session: pmSessionId,
+    task_id: task.id,
+    subtask_count: result.subtasks.length,
+    domain: result.domain.domain
+  });
+
+  return {
+    decomposed: true,
+    subtaskCount: result.subtasks.length,
+    bdResult,
+    reason: result.reason
+  };
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
@@ -1236,6 +1286,9 @@ module.exports = {
   loadPmState,
   updatePmState,
   pmCheckpointSelf,
+
+  // Task decomposition (Phase 3.3)
+  decomposeAndAssign,
 
   // Shared memory
   publishDecision,
