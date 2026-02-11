@@ -376,6 +376,61 @@ function getAgentAffinity(role) {
 }
 
 function registerSession(sessionId, context = {}) {
+  // Create session state dir
+  const stateDir = getSessionStateDir();
+  if (!fs.existsSync(stateDir)) {
+    fs.mkdirSync(stateDir, { recursive: true });
+  }
+
+  // Resolve parent claude PID for accurate liveness checks
+  const parentPid = getParentClaudePID();
+
+  // --- Session Resurrection ---
+  // If an ended session exists for the same parent_pid (same Claude terminal),
+  // resurrect it instead of creating a new one. This preserves claimed_task,
+  // locks, and prevents session proliferation when hooks re-fire.
+  if (parentPid) {
+    try {
+      const files = fs.readdirSync(stateDir)
+        .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'));
+      // Sort newest first to find the most recent session for this terminal
+      const candidates = [];
+      for (const f of files) {
+        try {
+          const data = JSON.parse(fs.readFileSync(path.join(stateDir, f), 'utf8'));
+          if (data.parent_pid === parentPid && data.status === 'ended') {
+            candidates.push({ file: f, data, mtime: fs.statSync(path.join(stateDir, f)).mtime.getTime() });
+          }
+        } catch (e) { /* skip invalid */ }
+      }
+      if (candidates.length > 0) {
+        // Resurrect the most recent ended session for this terminal
+        candidates.sort((a, b) => b.mtime - a.mtime);
+        const toResurrect = candidates[0];
+        const resurrected = toResurrect.data;
+        resurrected.status = 'active';
+        resurrected.last_heartbeat = new Date().toISOString();
+        resurrected.pid = process.pid; // Update hook pid
+        fs.writeFileSync(
+          path.join(stateDir, toResurrect.file),
+          JSON.stringify(resurrected, null, 2)
+        );
+        // Re-create lockfile
+        createSessionLock(resurrected.session_id);
+        logEvent({
+          type: 'session_resurrected',
+          session_id: resurrected.session_id,
+          new_hook_session_id: sessionId,
+          parent_pid: parentPid,
+          claimed_task: resurrected.claimed_task
+        });
+        return resurrected;
+      }
+    } catch (e) {
+      // Resurrection failed — fall through to normal registration
+    }
+  }
+
   // Log to event stream
   logEvent({
     type: 'session_started',
@@ -384,15 +439,6 @@ function registerSession(sessionId, context = {}) {
     pid: process.pid,
     ...context
   });
-
-  // Create session state file
-  const stateDir = getSessionStateDir();
-  if (!fs.existsSync(stateDir)) {
-    fs.mkdirSync(stateDir, { recursive: true });
-  }
-
-  // Resolve parent claude PID for accurate liveness checks
-  const parentPid = getParentClaudePID();
 
   // Resolve agent role: explicit > env > auto-detect > null
   const role = resolveAgentRole(context.role);
@@ -807,22 +853,50 @@ function heartbeat() {
   if (!fs.existsSync(stateDir)) return { updated: false };
 
   try {
-    // Find most recent session file
-    const files = fs.readdirSync(stateDir)
-      .filter(f => f.startsWith('S-') && f.endsWith('.json'))
+    // Find the session file belonging to THIS terminal (by parent_pid).
+    // Falls back to most recent active session if parent_pid matching fails.
+    const parentPid = getParentClaudePID();
+    const allFiles = fs.readdirSync(stateDir)
+      .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'))
       .map(f => ({
         name: f,
         mtime: fs.statSync(path.join(stateDir, f)).mtime.getTime()
       }))
       .sort((a, b) => b.mtime - a.mtime);
 
-    if (files.length === 0) return { updated: false };
+    if (allFiles.length === 0) return { updated: false };
 
-    const sessionFile = path.join(stateDir, files[0].name);
-    const session = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
+    // Prefer matching by parent_pid (correct terminal)
+    let sessionFile = null;
+    let session = null;
+    if (parentPid) {
+      for (const f of allFiles) {
+        try {
+          const data = JSON.parse(fs.readFileSync(path.join(stateDir, f.name), 'utf8'));
+          if (data.parent_pid === parentPid && data.status === 'active') {
+            sessionFile = path.join(stateDir, f.name);
+            session = data;
+            break;
+          }
+        } catch (e) { /* skip */ }
+      }
+    }
 
-    // Only update active sessions
-    if (session.status !== 'active') return { updated: false };
+    // Fallback: most recent active session
+    if (!session) {
+      for (const f of allFiles) {
+        try {
+          const data = JSON.parse(fs.readFileSync(path.join(stateDir, f.name), 'utf8'));
+          if (data.status === 'active') {
+            sessionFile = path.join(stateDir, f.name);
+            session = data;
+            break;
+          }
+        } catch (e) { /* skip */ }
+      }
+    }
+
+    if (!session || !sessionFile) return { updated: false };
 
     const now = new Date();
     const lastHeartbeat = new Date(session.last_heartbeat);
