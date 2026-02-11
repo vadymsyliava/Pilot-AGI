@@ -107,7 +107,11 @@ const TEST_IDS = [
   'S-test-hb-4444',
   'S-test-hb-5555',
   'S-test-lock-6666',
-  'S-test-lock-7777'
+  'S-test-lock-7777',
+  'S-test-end-8888',
+  'S-test-health-9999',
+  'S-test-claim-aaaa',
+  'S-test-claim-bbbb'
 ];
 
 // Clean before tests
@@ -312,6 +316,150 @@ test('getActiveSessions reaps zombies before returning', () => {
   // Verify zombie was actually ended
   const zombieData = JSON.parse(fs.readFileSync(path.join(SESSION_STATE_DIR, `${zombieId}.json`), 'utf8'));
   assert(zombieData.status === 'ended', `Zombie should be ended, got ${zombieData.status}`);
+
+  cleanup([zombieId, aliveId]);
+});
+
+// ═══════════════════════════════════════════════════
+// endSession() clears claimed_task
+// ═══════════════════════════════════════════════════
+console.log('\n--- endSession() task release ---');
+
+test('endSession clears claimed_task and lease', () => {
+  const session = freshSession();
+  const id = 'S-test-end-8888';
+  writeSession(id, {
+    status: 'active',
+    claimed_task: 'TASK-RELEASE-001',
+    lease_expires_at: '2026-12-31T00:00:00.000Z',
+    parent_pid: process.ppid
+  });
+
+  session.endSession(id, 'test_cleanup');
+
+  const data = JSON.parse(fs.readFileSync(path.join(SESSION_STATE_DIR, `${id}.json`), 'utf8'));
+  assert(data.status === 'ended', `Expected ended, got ${data.status}`);
+  assert(data.claimed_task === null, `Expected null claimed_task, got ${data.claimed_task}`);
+  assert(data.lease_expires_at === null, `Expected null lease, got ${data.lease_expires_at}`);
+
+  // Verify task_released event was logged
+  const events = getRecentEvents(5);
+  const releaseEvent = events.find(e => e.type === 'task_released' && e.task_id === 'TASK-RELEASE-001');
+  assert(releaseEvent, 'Expected task_released event');
+  assert(releaseEvent.session_id === id, 'Event should reference correct session');
+
+  cleanup([id]);
+});
+
+test('endSession with no claimed_task does not emit task_released', () => {
+  const session = freshSession();
+  const id = 'S-test-end-8888';
+  writeSession(id, {
+    status: 'active',
+    claimed_task: null,
+    parent_pid: process.ppid
+  });
+
+  const beforeEvents = getRecentEvents(20);
+  session.endSession(id, 'test_no_task');
+  const afterEvents = getRecentEvents(20);
+
+  // No new task_released event should appear for this session
+  const newReleaseEvents = afterEvents.filter(e =>
+    e.type === 'task_released' && e.session_id === id &&
+    !beforeEvents.some(be => be.type === 'task_released' && be.session_id === id && be.ts === e.ts)
+  );
+  assert(newReleaseEvents.length === 0, 'Should not emit task_released when no task claimed');
+
+  cleanup([id]);
+});
+
+// ═══════════════════════════════════════════════════
+// getAgentHealth()
+// ═══════════════════════════════════════════════════
+console.log('\n--- getAgentHealth() ---');
+
+test('getAgentHealth returns alive for session with live PID', () => {
+  const session = freshSession();
+  const id = 'S-test-health-9999';
+  writeSession(id, {
+    status: 'active',
+    parent_pid: process.ppid,
+    claimed_task: 'HEALTH-001'
+  });
+  writeLock(id, process.ppid);
+
+  const health = session.getAgentHealth(id);
+  assert(health.alive === true, `Expected alive, got ${health.alive}`);
+  assert(health.pid_alive === true, `Expected pid_alive, got ${health.pid_alive}`);
+  assert(health.claimed_task === 'HEALTH-001', `Expected HEALTH-001, got ${health.claimed_task}`);
+  assert(health.status === 'active', `Expected active, got ${health.status}`);
+
+  cleanup([id]);
+});
+
+test('getAgentHealth returns dead and reaps session with dead PID', () => {
+  const session = freshSession();
+  const id = 'S-test-health-9999';
+  writeSession(id, {
+    status: 'active',
+    parent_pid: 99999991,
+    claimed_task: 'HEALTH-DEAD'
+  });
+
+  const health = session.getAgentHealth(id);
+  assert(health.alive === false, `Expected not alive, got ${health.alive}`);
+  assert(health.pid_alive === false, `Expected pid dead`);
+  assert(health.status === 'reaped', `Expected reaped status, got ${health.status}`);
+  // Task should be released since endSession was called
+  assert(health.claimed_task === null, `Expected null claimed_task after reap, got ${health.claimed_task}`);
+
+  cleanup([id]);
+});
+
+test('getAgentHealth returns not_found for missing session', () => {
+  const session = freshSession();
+  const health = session.getAgentHealth('S-nonexistent-xxxx');
+  assert(health.alive === false, 'Expected not alive');
+  assert(health.status === 'not_found', `Expected not_found, got ${health.status}`);
+});
+
+// ═══════════════════════════════════════════════════
+// getClaimedTaskIds reaps zombies first
+// ═══════════════════════════════════════════════════
+console.log('\n--- getClaimedTaskIds() with reaping ---');
+
+test('getClaimedTaskIds reaps dead sessions before returning claims', () => {
+  const session = freshSession();
+  const zombieId = 'S-test-claim-aaaa';
+  const aliveId = 'S-test-claim-bbbb';
+
+  // Zombie session with dead PID claiming a task
+  writeSession(zombieId, {
+    status: 'active',
+    parent_pid: 99999990,
+    claimed_task: 'ZOMBIE-TASK',
+    lease_expires_at: '2026-12-31T00:00:00.000Z'
+  });
+
+  // Alive session claiming a different task
+  writeSession(aliveId, {
+    status: 'active',
+    parent_pid: process.ppid,
+    claimed_task: 'ALIVE-TASK',
+    lease_expires_at: '2026-12-31T00:00:00.000Z'
+  });
+  writeLock(aliveId, process.ppid);
+
+  const claimed = session.getClaimedTaskIds();
+
+  // Zombie's task should NOT be in claimed list
+  assert(!claimed.includes('ZOMBIE-TASK'), `Zombie task should not be claimed, got: ${claimed}`);
+
+  // Zombie session should now be ended with null claimed_task
+  const zombieData = JSON.parse(fs.readFileSync(path.join(SESSION_STATE_DIR, `${zombieId}.json`), 'utf8'));
+  assert(zombieData.status === 'ended', `Zombie should be ended, got ${zombieData.status}`);
+  assert(zombieData.claimed_task === null, `Zombie claimed_task should be null, got ${zombieData.claimed_task}`);
 
   cleanup([zombieId, aliveId]);
 });

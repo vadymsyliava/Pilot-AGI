@@ -507,6 +507,21 @@ function registerSession(sessionId, context = {}) {
   // Create lockfile for process-based liveness detection
   createSessionLock(sessionId);
 
+  // Register exit handler to clean up session on terminal close.
+  // Uses 'exit' event which fires on graceful exits (Ctrl+C, tab close, process.exit).
+  // For ungraceful kills (SIGKILL), PID liveness checks in _reapZombies() handle cleanup.
+  const exitSessionId = sessionId;
+  const _exitHandler = () => {
+    try {
+      endSession(exitSessionId, 'process_exit');
+    } catch (e) {
+      // Best effort during exit
+    }
+  };
+  // Avoid duplicate handlers from multiple registerSession calls in same process
+  process.removeAllListeners('exit');
+  process.on('exit', _exitHandler);
+
   return sessionState;
 }
 
@@ -665,6 +680,50 @@ function isSessionActive(session, policy) {
   const now = Date.now();
 
   return (now - lastHeartbeat) < staleThreshold;
+}
+
+/**
+ * Get health status for a specific session.
+ * PID liveness is the hard gate — dead PID = not healthy, period.
+ *
+ * @param {string} sessionId
+ * @returns {{ alive: boolean, pid_alive: boolean, heartbeat_fresh: boolean, claimed_task: string|null, status: string, parent_pid: number|null }}
+ */
+function getAgentHealth(sessionId) {
+  const policy = loadPolicy();
+  const stateDir = getSessionStateDir();
+  const sessFile = path.join(stateDir, `${sessionId}.json`);
+
+  if (!fs.existsSync(sessFile)) {
+    return { alive: false, pid_alive: false, heartbeat_fresh: false, claimed_task: null, status: 'not_found', parent_pid: null };
+  }
+
+  try {
+    const session = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+    if (session.ended_at || session.status === 'ended') {
+      return { alive: false, pid_alive: false, heartbeat_fresh: false, claimed_task: session.claimed_task || null, status: 'ended', parent_pid: session.parent_pid || null };
+    }
+
+    const pidAlive = isSessionAlive(sessionId);
+    const heartbeatFresh = isSessionActive(session, policy);
+
+    // PID is the hard gate: dead PID = end the session immediately
+    if (!pidAlive) {
+      endSession(sessionId, 'health_check_pid_dead');
+      return { alive: false, pid_alive: false, heartbeat_fresh: heartbeatFresh, claimed_task: null, status: 'reaped', parent_pid: session.parent_pid || null };
+    }
+
+    return {
+      alive: true,
+      pid_alive: pidAlive,
+      heartbeat_fresh: heartbeatFresh,
+      claimed_task: session.claimed_task || null,
+      status: session.status,
+      parent_pid: session.parent_pid || null
+    };
+  } catch (e) {
+    return { alive: false, pid_alive: false, heartbeat_fresh: false, claimed_task: null, status: 'error', parent_pid: null };
+  }
 }
 
 /**
@@ -1119,14 +1178,28 @@ function endSession(sessionId, reason = 'user_exit') {
     reason
   });
 
-  // Update state file
+  // Update state file — clear claims so tasks are immediately available
   if (fs.existsSync(sessionFile)) {
     try {
       const session = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
       session.status = 'ended';
       session.ended_at = new Date().toISOString();
       session.end_reason = reason;
+      // Release claimed task so it's immediately available to other agents
+      const releasedTask = session.claimed_task || null;
+      session.claimed_task = null;
+      session.lease_expires_at = null;
       fs.writeFileSync(sessionFile, JSON.stringify(session, null, 2));
+
+      // Log task release if there was one
+      if (releasedTask) {
+        logEvent({
+          type: 'task_released',
+          session_id: sessionId,
+          task_id: releasedTask,
+          reason: `session_ended:${reason}`
+        });
+      }
     } catch (e) {
       // Best effort
     }
@@ -1290,6 +1363,9 @@ function archiveSessions(thresholdMs = ARCHIVE_THRESHOLD_MS) {
  * @returns {string[]} Array of claimed task IDs
  */
 function getClaimedTaskIds(excludeSessionId = null) {
+  // Reap zombies first — ensures dead sessions don't phantom-claim tasks
+  _reapZombies();
+
   const policy = loadPolicy();
   const allSessions = getAllSessionStates();
   const now = Date.now();
@@ -1324,6 +1400,9 @@ function getClaimedTaskIds(excludeSessionId = null) {
  * Returns the claiming session info or null if unclaimed/expired
  */
 function isTaskClaimed(taskId) {
+  // Reap zombies first — ensures dead sessions can't block task claims
+  _reapZombies();
+
   const policy = loadPolicy();
   const allSessions = getAllSessionStates();
   const now = Date.now();
@@ -1895,5 +1974,6 @@ module.exports = {
   // Session archival (Phase 4.1)
   archiveSessions,
   // Session Guardian v2 (Phase 4.9)
-  _reapZombies
+  _reapZombies,
+  getAgentHealth
 };
