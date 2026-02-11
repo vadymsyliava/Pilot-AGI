@@ -37,6 +37,41 @@ async function main() {
     process.exit(0);
   }
 
+  // Check autonomy mode first — in full autonomy, block ALL questions
+  try {
+    const { loadPolicy } = require('./lib/policy');
+    const policy = loadPolicy();
+
+    if (policy.autonomy?.mode === 'full') {
+      const toolInput = hookInput.tool_input || {};
+      const questions = toolInput.questions || [];
+      const questionTexts = questions.map(q => q.question || '').filter(Boolean);
+      const questionSummary = questionTexts.length > 0
+        ? questionTexts.join('; ')
+        : 'a question';
+
+      const output = {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            `AUTONOMOUS MODE: Do not ask questions. Make the best decision based on the plan, code patterns, and task description.\n\n` +
+            `Blocked question: "${questionSummary}"\n\n` +
+            `Decision guidelines:\n` +
+            `1. Follow the approved plan exactly\n` +
+            `2. Match existing code patterns and conventions\n` +
+            `3. If truly blocked (e.g. missing dependency, broken infra), log the error and stop\n` +
+            `4. For ambiguous choices, pick the simpler option that matches codebase conventions\n\n` +
+            `Continue executing. Do not stop for clarification.`
+        }
+      };
+      console.log(JSON.stringify(output));
+      process.exit(0);
+    }
+  } catch (policyErr) {
+    // Policy load failed — fall through to PM check
+  }
+
   // Check if this is a PM session — PM can ask humans freely
   try {
     const orchestrator = require('./lib/orchestrator');

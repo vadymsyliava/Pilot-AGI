@@ -115,6 +115,51 @@ function toRelativePath(filePath) {
 }
 
 // =============================================================================
+// AUTO-APPROVAL (Autonomy Mode)
+// =============================================================================
+
+/**
+ * Auto-approve a plan in full autonomy mode.
+ * Creates the approval file so subsequent edits proceed without blocking.
+ */
+function autoApprovePlan(taskId) {
+  if (!taskId) return;
+
+  const approvalDir = path.join(process.cwd(), APPROVED_PLANS_DIR);
+  const approvalFile = path.join(approvalDir, `${taskId}.json`);
+
+  try {
+    if (!fs.existsSync(approvalDir)) {
+      fs.mkdirSync(approvalDir, { recursive: true });
+    }
+
+    const approval = {
+      task_id: taskId,
+      approved: true,
+      approved_at: new Date().toISOString(),
+      auto_approved: true,
+      reason: 'autonomy.mode=full, auto_approve_plans=true'
+    };
+
+    fs.writeFileSync(approvalFile, JSON.stringify(approval, null, 2));
+
+    // Log to event stream
+    const eventStream = path.join(process.cwd(), 'runs', 'sessions.jsonl');
+    if (fs.existsSync(path.dirname(eventStream))) {
+      const event = JSON.stringify({
+        ts: new Date().toISOString(),
+        event: 'plan_auto_approved',
+        task_id: taskId,
+        reason: 'autonomy_mode_full'
+      });
+      fs.appendFileSync(eventStream, event + '\n');
+    }
+  } catch (e) {
+    // Best effort — don't block on logging failure
+  }
+}
+
+// =============================================================================
 // ENFORCEMENT CHECKS
 // =============================================================================
 
@@ -180,10 +225,15 @@ function checkEnforcement(filePath, policy) {
         // Check exception
         if (!matchesPattern(relativePath, policy.exceptions?.no_plan_required)) {
           if (!isPlanApproved(activeTask.id)) {
-            return {
-              allowed: false,
-              reason: `Plan not approved. Create and approve a plan with /pilot-plan first.\n\nTask: [${activeTask.id}] ${activeTask.title}\nFile: ${relativePath}`
-            };
+            // In full autonomy mode, auto-approve plans instead of blocking
+            if (policy.autonomy?.mode === 'full' && policy.autonomy?.auto_approve_plans) {
+              autoApprovePlan(activeTask.id);
+            } else {
+              return {
+                allowed: false,
+                reason: `Plan not approved. Create and approve a plan with /pilot-plan first.\n\nTask: [${activeTask.id}] ${activeTask.title}\nFile: ${relativePath}`
+              };
+            }
           }
         }
       }
