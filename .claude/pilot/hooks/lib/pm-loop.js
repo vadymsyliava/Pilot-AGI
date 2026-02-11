@@ -21,6 +21,7 @@ const { execFileSync } = require('child_process');
 const orchestrator = require('./orchestrator');
 const session = require('./session');
 const messaging = require('./messaging');
+const pmResearch = require('./pm-research');
 
 // ============================================================================
 // CONSTANTS
@@ -208,6 +209,16 @@ class PmLoop {
         return { assigned: false, reason: 'no_ready_tasks' };
       }
 
+      // Phase 3.2: Auto-research before assignment
+      let researchContext = null;
+      const complexity = pmResearch.classifyTaskComplexity(readyTask);
+      if (complexity !== 'S') {
+        if (!pmResearch.checkResearchCache(readyTask.id)) {
+          try { pmResearch.runAutoResearch(readyTask, this.projectRoot); } catch (e) { /* best effort */ }
+        }
+        researchContext = pmResearch.buildResearchContext(readyTask.id);
+      }
+
       if (this.opts.dryRun) {
         return { dry_run: true, would_assign: readyTask.id, to: agentSession };
       }
@@ -220,11 +231,12 @@ class PmLoop {
         {
           title: readyTask.title,
           description: readyTask.description,
-          reason: 'auto_assigned_after_completion'
+          reason: 'auto_assigned_after_completion',
+          research_context: researchContext
         }
       );
 
-      return { assigned: result.success, task_id: readyTask.id, to: agentSession };
+      return { assigned: result.success, task_id: readyTask.id, to: agentSession, researched: !!researchContext };
     },
 
     /**
@@ -332,6 +344,16 @@ class PmLoop {
       // Check if there's ready work to assign
       const readyTask = this._getNextReadyTask();
       if (readyTask && !this.opts.dryRun) {
+        // Phase 3.2: Auto-research before assignment
+        let researchContext = null;
+        const complexity = pmResearch.classifyTaskComplexity(readyTask);
+        if (complexity !== 'S') {
+          if (!pmResearch.checkResearchCache(readyTask.id)) {
+            try { pmResearch.runAutoResearch(readyTask, this.projectRoot); } catch (e) { /* best effort */ }
+          }
+          researchContext = pmResearch.buildResearchContext(readyTask.id);
+        }
+
         // Send a welcome + task assignment
         messaging.sendNotification(
           this.pmSessionId,
@@ -350,11 +372,12 @@ class PmLoop {
           {
             title: readyTask.title,
             description: readyTask.description,
-            reason: 'auto_assigned_on_join'
+            reason: 'auto_assigned_on_join',
+            research_context: researchContext
           }
         );
 
-        return { greeted: true, assigned: readyTask.id };
+        return { greeted: true, assigned: readyTask.id, researched: !!researchContext };
       }
 
       return { greeted: true, assigned: null };
@@ -485,6 +508,31 @@ class PmLoop {
 
         if (!targetAgent) continue;
 
+        // Phase 3.2: Auto-research before assignment
+        let researchContext = null;
+        const complexity = pmResearch.classifyTaskComplexity(readyTask);
+
+        if (complexity !== 'S') {
+          // Check cache first, then run research if needed
+          const cached = pmResearch.checkResearchCache(readyTask.id);
+          if (!cached) {
+            try {
+              pmResearch.runAutoResearch(readyTask, this.projectRoot);
+              this.logAction('auto_research_completed', {
+                task_id: readyTask.id,
+                complexity
+              });
+            } catch (e) {
+              this.logAction('auto_research_error', {
+                task_id: readyTask.id,
+                error: e.message
+              });
+              // Continue with assignment even if research fails
+            }
+          }
+          researchContext = pmResearch.buildResearchContext(readyTask.id);
+        }
+
         if (this.opts.dryRun) {
           results.push({
             action: 'task_scan',
@@ -492,7 +540,9 @@ class PmLoop {
             would_assign: readyTask.id,
             to: targetAgent.session_id,
             match_reason: routing.reason || 'fallback_idle_agent',
-            confidence: routing.confidence || 0
+            confidence: routing.confidence || 0,
+            complexity,
+            researched: !!researchContext
           });
           assignedAgents.add(targetAgent.session_id);
           continue;
@@ -505,7 +555,8 @@ class PmLoop {
           {
             title: readyTask.title,
             description: readyTask.description,
-            reason: routing.agent ? `skill_match: ${routing.reason}` : 'fallback_idle_agent'
+            reason: routing.agent ? `skill_match: ${routing.reason}` : 'fallback_idle_agent',
+            research_context: researchContext
           }
         );
 
@@ -517,14 +568,18 @@ class PmLoop {
             agent_name: targetAgent.agent_name,
             role: targetAgent.role,
             match_reason: routing.reason || 'fallback',
-            confidence: routing.confidence || 0
+            confidence: routing.confidence || 0,
+            complexity,
+            researched: !!researchContext
           });
           results.push({
             action: 'task_scan',
             assigned: readyTask.id,
             to: targetAgent.session_id,
             agent_name: targetAgent.agent_name,
-            match_reason: routing.reason || 'fallback'
+            match_reason: routing.reason || 'fallback',
+            complexity,
+            researched: !!researchContext
           });
         }
       }

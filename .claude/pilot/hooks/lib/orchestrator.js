@@ -488,16 +488,24 @@ function routeTaskToAgent(task, excludeSessionId = null) {
  * @param {object} opts - Additional options
  */
 function assignTask(taskId, targetSessionId, pmSessionId, opts = {}) {
+  // Build task delegation payload
+  const taskData = {
+    task_id: taskId,
+    title: opts.title || taskId,
+    description: opts.description || '',
+    priority: opts.priority || 'normal'
+  };
+
+  // Phase 3.2: Include research context if available
+  if (opts.research_context) {
+    taskData.research_context = opts.research_context;
+  }
+
   // Send task delegation message
   const msgResult = messaging.sendTaskDelegate(
     pmSessionId,
     targetSessionId,
-    {
-      task_id: taskId,
-      title: opts.title || taskId,
-      description: opts.description || '',
-      priority: opts.priority || 'normal'
-    },
+    taskData,
     { priority: 'normal' }
   );
 
@@ -510,7 +518,8 @@ function assignTask(taskId, targetSessionId, pmSessionId, opts = {}) {
     task_id: taskId,
     assigned_to: targetSessionId,
     assigned_by: pmSessionId,
-    reason: opts.reason || 'PM assignment'
+    reason: opts.reason || 'PM assignment',
+    researched: !!opts.research_context
   });
 
   // Log event
@@ -518,14 +527,16 @@ function assignTask(taskId, targetSessionId, pmSessionId, opts = {}) {
     type: 'pm_task_assigned',
     pm_session: pmSessionId,
     target_session: targetSessionId,
-    task_id: taskId
+    task_id: taskId,
+    researched: !!opts.research_context
   });
 
   return {
     success: true,
     message_id: msgResult.id,
     task_id: taskId,
-    assigned_to: targetSessionId
+    assigned_to: targetSessionId,
+    researched: !!opts.research_context
   };
 }
 

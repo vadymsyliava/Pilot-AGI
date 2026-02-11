@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["findings"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "ts", "summary"],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "bd task ID this research is linked to"
+          },
+          "ts": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "complexity": {
+            "type": "string",
+            "enum": ["S", "M", "L"]
+          },
+          "summary": {
+            "type": "string",
+            "description": "Brief research summary (<500 chars)"
+          },
+          "recommendations": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "technologies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "reason": { "type": "string" }
+              }
+            }
+          },
+          "relevant_files": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "patterns": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Reusable patterns found in codebase"
+          }
+        }
+      }
+    },
+    "tech_decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "reason", "ts"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Technology/library/pattern name"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this was chosen"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "ts": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "alternatives_considered": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
