@@ -24,6 +24,7 @@ const messaging = require('./messaging');
 const pmResearch = require('./pm-research');
 const decomposition = require('./decomposition');
 const pmDecisions = require('./pm-decisions');
+const overnightMode = require('./overnight-mode');
 
 // ============================================================================
 // CONSTANTS
@@ -37,6 +38,7 @@ const COST_SCAN_INTERVAL_MS = 60000;      // 60s between cost/budget scans (Phas
 const ESCALATION_SCAN_INTERVAL_MS = 60000; // 60s between escalation scans (Phase 3.12)
 const ANALYTICS_SCAN_INTERVAL_MS = 300000; // 5min between analytics aggregation (Phase 3.13)
 const PROGRESS_SCAN_INTERVAL_MS = 60000;  // 60s between progress/artifact scans (Phase 4.7)
+const OVERNIGHT_SCAN_INTERVAL_MS = 60000; // 60s between overnight run checks (Phase 4.8)
 const PRESSURE_NUDGE_THRESHOLD_PCT = 70;  // PM nudges agents above this if no auto-checkpoint
 const MAX_ACTIONS_PER_CYCLE = 10;         // Prevent runaway action storms
 const ACTION_LOG_PATH = '.claude/pilot/state/orchestrator/action-log.jsonl';
@@ -60,6 +62,7 @@ class PmLoop {
     this.lastEscalationScan = 0;
     this.lastAnalyticsScan = 0;
     this.lastProgressScan = 0;
+    this.lastOvernightScan = 0;
     this.actionQueue = [];  // Used by pm-queue.js for persistence
     this.opts = {
       healthScanIntervalMs: opts.healthScanIntervalMs || HEALTH_SCAN_INTERVAL_MS,
@@ -70,6 +73,7 @@ class PmLoop {
       escalationScanIntervalMs: opts.escalationScanIntervalMs || ESCALATION_SCAN_INTERVAL_MS,
       analyticsScanIntervalMs: opts.analyticsScanIntervalMs || ANALYTICS_SCAN_INTERVAL_MS,
       progressScanIntervalMs: opts.progressScanIntervalMs || PROGRESS_SCAN_INTERVAL_MS,
+      overnightScanIntervalMs: opts.overnightScanIntervalMs || OVERNIGHT_SCAN_INTERVAL_MS,
       maxActionsPerCycle: opts.maxActionsPerCycle || MAX_ACTIONS_PER_CYCLE,
       dryRun: opts.dryRun || false,
       ...opts
@@ -196,6 +200,13 @@ class PmLoop {
       results.push(...progressResults);
     }
 
+    // Overnight run scan (Phase 4.8) — check error budgets, stop/report if needed
+    if (now - this.lastOvernightScan >= this.opts.overnightScanIntervalMs) {
+      this.lastOvernightScan = now;
+      const overnightResults = this._overnightScan();
+      results.push(...overnightResults);
+    }
+
     return results;
   }
 
@@ -251,6 +262,11 @@ class PmLoop {
         agent: agentSession,
         task_id: taskId
       });
+
+      // Phase 4.8: Track completion in overnight run
+      if (taskId) {
+        try { overnightMode.recordTaskCompletion(taskId, this.projectRoot); } catch (e) { /* best effort */ }
+      }
 
       // Find next ready task
       const readyTask = this._getNextReadyTask();
@@ -1210,6 +1226,104 @@ class PmLoop {
     }
 
     return results;
+  }
+
+  /**
+   * Phase 4.8: Overnight run monitoring scan.
+   * Checks error budgets, detects completed/failed tasks, triggers report.
+   */
+  _overnightScan() {
+    const results = [];
+
+    try {
+      const run = overnightMode.getActiveRun(this.projectRoot);
+      if (!run) return results;
+
+      // Check total error budget
+      const totalBudget = overnightMode.checkTotalErrorBudget(this.projectRoot);
+      if (totalBudget.exceeded) {
+        this.logAction('overnight_budget_exhausted', {
+          run_id: run.run_id,
+          total_errors: totalBudget.total_errors,
+          max: totalBudget.max_total
+        });
+
+        // End run and generate report
+        overnightMode.endRun(this.projectRoot, run.run_id);
+        this._generateOvernightReport(run.run_id);
+
+        results.push({
+          action: 'overnight_stopped',
+          reason: 'budget_exhausted',
+          total_errors: totalBudget.total_errors
+        });
+        return results;
+      }
+
+      // Check per-task budgets and skip over-budget tasks
+      const overBudget = overnightMode.getOverBudgetTasks(this.projectRoot);
+      for (const taskId of overBudget) {
+        if (!run.tasks_failed.includes(taskId)) {
+          overnightMode.recordTaskFailure(taskId, this.projectRoot);
+          this.logAction('overnight_task_over_budget', {
+            run_id: run.run_id,
+            task_id: taskId
+          });
+          results.push({ action: 'task_over_budget', task_id: taskId });
+        }
+      }
+
+      // Check if all tasks are done (completed + failed + no in_progress)
+      const allDone = (run.tasks_completed || []).length +
+        (run.tasks_failed || []).length;
+      const totalTasks = (run.task_ids || []).length;
+      const inProgress = (run.tasks_in_progress || []).length;
+
+      if (allDone >= totalTasks && inProgress === 0 && totalTasks > 0) {
+        this.logAction('overnight_run_complete', {
+          run_id: run.run_id,
+          completed: (run.tasks_completed || []).length,
+          failed: (run.tasks_failed || []).length
+        });
+
+        overnightMode.endRun(this.projectRoot, run.run_id);
+        this._generateOvernightReport(run.run_id);
+
+        results.push({
+          action: 'overnight_completed',
+          completed: (run.tasks_completed || []).length,
+          failed: (run.tasks_failed || []).length
+        });
+      }
+    } catch (e) {
+      this.logAction('overnight_scan_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  /**
+   * Generate and save overnight report.
+   */
+  _generateOvernightReport(runId) {
+    try {
+      const result = overnightMode.generateReport({
+        projectRoot: this.projectRoot,
+        runId
+      });
+      if (result.success && result.formatted) {
+        // Write markdown report to reports dir
+        const reportDir = path.join(this.projectRoot, overnightMode.REPORT_DIR);
+        if (!fs.existsSync(reportDir)) {
+          fs.mkdirSync(reportDir, { recursive: true });
+        }
+        const mdPath = path.join(reportDir, `${runId}.md`);
+        fs.writeFileSync(mdPath, result.formatted);
+        this.logAction('overnight_report_generated', { path: mdPath });
+      }
+    } catch (e) {
+      this.logAction('overnight_report_error', { error: e.message });
+    }
   }
 
   // ==========================================================================
