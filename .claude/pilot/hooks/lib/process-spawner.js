@@ -19,6 +19,7 @@ const { buildContextCapsule, buildSpawnPrompt, detectResume } = require('./spawn
 let _worktree = null;
 let _agentLogger = null;
 let _orchestrator = null;
+let _respawnTracker = null;
 
 function getWorktree() {
   if (!_worktree) _worktree = require('./worktree');
@@ -33,6 +34,11 @@ function getAgentLogger() {
 function getOrchestrator() {
   if (!_orchestrator) _orchestrator = require('./orchestrator');
   return _orchestrator;
+}
+
+function getRespawnTracker() {
+  if (!_respawnTracker) _respawnTracker = require('./respawn-tracker');
+  return _respawnTracker;
 }
 
 // ============================================================================
@@ -152,6 +158,15 @@ function spawnAgent(task, options = {}) {
   if (resumeInfo.previousSessionId) {
     env.PILOT_RESUME_SESSION = resumeInfo.previousSessionId;
   }
+
+  // Phase 4.3: Pass respawn count to agent
+  try {
+    const rt = getRespawnTracker();
+    const count = rt.getRespawnCount(task.id, projectRoot);
+    if (count > 0) {
+      env.PILOT_RESPAWN_COUNT = String(count);
+    }
+  } catch (e) { /* best effort */ }
 
   if (worktreeInfo && worktreeInfo.path) {
     env.PILOT_WORKTREE_PATH = worktreeInfo.path;
@@ -283,6 +298,20 @@ function _writeContextFile(taskId, capsule, projectRoot) {
   const safeId = taskId.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
   const filePath = path.join(dir, `${safeId}.json`);
 
+  // Phase 4.3: Include respawn tracking info
+  let respawnInfo = null;
+  try {
+    const rt = getRespawnTracker();
+    const state = rt.loadRespawnState(taskId, projectRoot);
+    if (state) {
+      respawnInfo = {
+        respawn_count: state.respawn_count,
+        last_respawn_at: state.last_respawn_at,
+        max_respawns: rt.DEFAULT_MAX_RESPAWNS
+      };
+    }
+  } catch (e) { /* best effort */ }
+
   const contextData = {
     task: capsule.task,
     agent_type: capsule.agent_type,
@@ -292,6 +321,7 @@ function _writeContextFile(taskId, capsule, projectRoot) {
     has_research: !!capsule.research,
     related_agents: capsule.related_agents,
     related_decisions: capsule.related_decisions,
+    respawn: respawnInfo,
     created_at: new Date().toISOString()
   };
 
