@@ -1085,7 +1085,72 @@ function cleanupStaleSessions() {
     // Messaging module not available yet, skip
   }
 
+  // Phase 4.1: Archive old ended sessions to keep state dir clean
+  try {
+    const archived = archiveSessions();
+    if (archived > 0) {
+      logEvent({ type: 'sessions_archived', count: archived });
+    }
+  } catch (e) {
+    // Best effort archival
+  }
+
   return cleaned;
+}
+
+// =============================================================================
+// SESSION ARCHIVAL (Phase 4.1)
+// =============================================================================
+
+const SESSION_ARCHIVE_DIR = '.claude/pilot/state/sessions/archive';
+const ARCHIVE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Archive ended sessions that are older than the threshold.
+ * Moves session state files from sessions/ to sessions/archive/.
+ * Keeps the active sessions directory clean.
+ *
+ * @param {number} [thresholdMs] - Age threshold in ms (default 24h)
+ * @returns {number} Number of sessions archived
+ */
+function archiveSessions(thresholdMs = ARCHIVE_THRESHOLD_MS) {
+  const stateDir = getSessionStateDir();
+  const archiveDir = path.join(process.cwd(), SESSION_ARCHIVE_DIR);
+  const now = Date.now();
+  let archived = 0;
+
+  if (!fs.existsSync(stateDir)) return 0;
+
+  // Ensure archive directory exists
+  if (!fs.existsSync(archiveDir)) {
+    fs.mkdirSync(archiveDir, { recursive: true });
+  }
+
+  const files = fs.readdirSync(stateDir).filter(f => f.endsWith('.json'));
+
+  for (const file of files) {
+    try {
+      const filePath = path.join(stateDir, file);
+      const content = fs.readFileSync(filePath, 'utf8');
+      const sessionData = JSON.parse(content);
+
+      // Only archive ended sessions
+      if (sessionData.status !== 'ended') continue;
+
+      // Check age — must have ended_at and be older than threshold
+      const endedAt = sessionData.ended_at ? new Date(sessionData.ended_at).getTime() : 0;
+      if (!endedAt || (now - endedAt) < thresholdMs) continue;
+
+      // Move to archive
+      const archivePath = path.join(archiveDir, file);
+      fs.renameSync(filePath, archivePath);
+      archived++;
+    } catch (e) {
+      // Skip files that can't be read/moved
+    }
+  }
+
+  return archived;
 }
 
 // =============================================================================
@@ -1712,5 +1777,7 @@ module.exports = {
   // Recovery (Phase 3.8)
   recoverSession,
   // Session resolution (multi-agent fix)
-  resolveCurrentSession
+  resolveCurrentSession,
+  // Session archival (Phase 4.1)
+  archiveSessions
 };

@@ -522,6 +522,9 @@ class PmDaemon {
           code,
           signal
         });
+
+        // Phase 4.1: Mark the agent's session as ended
+        this._onAgentExit(child.pid, task.id, code, signal);
       });
 
       this.lastSpawnTime = Date.now();
@@ -660,6 +663,55 @@ class PmDaemon {
 
     for (const pid of toRemove) {
       this.spawnedAgents.delete(pid);
+    }
+  }
+
+  // ==========================================================================
+  // SESSION LIFECYCLE (Phase 4.1)
+  // ==========================================================================
+
+  /**
+   * Handle agent process exit — mark the agent's session as ended.
+   * Finds the session associated with the given PID/taskId and ends it cleanly.
+   *
+   * @param {number} pid - The exited process PID
+   * @param {string} taskId - The task the agent was working on
+   * @param {number|null} code - Exit code
+   * @param {string|null} signal - Signal that killed the process
+   */
+  _onAgentExit(pid, taskId, code, signal) {
+    try {
+      const allSessions = session.getAllSessionStates();
+      // Find the session owned by this PID (check parent_pid since session hooks
+      // store the parent claude PID, which is the PID we spawned)
+      const agentSession = allSessions.find(s =>
+        s.status === 'active' && (s.parent_pid === pid || s.pid === pid)
+      );
+
+      if (agentSession) {
+        const reason = signal ? `signal_${signal}` : (code === 0 ? 'completed' : `exit_code_${code}`);
+        session.endSession(agentSession.session_id, reason);
+        this.log.info('Agent session ended on process exit', {
+          session_id: agentSession.session_id,
+          pid,
+          task_id: taskId,
+          reason
+        });
+      } else {
+        // No session found — agent may not have registered yet (very fast exit)
+        this.log.warn('No session found for exited agent process', {
+          pid,
+          task_id: taskId,
+          code,
+          signal
+        });
+      }
+    } catch (e) {
+      this.log.error('Failed to end agent session on exit', {
+        pid,
+        task_id: taskId,
+        error: e.message
+      });
     }
   }
 
