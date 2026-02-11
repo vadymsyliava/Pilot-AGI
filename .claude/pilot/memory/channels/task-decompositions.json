@@ -1,0 +1,201 @@
+{
+  "channel": "task-decompositions",
+  "version": 2,
+  "publishedBy": "pm",
+  "sessionId": null,
+  "publishedAt": "2026-02-11T04:20:59.298Z",
+  "summary": "Decomposed test-big into 6 subtasks",
+  "data": {
+    "decompositions": [
+      {
+        "task_id": "test-task-123",
+        "ts": "2026-02-11T04:20:59.290Z",
+        "subtask_count": 2,
+        "subtasks": [
+          {
+            "id": "st-001",
+            "title": "Test",
+            "agent": "backend",
+            "priority": "high",
+            "depends_on": [],
+            "wave": 1
+          },
+          {
+            "id": "st-002",
+            "title": "Test 2",
+            "agent": "frontend",
+            "priority": "medium",
+            "depends_on": [
+              "st-001"
+            ],
+            "wave": 2
+          }
+        ],
+        "dag": {
+          "nodes": [
+            "st-001",
+            "st-002"
+          ],
+          "edges": [
+            [
+              "st-001",
+              "st-002"
+            ]
+          ],
+          "waves": [
+            [
+              "st-001"
+            ],
+            [
+              "st-002"
+            ]
+          ],
+          "hasCycle": false
+        }
+      },
+      {
+        "task_id": "test-big",
+        "ts": "2026-02-11T04:20:59.297Z",
+        "subtask_count": 6,
+        "subtasks": [
+          {
+            "id": "st-001",
+            "title": "Define types and interfaces for Build authentication system with OAuth integration",
+            "agent": "backend",
+            "priority": "high",
+            "depends_on": [],
+            "wave": 1
+          },
+          {
+            "id": "st-002",
+            "title": "Create layout/structure for Build authentication system with OAuth integration",
+            "agent": "frontend",
+            "priority": "high",
+            "depends_on": [],
+            "wave": 1
+          },
+          {
+            "id": "st-003",
+            "title": "Create component 1 for Build authentication system with OAuth integration",
+            "agent": "frontend",
+            "priority": "medium",
+            "depends_on": [
+              "st-001"
+            ],
+            "wave": 2
+          },
+          {
+            "id": "st-004",
+            "title": "Create API endpoint 1 for Build authentication system with OAuth integration",
+            "agent": "backend",
+            "priority": "medium",
+            "depends_on": [
+              "st-001"
+            ],
+            "wave": 2
+          },
+          {
+            "id": "st-005",
+            "title": "Integrate Build authentication system with OAuth integration components",
+            "agent": "frontend",
+            "priority": "high",
+            "depends_on": [
+              "st-001",
+              "st-002",
+              "st-003",
+              "st-004"
+            ],
+            "wave": 3
+          },
+          {
+            "id": "st-006",
+            "title": "Write tests for Build authentication system with OAuth integration",
+            "agent": "testing",
+            "priority": "medium",
+            "depends_on": [
+              "st-001",
+              "st-002",
+              "st-003",
+              "st-004",
+              "st-005"
+            ],
+            "wave": 4
+          }
+        ],
+        "dag": {
+          "nodes": [
+            "st-001",
+            "st-002",
+            "st-003",
+            "st-004",
+            "st-005",
+            "st-006"
+          ],
+          "edges": [
+            [
+              "st-001",
+              "st-003"
+            ],
+            [
+              "st-001",
+              "st-004"
+            ],
+            [
+              "st-001",
+              "st-005"
+            ],
+            [
+              "st-002",
+              "st-005"
+            ],
+            [
+              "st-003",
+              "st-005"
+            ],
+            [
+              "st-004",
+              "st-005"
+            ],
+            [
+              "st-001",
+              "st-006"
+            ],
+            [
+              "st-002",
+              "st-006"
+            ],
+            [
+              "st-003",
+              "st-006"
+            ],
+            [
+              "st-004",
+              "st-006"
+            ],
+            [
+              "st-005",
+              "st-006"
+            ]
+          ],
+          "waves": [
+            [
+              "st-001",
+              "st-002"
+            ],
+            [
+              "st-003",
+              "st-004"
+            ],
+            [
+              "st-005"
+            ],
+            [
+              "st-006"
+            ]
+          ],
+          "hasCycle": false
+        }
+      }
+    ]
+  }
+}
