@@ -36,6 +36,7 @@ const PRESSURE_SCAN_INTERVAL_MS = 60000;  // 60s between pressure scans (Phase 3
 const COST_SCAN_INTERVAL_MS = 60000;      // 60s between cost/budget scans (Phase 3.11)
 const ESCALATION_SCAN_INTERVAL_MS = 60000; // 60s between escalation scans (Phase 3.12)
 const ANALYTICS_SCAN_INTERVAL_MS = 300000; // 5min between analytics aggregation (Phase 3.13)
+const PROGRESS_SCAN_INTERVAL_MS = 60000;  // 60s between progress/artifact scans (Phase 4.7)
 const PRESSURE_NUDGE_THRESHOLD_PCT = 70;  // PM nudges agents above this if no auto-checkpoint
 const MAX_ACTIONS_PER_CYCLE = 10;         // Prevent runaway action storms
 const ACTION_LOG_PATH = '.claude/pilot/state/orchestrator/action-log.jsonl';
@@ -58,6 +59,7 @@ class PmLoop {
     this.lastRecoveryScan = 0;
     this.lastEscalationScan = 0;
     this.lastAnalyticsScan = 0;
+    this.lastProgressScan = 0;
     this.actionQueue = [];  // Used by pm-queue.js for persistence
     this.opts = {
       healthScanIntervalMs: opts.healthScanIntervalMs || HEALTH_SCAN_INTERVAL_MS,
@@ -67,6 +69,7 @@ class PmLoop {
       costScanIntervalMs: opts.costScanIntervalMs || COST_SCAN_INTERVAL_MS,
       escalationScanIntervalMs: opts.escalationScanIntervalMs || ESCALATION_SCAN_INTERVAL_MS,
       analyticsScanIntervalMs: opts.analyticsScanIntervalMs || ANALYTICS_SCAN_INTERVAL_MS,
+      progressScanIntervalMs: opts.progressScanIntervalMs || PROGRESS_SCAN_INTERVAL_MS,
       maxActionsPerCycle: opts.maxActionsPerCycle || MAX_ACTIONS_PER_CYCLE,
       dryRun: opts.dryRun || false,
       ...opts
@@ -184,6 +187,13 @@ class PmLoop {
       this.lastAnalyticsScan = now;
       const analyticsResults = this._analyticsScan();
       results.push(...analyticsResults);
+    }
+
+    // Progress/artifact scan (Phase 4.7) — detect blocked tasks, aggregate progress
+    if (now - this.lastProgressScan >= this.opts.progressScanIntervalMs) {
+      this.lastProgressScan = now;
+      const progressResults = this._progressScan();
+      results.push(...progressResults);
     }
 
     return results;
@@ -1144,6 +1154,59 @@ class PmLoop {
       }
     } catch (e) {
       this.logAction('analytics_scan_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  /**
+   * Progress/artifact scan (Phase 4.7)
+   * Detects tasks blocked on missing artifacts and aggregates progress.
+   */
+  _progressScan() {
+    const results = [];
+
+    try {
+      const artifactRegistry = require('./artifact-registry');
+      const activeSessions = session.getActiveSessions();
+
+      // Check each active agent's task for artifact blocking
+      for (const sess of activeSessions) {
+        if (!sess.claimed_task) continue;
+        const taskId = sess.claimed_task;
+
+        // Check progress
+        const progress = artifactRegistry.getProgress(taskId, this.projectRoot);
+        if (progress.length > 0) {
+          const latest = progress[progress.length - 1];
+          this.logAction('task_progress', {
+            task_id: taskId,
+            session_id: sess.session_id,
+            latest_step: latest.step,
+            latest_status: latest.status,
+            total_entries: progress.length
+          });
+        }
+      }
+
+      // Check ready tasks for artifact blocking
+      const readyTasks = this._getAllReadyTasks();
+      for (const task of readyTasks) {
+        const blocking = artifactRegistry.getBlockingArtifacts(task.id, this.projectRoot);
+        if (blocking.length > 0) {
+          this.logAction('task_artifact_blocked', {
+            task_id: task.id,
+            blocking: blocking.map(a => `${a.taskId}:${a.name}`)
+          });
+          results.push({
+            action: 'artifact_blocked',
+            task_id: task.id,
+            blocking_count: blocking.length
+          });
+        }
+      }
+    } catch (e) {
+      this.logAction('progress_scan_error', { error: e.message });
     }
 
     return results;

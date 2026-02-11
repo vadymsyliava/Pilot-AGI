@@ -22,6 +22,7 @@ let _costTracker = null;
 let _pmResearch = null;
 let _memory = null;
 let _policy = null;
+let _artifactRegistry = null;
 
 function getSession() {
   if (!_session) _session = require('./session');
@@ -52,6 +53,13 @@ function getMemory() {
     try { _memory = require('./memory'); } catch (e) { _memory = null; }
   }
   return _memory;
+}
+
+function getArtifactRegistry() {
+  if (!_artifactRegistry) {
+    try { _artifactRegistry = require('./artifact-registry'); } catch (e) { _artifactRegistry = null; }
+  }
+  return _artifactRegistry;
 }
 
 function getPolicy() {
@@ -127,6 +135,9 @@ function loadSchedulerConfig() {
  * @returns {{ ready: boolean, blocking: string[] }}
  */
 function checkDependencies(taskId, projectRoot) {
+  let blocking = [];
+
+  // 1. Check bd task graph dependencies
   try {
     const output = execFileSync('bd', ['deps', taskId, '--json'], {
       cwd: projectRoot,
@@ -137,7 +148,6 @@ function checkDependencies(taskId, projectRoot) {
     const deps = JSON.parse(output);
 
     // Filter to only dependency edges where this task depends on another
-    const blocking = [];
     if (Array.isArray(deps)) {
       for (const dep of deps) {
         if (dep.dependent === taskId && dep.status !== 'closed') {
@@ -145,12 +155,23 @@ function checkDependencies(taskId, projectRoot) {
         }
       }
     }
-
-    return { ready: blocking.length === 0, blocking };
   } catch (e) {
     // If bd deps fails, assume ready (don't block on tooling errors)
-    return { ready: true, blocking: [] };
   }
+
+  // 2. Check artifact dependencies (Phase 4.7)
+  let blockingArtifacts = [];
+  const artRegistry = getArtifactRegistry();
+  if (artRegistry) {
+    try {
+      blockingArtifacts = artRegistry.getBlockingArtifacts(taskId, projectRoot);
+    } catch (e) {
+      // Don't block on artifact registry errors
+    }
+  }
+
+  const ready = blocking.length === 0 && blockingArtifacts.length === 0;
+  return { ready, blocking, blocking_artifacts: blockingArtifacts };
 }
 
 // ============================================================================

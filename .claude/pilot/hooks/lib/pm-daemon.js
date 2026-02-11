@@ -31,6 +31,7 @@ const agentLogger = require('./agent-logger');
 const processSpawner = require('./process-spawner');
 const taskHandoff = require('./task-handoff');
 const respawnTracker = require('./respawn-tracker');
+const artifactRegistry = require('./artifact-registry');
 
 // ============================================================================
 // CONSTANTS
@@ -446,6 +447,21 @@ class PmDaemon {
    * @returns {{ success: boolean, pid?: number }}
    */
   _spawnAgent(task) {
+    // Phase 4.7: Check artifact dependencies before spawning
+    try {
+      const blockingArtifacts = artifactRegistry.getBlockingArtifacts(task.id, this.projectRoot);
+      if (blockingArtifacts.length > 0) {
+        this.log.info('Spawn blocked by missing artifacts', {
+          task_id: task.id,
+          blocking: blockingArtifacts.map(a => `${a.taskId}:${a.name}`)
+        });
+        return { success: false, reason: 'artifact_blocked', blocking_artifacts: blockingArtifacts };
+      }
+    } catch (e) {
+      // Don't block spawn on artifact registry errors
+      this.log.warn('Artifact check failed, proceeding with spawn', { task_id: task.id, error: e.message });
+    }
+
     // Determine agent type from skill registry
     const agentType = this._resolveAgentType(task);
 
