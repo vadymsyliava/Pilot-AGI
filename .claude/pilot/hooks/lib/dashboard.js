@@ -159,15 +159,32 @@ function collect() {
   // --- Cost Estimates (per active agent) ---
   if (pressure) {
     try {
+      const costTracker = loadModule('cost-tracker');
       for (const agent of result.agents) {
         const cost = pressure.getCostEstimate(agent.session_id);
-        result.costs.push({
+        const entry = {
           session_id: agent.session_id,
           claimed_task: agent.claimed_task,
           tokens_estimate: cost.tokens_estimate || 0,
           cost_usd: cost.cost_usd || 0,
           calls: cost.calls || 0
-        });
+        };
+
+        // Enrich with per-task cost and budget status (Phase 3.11)
+        if (costTracker && agent.claimed_task) {
+          try {
+            const taskCost = costTracker.getTaskCost(agent.claimed_task);
+            const budget = costTracker.checkBudget(agent.session_id, agent.claimed_task);
+            entry.task_tokens = taskCost.total_tokens;
+            entry.task_cost_usd = taskCost.cost_usd;
+            entry.budget_status = budget.status;
+            entry.budget_details = budget.details;
+          } catch (e) {
+            // partial data is fine
+          }
+        }
+
+        result.costs.push(entry);
       }
     } catch (e) {
       // partial data is fine

@@ -391,7 +391,7 @@ function loadSkillRegistry() {
  * @param {object} registry - Skill registry data
  * @returns {number} Score between 0 and 1
  */
-function scoreAgentForTask(role, task, registry) {
+function scoreAgentForTask(role, task, registry, agentSessionId) {
   if (!registry || !registry.roles || !registry.roles[role]) return 0;
 
   const roleData = registry.roles[role];
@@ -428,11 +428,31 @@ function scoreAgentForTask(role, task, registry) {
   const areaHits = areas.filter(a => text.includes(a.toLowerCase())).length;
   const areaScore = areas.length > 0 ? Math.min(areaHits / 2, 1) : 0;
 
-  return (
+  let baseScore = (
     keywordScore * weights.keyword_match +
     fileScore * weights.file_pattern_match +
     areaScore * weights.area_match
   );
+
+  // Phase 3.11: Cost-efficiency factor — prefer agents with lower token usage
+  if (agentSessionId) {
+    try {
+      const costTracker = require('./cost-tracker');
+      const efficiency = costTracker.getAgentEfficiency(agentSessionId);
+      if (efficiency.avg_tokens_per_task !== null && efficiency.tasks_completed >= 2) {
+        // Normalize: lower avg_tokens_per_task → higher efficiency score
+        // Cap at 200k tokens/task as "worst case", anything below 50k is great
+        const normalized = Math.max(0, 1 - (efficiency.avg_tokens_per_task / 200000));
+        const costWeight = weights.cost_efficiency || 0.10;
+        // Blend: reduce base score proportionally, add cost factor
+        baseScore = baseScore * (1 - costWeight) + normalized * costWeight;
+      }
+    } catch (e) {
+      // Cost tracker not available — skip efficiency scoring
+    }
+  }
+
+  return baseScore;
 }
 
 /**
@@ -457,7 +477,7 @@ function routeTaskToAgent(task, excludeSessionId = null) {
 
   const scores = available.map(agent => ({
     ...agent,
-    score: scoreAgentForTask(agent.role, task, registry)
+    score: scoreAgentForTask(agent.role, task, registry, agent.session_id)
   })).sort((a, b) => b.score - a.score);
 
   const best = scores[0];

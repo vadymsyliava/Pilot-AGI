@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Cost Tracking Channel",
+  "description": "Aggregated cost data published by PM loop's cost scan (Phase 3.11)",
+  "type": "object",
+  "required": ["daily_summary", "published_at"],
+  "properties": {
+    "daily_summary": {
+      "type": "object",
+      "required": ["date", "total_tokens", "cost_usd"],
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "total_tokens": { "type": "number" },
+        "cost_usd": { "type": "number" },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "session_id": { "type": "string" },
+              "tokens": { "type": "number" },
+              "calls": { "type": "number" }
+            }
+          }
+        }
+      }
+    },
+    "task_costs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "total_tokens"],
+        "properties": {
+          "task_id": { "type": "string" },
+          "total_tokens": { "type": "number" },
+          "cost_usd": { "type": "number" },
+          "total_calls": { "type": "number" }
+        }
+      }
+    },
+    "published_at": { "type": "string", "format": "date-time" }
+  }
+}
