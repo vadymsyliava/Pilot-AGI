@@ -62,6 +62,7 @@ function collect() {
     drift: [],
     pressure: [],
     costs: [],
+    analytics: null,
     events: [],
     collected_at: new Date().toISOString()
   };
@@ -189,6 +190,16 @@ function collect() {
     } catch (e) {
       // partial data is fine
     }
+  }
+
+  // --- Performance Analytics (Phase 3.13) ---
+  try {
+    const analytics = loadModule('analytics');
+    if (analytics) {
+      result.analytics = analytics.getSummary();
+    }
+  } catch (e) {
+    // partial data is fine
   }
 
   return result;
@@ -321,6 +332,25 @@ function getAlerts(data) {
           warn_threshold: costPolicy.warn_threshold_tokens,
           block_threshold: costPolicy.block_threshold_tokens
         }
+      });
+    }
+  }
+
+  // --- Performance Analytics Bottlenecks (Phase 3.13) ---
+  if (data.analytics) {
+    if (data.analytics.bottleneck_assessment === 'critical') {
+      alerts.push({
+        severity: SEVERITY.CRITICAL,
+        type: 'bottleneck_critical',
+        message: `System bottleneck: ${data.analytics.queue_depth || 0} tasks queued, assessment is critical`,
+        details: data.analytics
+      });
+    } else if (data.analytics.bottleneck_assessment === 'degraded') {
+      alerts.push({
+        severity: SEVERITY.WARNING,
+        type: 'bottleneck_degraded',
+        message: `Performance degraded: ${data.analytics.queue_depth || 0} tasks queued`,
+        details: data.analytics
       });
     }
   }
