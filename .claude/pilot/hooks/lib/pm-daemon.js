@@ -29,6 +29,7 @@ const { loadPolicy } = require('./policy');
 const pmDecisions = require('./pm-decisions');
 const agentLogger = require('./agent-logger');
 const processSpawner = require('./process-spawner');
+const taskHandoff = require('./task-handoff');
 
 // ============================================================================
 // CONSTANTS
@@ -641,8 +642,8 @@ class PmDaemon {
   // ==========================================================================
 
   /**
-   * Handle agent process exit — mark the agent's session as ended.
-   * Finds the session associated with the given PID/taskId and ends it cleanly.
+   * Handle agent process exit — mark the agent's session as ended,
+   * run post-exit validation (Phase 4.6).
    *
    * @param {number} pid - The exited process PID
    * @param {string} taskId - The task the agent was working on
@@ -674,6 +675,24 @@ class PmDaemon {
           task_id: taskId,
           code,
           signal
+        });
+      }
+
+      // Phase 4.6: Post-exit validation
+      try {
+        const validation = taskHandoff.postExitValidation(taskId, this.projectRoot);
+        if (!validation.valid) {
+          this.log.warn('Post-exit validation issues', {
+            task_id: taskId,
+            issues: validation.issues
+          });
+        } else {
+          this.log.info('Post-exit validation passed', { task_id: taskId });
+        }
+      } catch (e) {
+        this.log.debug('Post-exit validation skipped', {
+          task_id: taskId,
+          error: e.message
         });
       }
     } catch (e) {
