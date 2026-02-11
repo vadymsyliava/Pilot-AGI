@@ -29,6 +29,8 @@ const messaging = require('./messaging');
 const HEALTH_SCAN_INTERVAL_MS = 30000;    // 30s between health scans
 const TASK_SCAN_INTERVAL_MS = 10000;      // 10s between task assignment scans
 const DRIFT_SCAN_INTERVAL_MS = 120000;    // 2min between drift scans
+const PRESSURE_SCAN_INTERVAL_MS = 60000;  // 60s between pressure scans (Phase 3.5)
+const PRESSURE_NUDGE_THRESHOLD_PCT = 70;  // PM nudges agents above this if no auto-checkpoint
 const MAX_ACTIONS_PER_CYCLE = 10;         // Prevent runaway action storms
 const ACTION_LOG_PATH = '.claude/pilot/state/orchestrator/action-log.jsonl';
 
@@ -45,11 +47,13 @@ class PmLoop {
     this.lastHealthScan = 0;
     this.lastTaskScan = 0;
     this.lastDriftScan = 0;
+    this.lastPressureScan = 0;
     this.actionQueue = [];  // Used by pm-queue.js for persistence
     this.opts = {
       healthScanIntervalMs: opts.healthScanIntervalMs || HEALTH_SCAN_INTERVAL_MS,
       taskScanIntervalMs: opts.taskScanIntervalMs || TASK_SCAN_INTERVAL_MS,
       driftScanIntervalMs: opts.driftScanIntervalMs || DRIFT_SCAN_INTERVAL_MS,
+      pressureScanIntervalMs: opts.pressureScanIntervalMs || PRESSURE_SCAN_INTERVAL_MS,
       maxActionsPerCycle: opts.maxActionsPerCycle || MAX_ACTIONS_PER_CYCLE,
       dryRun: opts.dryRun || false,
       ...opts
@@ -132,6 +136,13 @@ class PmLoop {
       this.lastDriftScan = now;
       const driftResults = this._driftScan();
       results.push(...driftResults);
+    }
+
+    // Pressure scan (Phase 3.5)
+    if (now - this.lastPressureScan >= this.opts.pressureScanIntervalMs) {
+      this.lastPressureScan = now;
+      const pressureResults = this._pressureScan();
+      results.push(...pressureResults);
     }
 
     return results;
@@ -441,47 +452,79 @@ class PmLoop {
     const results = [];
 
     try {
-      const activeSessions = session.getActiveSessions();
-      const idleAgents = activeSessions.filter(s =>
-        !s.claimed_task && s.status === 'active'
-      );
+      // Collect all ready tasks first
+      const readyTasks = [];
+      let task = this._getNextReadyTask();
+      while (task) {
+        readyTasks.push(task);
+        task = this._getNextReadyTask();
+      }
+      if (readyTasks.length === 0) return results;
 
-      if (idleAgents.length === 0) return results;
+      const assignedAgents = new Set();
 
-      for (const agent of idleAgents) {
-        const readyTask = this._getNextReadyTask();
-        if (!readyTask) break;
+      for (const readyTask of readyTasks) {
+        // Use skill-based routing to find best agent for this task
+        const routing = orchestrator.routeTaskToAgent(readyTask, this.pmSessionId);
+
+        let targetAgent = null;
+
+        if (routing.agent && !assignedAgents.has(routing.agent.session_id)) {
+          // Skill-matched agent available
+          targetAgent = routing.agent;
+        } else {
+          // Fallback: find any idle agent not yet assigned this scan
+          const activeSessions = session.getActiveSessions();
+          const fallback = activeSessions.find(s =>
+            !s.claimed_task && s.status === 'active' && !assignedAgents.has(s.session_id)
+          );
+          if (fallback) {
+            targetAgent = { session_id: fallback.session_id, role: fallback.role, agent_name: fallback.agent_name };
+          }
+        }
+
+        if (!targetAgent) continue;
 
         if (this.opts.dryRun) {
           results.push({
             action: 'task_scan',
             dry_run: true,
             would_assign: readyTask.id,
-            to: agent.session_id
+            to: targetAgent.session_id,
+            match_reason: routing.reason || 'fallback_idle_agent',
+            confidence: routing.confidence || 0
           });
+          assignedAgents.add(targetAgent.session_id);
           continue;
         }
 
         const assignResult = orchestrator.assignTask(
           readyTask.id,
-          agent.session_id,
+          targetAgent.session_id,
           this.pmSessionId,
           {
             title: readyTask.title,
             description: readyTask.description,
-            reason: 'auto_assigned_idle_agent'
+            reason: routing.agent ? `skill_match: ${routing.reason}` : 'fallback_idle_agent'
           }
         );
 
         if (assignResult.success) {
+          assignedAgents.add(targetAgent.session_id);
           this.logAction('auto_assigned', {
             task_id: readyTask.id,
-            agent: agent.session_id
+            agent: targetAgent.session_id,
+            agent_name: targetAgent.agent_name,
+            role: targetAgent.role,
+            match_reason: routing.reason || 'fallback',
+            confidence: routing.confidence || 0
           });
           results.push({
             action: 'task_scan',
             assigned: readyTask.id,
-            to: agent.session_id
+            to: targetAgent.session_id,
+            agent_name: targetAgent.agent_name,
+            match_reason: routing.reason || 'fallback'
           });
         }
       }
@@ -539,6 +582,81 @@ class PmLoop {
       }
     } catch (e) {
       this.logAction('drift_scan_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  /**
+   * Pressure scan (Phase 3.5): check all agents' context pressure.
+   * If any agent is above PRESSURE_NUDGE_THRESHOLD_PCT and hasn't
+   * auto-checkpointed, send a nudge message via the bus.
+   */
+  _pressureScan() {
+    const results = [];
+
+    try {
+      const pressure = require('./pressure');
+      const activeSessions = session.getActiveSessions();
+
+      for (const agent of activeSessions) {
+        const sid = agent.session_id;
+        if (!sid) continue;
+
+        const stats = pressure.getPressure(sid);
+        if (stats.pct_estimate >= PRESSURE_NUDGE_THRESHOLD_PCT) {
+          // Check if this is the PM itself
+          const isPmSelf = sid === this.pmSessionId;
+
+          this.logAction('pressure_alert', {
+            agent: sid,
+            pct: stats.pct_estimate,
+            calls: stats.calls,
+            bytes: stats.bytes,
+            is_pm: isPmSelf
+          });
+
+          if (isPmSelf) {
+            // PM self-management: checkpoint own state before compact
+            if (!this.opts.dryRun) {
+              const cpResult = orchestrator.pmCheckpointSelf(this.pmSessionId);
+              this.logAction('pm_self_checkpoint', {
+                success: cpResult.success,
+                version: cpResult.version
+              });
+            }
+
+            results.push({
+              action: 'pressure_scan',
+              agent: sid,
+              pressure_pct: stats.pct_estimate,
+              pm_self_checkpoint: true
+            });
+          } else {
+            // Send nudge message to the agent
+            if (!this.opts.dryRun) {
+              messaging.sendNotification(
+                this.pmSessionId,
+                sid,
+                'pressure_alert',
+                {
+                  pressure_pct: stats.pct_estimate,
+                  message: `Context pressure at ${stats.pct_estimate}%. Save checkpoint and compact to avoid context loss.`
+                }
+              );
+            }
+
+            results.push({
+              action: 'pressure_scan',
+              agent: sid,
+              pressure_pct: stats.pct_estimate,
+              nudged: !this.opts.dryRun
+            });
+          }
+        }
+      }
+    } catch (e) {
+      this.logAction('pressure_scan_error', { error: e.message });
     }
 
     return results;
@@ -636,7 +754,8 @@ class PmLoop {
       queue_size: this.actionQueue.length,
       last_health_scan: this.lastHealthScan ? new Date(this.lastHealthScan).toISOString() : null,
       last_task_scan: this.lastTaskScan ? new Date(this.lastTaskScan).toISOString() : null,
-      last_drift_scan: this.lastDriftScan ? new Date(this.lastDriftScan).toISOString() : null
+      last_drift_scan: this.lastDriftScan ? new Date(this.lastDriftScan).toISOString() : null,
+      last_pressure_scan: this.lastPressureScan ? new Date(this.lastPressureScan).toISOString() : null
     };
   }
 }

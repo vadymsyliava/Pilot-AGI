@@ -369,6 +369,115 @@ function getWorktreeModifiedFiles(taskId, sessionState) {
 // TASK ASSIGNMENT
 // ============================================================================
 
+const SKILL_REGISTRY_PATH = '.claude/pilot/config/skill-registry.json';
+
+/**
+ * Load the skill registry for task-to-agent scoring.
+ */
+function loadSkillRegistry() {
+  try {
+    const regPath = path.join(process.cwd(), SKILL_REGISTRY_PATH);
+    return JSON.parse(fs.readFileSync(regPath, 'utf8'));
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Score how well an agent matches a task based on skill registry.
+ *
+ * @param {string} role - Agent role (e.g., 'frontend')
+ * @param {object} task - Task with title, description, labels, files
+ * @param {object} registry - Skill registry data
+ * @returns {number} Score between 0 and 1
+ */
+function scoreAgentForTask(role, task, registry) {
+  if (!registry || !registry.roles || !registry.roles[role]) return 0;
+
+  const roleData = registry.roles[role];
+  const weights = registry.scoring?.weights || {
+    keyword_match: 0.35,
+    file_pattern_match: 0.30,
+    area_match: 0.20,
+    affinity_bonus: 0.15
+  };
+
+  const text = `${task.title || ''} ${task.description || ''} ${(task.labels || []).join(' ')}`.toLowerCase();
+  const files = task.files || [];
+
+  // Keyword match score
+  const keywords = roleData.task_keywords || [];
+  const keywordHits = keywords.filter(kw => text.includes(kw.toLowerCase())).length;
+  const keywordScore = keywords.length > 0 ? Math.min(keywordHits / 3, 1) : 0;
+
+  // File pattern match score
+  const filePatterns = roleData.file_patterns || [];
+  let fileScore = 0;
+  if (files.length > 0 && filePatterns.length > 0) {
+    const fileHits = files.filter(f =>
+      filePatterns.some(p => {
+        const regex = new RegExp('^' + p.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*') + '$');
+        return regex.test(f);
+      })
+    ).length;
+    fileScore = Math.min(fileHits / files.length, 1);
+  }
+
+  // Area match score
+  const areas = roleData.areas || [];
+  const areaHits = areas.filter(a => text.includes(a.toLowerCase())).length;
+  const areaScore = areas.length > 0 ? Math.min(areaHits / 2, 1) : 0;
+
+  return (
+    keywordScore * weights.keyword_match +
+    fileScore * weights.file_pattern_match +
+    areaScore * weights.area_match
+  );
+}
+
+/**
+ * Route a task to the best available agent based on skills.
+ *
+ * @param {object} task - Task object with title, description, labels, files
+ * @param {string} [excludeSessionId] - Session to exclude (e.g., PM itself)
+ * @returns {{ agent: object|null, scores: Array, confidence: number, reason: string }}
+ */
+function routeTaskToAgent(task, excludeSessionId = null) {
+  const registry = loadSkillRegistry();
+  if (!registry) {
+    return { agent: null, scores: [], confidence: 0, reason: 'No skill registry found' };
+  }
+
+  const available = session.getAvailableAgents(excludeSessionId);
+  if (available.length === 0) {
+    return { agent: null, scores: [], confidence: 0, reason: 'No available agents' };
+  }
+
+  const threshold = registry.scoring?.confidence_threshold || 0.3;
+
+  const scores = available.map(agent => ({
+    ...agent,
+    score: scoreAgentForTask(agent.role, task, registry)
+  })).sort((a, b) => b.score - a.score);
+
+  const best = scores[0];
+  if (best.score < threshold) {
+    return {
+      agent: null,
+      scores,
+      confidence: best.score,
+      reason: `Best match ${best.agent_name} (${best.role}) scored ${best.score.toFixed(2)}, below threshold ${threshold}`
+    };
+  }
+
+  return {
+    agent: best,
+    scores,
+    confidence: best.score,
+    reason: `Best match: ${best.agent_name} (${best.role}) scored ${best.score.toFixed(2)}`
+  };
+}
+
 /**
  * Assign a task to a specific agent session.
  * Sends a task_delegate message and optionally updates bd.
@@ -877,6 +986,72 @@ function updatePmState(updates) {
 }
 
 // ============================================================================
+// PM SELF-CHECKPOINT (Phase 3.5)
+// ============================================================================
+
+/**
+ * PM saves its own orchestrator state before context pressure gets critical.
+ * This allows the PM to resume its coordination role after compaction.
+ *
+ * Captures: active agents, pending decisions, task assignments, queue state.
+ *
+ * @param {string} pmSessionId - PM's session ID
+ * @returns {{ success: boolean, version?: number }}
+ */
+function pmCheckpointSelf(pmSessionId) {
+  try {
+    const checkpoint = require('./checkpoint');
+
+    // Gather PM state
+    const pmState = loadPmState();
+    const activeSessions = session.getActiveSessions(pmSessionId);
+    const agentHealth = getAgentHealth();
+
+    // Get recent PM decisions
+    let recentDecisions = [];
+    try {
+      const pmChannel = memory.read(PM_DECISIONS_CHANNEL);
+      if (pmChannel?.data?.decisions) {
+        recentDecisions = pmChannel.data.decisions.slice(-10);
+      }
+    } catch (e) {
+      // No decisions yet
+    }
+
+    // Build PM-specific checkpoint data
+    const result = checkpoint.saveCheckpoint(pmSessionId, {
+      task_id: 'PM-orchestrator',
+      task_title: 'PM Orchestrator — Autonomous Coordination',
+      current_context: JSON.stringify({
+        pm_state: pmState,
+        active_agents: activeSessions.map(s => ({
+          session_id: s.session_id,
+          claimed_task: s.claimed_task,
+          locked_areas: s.locked_areas
+        })),
+        agent_health: agentHealth.map(a => ({
+          session_id: a.session_id,
+          status: a.status,
+          claimed_task: a.claimed_task
+        })),
+        recent_decisions: recentDecisions
+      }),
+      key_decisions: recentDecisions.map(d =>
+        `[${d.type}] ${d.task_id || ''}: ${d.reason || d.message || ''}`
+      ).slice(0, 10),
+      important_findings: [
+        `Active agents: ${activeSessions.length}`,
+        `Agent health: ${agentHealth.filter(a => a.status === 'healthy').length} healthy`
+      ]
+    });
+
+    return { success: result.success, version: result.version };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
@@ -894,7 +1069,10 @@ module.exports = {
   getPlannedFiles,
   extractFilesFromPlan,
 
-  // Task assignment
+  // Task routing & assignment
+  loadSkillRegistry,
+  scoreAgentForTask,
+  routeTaskToAgent,
   assignTask,
   reassignTask,
 
@@ -914,6 +1092,7 @@ module.exports = {
   initializePm,
   loadPmState,
   updatePmState,
+  pmCheckpointSelf,
 
   // Shared memory
   publishDecision,
