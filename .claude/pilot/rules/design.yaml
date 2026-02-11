@@ -1,0 +1,179 @@
+# Design Agent Validation Rules
+# Purpose: Enforce design token governance, component consistency, and visual quality
+# Consumed by: /pilot-orchestrate, /pilot-parallel when spawning design agent
+
+version: "1.0"
+scope: design-system
+frameworks:
+  - tailwindcss
+  - shadcn-ui
+
+# =============================================================================
+# MUST RULES - Required behaviors for all design system work
+# =============================================================================
+must:
+  dtcg_format:
+    rule: "Follow W3C Design Tokens Community Group (DTCG) format"
+    description: |
+      All design tokens must use the DTCG standard format with $value,
+      $type, and optional $description fields. This ensures interoperability
+      and tooling compatibility.
+    requirements:
+      - "Every token has $value and $type properties"
+      - "Use standard $type values: color, dimension, fontFamily, fontWeight, duration, cubicBezier, number, shadow"
+      - "Include $description for non-obvious tokens"
+    verification:
+      - "Run: node design/scripts/validate-tokens.js"
+      - "All tokens pass schema validation"
+
+  token_categories:
+    rule: "Maintain all 8 required token categories"
+    description: |
+      The token system requires complete coverage across all visual dimensions.
+      Missing categories create gaps where hardcoded values creep in.
+    categories:
+      - colors
+      - spacing
+      - typography
+      - shadows
+      - radii
+      - breakpoints
+      - zIndex
+      - animation
+    verification:
+      - "Schema validation enforces all 8 categories present"
+      - "Each category has at least one token defined"
+
+  token_tiers:
+    rule: "Organize tokens into primitive and semantic tiers"
+    description: |
+      Primitive tokens are context-free raw values (blue-500: #3b82f6).
+      Semantic tokens reference primitives and encode purpose (brand-primary: {color.primitive.blue.600}).
+      Components should use semantic tokens, not primitives.
+    requirements:
+      - "Primitive tokens in design/tokens/primitive.json"
+      - "Semantic tokens in design/tokens/semantic.json"
+      - "Semantic tokens use references to primitives: {category.primitive.name}"
+      - "Dark mode overrides in semantic.json dark namespace"
+
+  naming_conventions:
+    rule: "Follow consistent token naming: [category].[tier].[group].[variant]"
+    examples:
+      - "color.primitive.blue.500"
+      - "color.semantic.brand.primary"
+      - "spacing.4 (maps to 1rem)"
+      - "shadow.md"
+      - "radius.lg"
+    requirements:
+      - "Lowercase kebab-case for multi-word names"
+      - "Numeric scales for ordered values (spacing, z-index)"
+      - "T-shirt sizes for shadows and radii (sm, md, lg, xl)"
+
+  accessibility:
+    rule: "Color tokens must meet WCAG AA contrast standards"
+    requirements:
+      color_contrast:
+        - "4.5:1 ratio for normal text foreground/background pairs"
+        - "3:1 ratio for large text (18px+ or 14px+ bold)"
+        - "3:1 ratio for UI components and graphical objects"
+      semantic_colors:
+        - "Every semantic foreground has a matching background"
+        - "Destructive/error colors meet contrast on their backgrounds"
+        - "Muted foreground meets contrast on muted background"
+
+  dark_mode:
+    rule: "Provide dark mode variants for all semantic color tokens"
+    requirements:
+      - "Dark mode tokens defined in semantic.json under dark namespace"
+      - "Generated CSS includes .dark {} selector"
+      - "All foreground/background pairs maintain contrast in dark mode"
+
+  publish_after_changes:
+    rule: "Republish tokens to shared memory after any token modification"
+    description: |
+      Other agents (frontend, review) consume design tokens from shared memory.
+      Token changes must be republished to keep the system consistent.
+    steps:
+      - "Edit token JSON files"
+      - "Run: node design/scripts/validate-tokens.js"
+      - "Run: node design/scripts/publish-tokens.js"
+      - "Run: node design/scripts/generate-css.js"
+      - "Run: node design/scripts/generate-tailwind.js"
+
+  shadcn_compatibility:
+    rule: "Maintain shadcn/ui CSS variable compatibility"
+    requirements:
+      - "Generate HSL values without commas: '217 91% 60%'"
+      - "Include shadcn/ui aliases: --background, --foreground, --primary, etc."
+      - "Support hsl(var(--color)) pattern in Tailwind config"
+
+# =============================================================================
+# MUST_NOT RULES - Prohibited patterns
+# =============================================================================
+must_not:
+  hardcoded_colors:
+    rule: "Do not use hardcoded color values in UI component files"
+    description: |
+      All colors must come from design tokens via CSS variables or Tailwind classes.
+      Hardcoded values bypass the design system and break consistency.
+    prohibited_patterns:
+      - "Hex colors in JSX/TSX: #xxx, #xxxxxx, #xxxxxxxx"
+      - "RGB/RGBA in JSX/TSX: rgb(), rgba()"
+      - "HSL in JSX/TSX: hsl(), hsla()"
+      - "Named CSS colors in styles: color: red, background: blue"
+    exceptions:
+      - "Token definition files (design/tokens/*.json)"
+      - "CSS generator scripts (design/scripts/*.js)"
+      - "Test files"
+      - "SVG fill/stroke in icon components when using currentColor"
+
+  hardcoded_spacing:
+    rule: "Do not use hardcoded spacing values in UI component files"
+    prohibited_patterns:
+      - "Arbitrary pixel values for margin/padding: m-[17px], p-[22px]"
+      - "Non-token spacing in CSS: margin: 13px, padding: 7px"
+    exceptions:
+      - "Token definition files"
+      - "One-off positioning in absolute/fixed layouts with justification"
+
+  hardcoded_typography:
+    rule: "Do not hardcode font sizes, weights, or families"
+    prohibited_patterns:
+      - "Arbitrary font sizes: text-[17px], font-size: 13px"
+      - "Font family strings in components"
+    exceptions:
+      - "Token definition files"
+
+  bypass_token_system:
+    rule: "Do not define visual values outside the token system"
+    description: |
+      Adding colors, spacing, or other visual values directly in component files
+      or one-off CSS creates shadow design systems that drift over time.
+    prohibited:
+      - "CSS custom properties defined outside tokens.css"
+      - "Tailwind theme extensions not generated from tokens"
+      - "Style objects with literal color/spacing values"
+
+  inconsistent_token_names:
+    rule: "Do not break naming conventions in token definitions"
+    prohibited:
+      - "CamelCase token names (use kebab-case)"
+      - "Mixed naming schemes within a category"
+      - "Tokens without $type field"
+
+# =============================================================================
+# VERIFICATION CHECKLIST
+# =============================================================================
+verification:
+  pre_commit:
+    - "Token JSON files pass schema validation"
+    - "No hardcoded color values in .tsx/.jsx diff"
+    - "Token references resolve (no broken {references})"
+    - "Generated CSS and Tailwind config are up to date"
+
+  pre_pr:
+    - "All 8 token categories present and populated"
+    - "Dark mode variants defined for all semantic colors"
+    - "Component audit passes (no new hardcoded values)"
+    - "Tokens republished to shared memory if modified"
+    - "shadcn/ui compatibility aliases present in generated CSS"
