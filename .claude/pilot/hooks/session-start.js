@@ -542,6 +542,66 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
+  // 8d. Agent Memory Context (Phase 3.7)
+  // -------------------------------------------------------------------------
+
+  try {
+    const agentMemory = require('./lib/memory');
+
+    // Resolve agent type from session state
+    let agentType = null;
+    try {
+      const sessDir = path.join(process.cwd(), '.claude/pilot/state/sessions');
+      const sessFile = path.join(sessDir, `${sessionId}.json`);
+      if (fs.existsSync(sessFile)) {
+        const sessData = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+        agentType = sessData.role || null;
+      }
+    } catch (e) {
+      // No session state — skip agent memory
+    }
+
+    if (agentType) {
+      const agentContext = {};
+
+      // Load recent discoveries (last 10)
+      const discoveries = agentMemory.getDiscoveries(agentType);
+      if (discoveries.length > 0) {
+        agentContext.discoveries = discoveries.slice(-10);
+      }
+
+      // Load recent decisions (last 10)
+      const decisions = agentMemory.getDecisions(agentType, { limit: 10 });
+      if (decisions.length > 0) {
+        agentContext.decisions = decisions;
+      }
+
+      // Load recent errors (last 10)
+      const errors = agentMemory.getErrors(agentType, { limit: 10 });
+      if (errors.length > 0) {
+        agentContext.errors = errors;
+      }
+
+      // Load preferences
+      const prefs = agentMemory.getAgentMemory(agentType, 'preferences');
+      if (prefs) {
+        agentContext.preferences = prefs;
+      }
+
+      if (Object.keys(agentContext).length > 0) {
+        context.agent_memory = { type: agentType, ...agentContext };
+        const counts = [];
+        if (agentContext.discoveries) counts.push(`${agentContext.discoveries.length} discoveries`);
+        if (agentContext.decisions) counts.push(`${agentContext.decisions.length} decisions`);
+        if (agentContext.errors) counts.push(`${agentContext.errors.length} errors`);
+        messages.push(`Agent memory [${agentType}]: ${counts.join(', ')}`);
+      }
+    }
+  } catch (e) {
+    // Agent memory not available, continue without
+  }
+
+  // -------------------------------------------------------------------------
   // 8b. Inter-Agent Messaging Context (Phase 2.3)
   // -------------------------------------------------------------------------
 
