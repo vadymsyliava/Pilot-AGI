@@ -613,6 +613,28 @@ checkpoint:
     exit_threshold_pct: null
 
 # =============================================================================
+# OVERNIGHT MODE (Phase 4.8)
+# Autonomous batch execution with error budgets and morning reports
+# =============================================================================
+overnight:
+  # Error budget — limits consecutive and total failures
+  error_budget:
+    # Max consecutive failures per task before pausing it
+    max_failures_per_task: 3
+    # Max total failures across all tasks before stopping the run
+    max_total_failures: 10
+
+  # Report generation
+  report:
+    # Auto-generate markdown report when run completes
+    auto_generate: true
+
+  # Drain mode — graceful shutdown
+  drain:
+    # Max minutes to wait for active agents to finish during drain
+    timeout_min: 15
+
+# =============================================================================
 # QUALITY GATES (optional, disabled by default)
 # Pre-commit quality checks - these duplicate Claude Code native functionality
 # Enable only if you need stricter checks than Claude Code provides

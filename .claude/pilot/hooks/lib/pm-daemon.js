@@ -32,6 +32,7 @@ const processSpawner = require('./process-spawner');
 const taskHandoff = require('./task-handoff');
 const respawnTracker = require('./respawn-tracker');
 const artifactRegistry = require('./artifact-registry');
+const overnightMode = require('./overnight-mode');
 
 // ============================================================================
 // CONSTANTS
@@ -401,6 +402,24 @@ class PmDaemon {
     const policy = loadPolicy();
     const maxAgents = policy.session?.max_concurrent_sessions || this.opts.maxAgents;
 
+    // Phase 4.8: Respect drain mode — don't spawn new agents
+    if (overnightMode.isDraining(this.projectRoot)) {
+      const aliveSpawned = this._countAliveSpawned();
+      if (aliveSpawned === 0) {
+        // All agents finished — end overnight run
+        const run = overnightMode.getActiveRun(this.projectRoot);
+        if (run) {
+          overnightMode.endRun(this.projectRoot, run.run_id);
+          this.log.info('Overnight run completed (drain mode, all agents finished)', {
+            run_id: run.run_id
+          });
+        }
+      } else if (overnightMode.isDrainTimedOut(this.projectRoot)) {
+        this.log.warn('Drain timeout reached, agents still running', { alive: aliveSpawned });
+      }
+      return;
+    }
+
     // Count currently active agent sessions
     const activeSessions = session.getActiveSessions();
     const activeAgentCount = activeSessions.filter(
@@ -411,7 +430,18 @@ class PmDaemon {
     const aliveSpawned = this._countAliveSpawned();
 
     // Check for ready tasks
-    const readyTasks = this._getReadyUnclaimedTasks();
+    let readyTasks = this._getReadyUnclaimedTasks();
+    if (readyTasks.length === 0) return;
+
+    // Phase 4.8: Filter out tasks that exceeded error budget
+    readyTasks = readyTasks.filter(task => {
+      const check = overnightMode.checkErrorBudget(task.id, this.projectRoot);
+      if (check.exceeded) {
+        this.log.info('Skipping over-budget task', { task_id: task.id, reason: check.reason });
+        return false;
+      }
+      return true;
+    });
     if (readyTasks.length === 0) return;
 
     // Check spawn cooldown
@@ -716,6 +746,17 @@ class PmDaemon {
         });
       }
 
+      // Phase 4.8: Track errors and successes for overnight error budget
+      if (code !== 0 && code !== null) {
+        overnightMode.trackError(taskId, {
+          type: signal ? 'signal' : 'exit_error',
+          message: `Exit code ${code}${signal ? `, signal ${signal}` : ''}`,
+          sessionId: agentSessionId
+        }, this.projectRoot);
+      } else if (code === 0 && !signal) {
+        overnightMode.recordTaskStarted(taskId, this.projectRoot);
+      }
+
       // Phase 4.3: Checkpoint-Respawn detection
       // If this was a clean exit (code 0) and there's a handoff state with
       // exit_reason "checkpoint_respawn", trigger automatic respawn.
@@ -860,6 +901,9 @@ class PmDaemon {
             });
             this.state.tasks_auto_closed++;
             this.log.info('Task auto-closed', { task_id: taskId });
+
+            // Phase 4.8: Record task completion in overnight run
+            overnightMode.recordTaskCompletion(taskId, this.projectRoot);
           } catch (e) {
             this.log.warn('bd close failed', { task_id: taskId, error: e.message });
           }
@@ -878,6 +922,9 @@ class PmDaemon {
           checks: review.checks,
           ts: new Date().toISOString()
         });
+
+        // Phase 4.8: Record task failure in overnight run
+        overnightMode.recordTaskFailure(taskId, this.projectRoot);
       }
     } catch (e) {
       this.log.error('Auto-review error', {
@@ -986,6 +1033,9 @@ Options:
   --kill <taskId>     Gracefully stop an agent working on <taskId>
   --tail <taskId>     Stream agent log (delegates to agent-logger)
   --stop              Stop running daemon and exit
+  --plan <desc>       Auto-decompose description into tasks, then start watch mode
+  --report            Generate morning report for most recent overnight run
+  --drain             Enter drain mode (stop spawning, finish active agents)
   -h, --help          Show this help`);
     process.exit(0);
   }
@@ -1212,6 +1262,85 @@ Options:
       console.error(`Failed to stop daemon: ${e.message}`);
       process.exit(1);
     }
+    process.exit(0);
+  }
+
+  // --plan <description>: auto-decompose and queue tasks, then start watch mode
+  const planIdx = args.indexOf('--plan');
+  if (planIdx >= 0) {
+    const description = args[planIdx + 1];
+    if (!description) {
+      console.error('Usage: --plan <description>');
+      process.exit(1);
+    }
+
+    const dryRun = args.includes('--dry-run');
+    console.log(`Overnight Mode: Decomposing "${description}"...`);
+
+    const result = overnightMode.planAndQueue(description, {
+      projectRoot,
+      dryRun,
+      logger: {
+        info: (msg, data) => console.log(`  [INFO] ${msg}`, data ? JSON.stringify(data) : ''),
+        warn: (msg, data) => console.log(`  [WARN] ${msg}`, data ? JSON.stringify(data) : ''),
+        error: (msg, data) => console.error(`  [ERROR] ${msg}`, data ? JSON.stringify(data) : '')
+      }
+    });
+
+    if (!result.success) {
+      console.error(`Failed: ${result.error}`);
+      process.exit(1);
+    }
+
+    console.log(`\nOvernight run created:`);
+    console.log(`  Run ID:     ${result.runId}`);
+    console.log(`  Parent:     ${result.parentTaskId}`);
+    console.log(`  Subtasks:   ${result.subtaskCount}`);
+    console.log(`  Total:      ${result.taskIds.length} tasks`);
+
+    if (dryRun) {
+      console.log('\n[DRY RUN] No tasks created. Exiting.');
+      process.exit(0);
+    }
+
+    console.log('\nStarting daemon in watch mode...\n');
+    // Fall through to daemon start
+  }
+
+  // --report: generate morning report
+  if (args.includes('--report')) {
+    const sinceIdx = args.indexOf('--since');
+    const since = sinceIdx >= 0 ? args[sinceIdx + 1] : null;
+    const asJson = args.includes('--json');
+
+    const result = overnightMode.generateReport({
+      projectRoot,
+      since,
+      format: asJson ? 'json' : 'both'
+    });
+
+    if (!result.success) {
+      console.error(`No report available: ${result.error}`);
+      process.exit(1);
+    }
+
+    if (asJson) {
+      console.log(JSON.stringify(result.report, null, 2));
+    } else {
+      console.log(result.formatted);
+    }
+    process.exit(0);
+  }
+
+  // --drain: enter drain mode
+  if (args.includes('--drain')) {
+    const result = overnightMode.requestDrain(projectRoot);
+    if (!result.success) {
+      console.error(`Drain failed: ${result.error}`);
+      process.exit(1);
+    }
+    console.log(`Drain mode activated for run: ${result.runId}`);
+    console.log('PM daemon will stop spawning new agents and wait for active ones to finish.');
     process.exit(0);
   }
 
