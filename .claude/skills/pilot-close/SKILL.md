@@ -121,9 +121,59 @@ Next:
 ════════════════════════════════════════════════════════════════
 ```
 
+## Step 9: Auto-chain (Autonomous Mode)
+
+Load `.claude/pilot/policy.yaml` and check `autonomy` section.
+
+If `autonomy.mode` is `"full"` AND `autonomy.auto_chain_on_close` is `true`:
+
+### 9.1: Update autonomous state
+Update `.claude/pilot/state/autonomous.json`:
+- Add completed task ID to `completedTasks` array
+- Check if `completedTasks.length >= autonomy.max_tasks_per_session` — if so, stop with "Session task limit reached"
+- Check if consecutive errors >= `autonomy.max_consecutive_errors` — if so, stop
+
+### 9.2: Release current task locks
+```bash
+node .claude/pilot/hooks/cli/release-task.js 2>/dev/null
+```
+
+### 9.3: Get next ready task
+```bash
+bd ready --json 2>/dev/null
+```
+Filter against claimed tasks:
+```bash
+node .claude/pilot/hooks/cli/list-claimed.js 2>/dev/null
+```
+
+### 9.4: Chain to next task
+If an unclaimed ready task exists:
+1. Claim it: `bd update {id} --status in_progress && node .claude/pilot/hooks/cli/claim-task.js {id}`
+2. Create implementation plan (inline, same as /pilot-plan)
+3. Auto-approve the plan (write approval file to `.claude/pilot/state/approved-plans/`)
+4. Begin executing all steps (invoke /pilot-exec autonomous loop)
+
+If NO unclaimed tasks remain:
+```
+════════════════════════════════════════════════════════════════
+✓ ALL TASKS COMPLETE
+════════════════════════════════════════════════════════════════
+
+  Session summary:
+    Tasks completed: {N}
+    Total commits:   {M}
+
+  No more ready tasks. Agent stopping.
+════════════════════════════════════════════════════════════════
+```
+
+Update `autonomous.json` with `running: false` and `phase: "complete"`.
+
 ## Important Rules
 - NEVER close without verifying DoD
 - All steps must be committed
 - Tests must pass
 - Document what was done in session capsule
 - If requirements changed, note it before closing
+- In autonomous mode: auto-chain continues the loop until no tasks remain or limits are hit

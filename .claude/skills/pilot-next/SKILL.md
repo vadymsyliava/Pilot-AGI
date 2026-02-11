@@ -136,8 +136,16 @@ DESCRIPTION
 ────────────────────────────────────────────────────────────────
 ```
 
-### Step 4.1: Offer ACTIONS (not commands!)
+### Step 4.1: Offer ACTIONS (mode-dependent)
 
+**Check autonomy mode first**: Load `.claude/pilot/policy.yaml` and check `autonomy` section.
+
+#### If `autonomy.mode` is `"full"`:
+- **Skip AskUserQuestion** — automatically choose "Start implementation"
+- Proceed directly to Step 5 (claim task, plan, auto-approve, execute)
+- Display: `⚡ AUTONOMOUS MODE — Auto-starting task {bd-xxxx}`
+
+#### If `autonomy.mode` is `"manual"` (or not set):
 Use AskUserQuestion:
 
 **Question**: "What would you like to do?"
@@ -223,8 +231,25 @@ VERIFICATION
 ────────────────────────────────────────────────────────────────
 ```
 
-### 5.4: Ask for approval
+### 5.4: Ask for approval (mode-dependent)
 
+**Check autonomy mode first**: Load `.claude/pilot/policy.yaml` and check `autonomy` section.
+
+#### If `autonomy.mode` is `"full"`:
+- **Skip AskUserQuestion entirely** — do NOT ask the human
+- Auto-approve the plan immediately:
+  1. Write approval file to `.claude/pilot/state/approved-plans/{taskId}.json` with `auto_approved: true`
+  2. Update `.claude/pilot/state/autonomous.json` with `running: true`, `currentTask: {taskId}`
+  3. Display:
+     ```
+     ⚡ AUTONOMOUS MODE — Plan auto-approved
+     ⚡ Executing all steps continuously...
+     ```
+  4. Begin executing ALL steps automatically (invoke /pilot-exec autonomous loop)
+  5. After all steps: auto-commit each, auto-close, auto-chain to next task
+  6. Agent enters continuous loop: plan -> exec all -> commit each -> close -> next
+
+#### If `autonomy.mode` is `"manual"` (or not set):
 Use AskUserQuestion:
 
 **Question**: "Approve this plan?"

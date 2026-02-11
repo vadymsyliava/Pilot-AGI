@@ -474,6 +474,36 @@ orchestrator:
     block_threshold_tokens: 2000000 # Block at 2M tokens per task
 
 # =============================================================================
+# AUTONOMY (Full Agent Loop)
+# Controls whether agents run continuously without human intervention
+# =============================================================================
+autonomy:
+  # "manual" = agent stops for approval at each step (default)
+  # "full"   = agent loops continuously: plan -> exec all -> commit -> close -> next
+  mode: "full"
+
+  # Auto-approve plans without human confirmation
+  auto_approve_plans: true
+
+  # Execute all plan steps in sequence without stopping
+  auto_advance_steps: true
+
+  # Commit after each step automatically
+  auto_commit_steps: true
+
+  # After closing a task, auto-pick and start the next one
+  auto_chain_on_close: true
+
+  # Stop the loop if verification fails
+  stop_on_error: true
+
+  # Maximum tasks an agent can complete in one session
+  max_tasks_per_session: 10
+
+  # Stop after this many consecutive errors
+  max_consecutive_errors: 3
+
+# =============================================================================
 # CONTEXT CHECKPOINT (Phase 2.2.1)
 # Proactive context window management for agent continuity
 # =============================================================================
