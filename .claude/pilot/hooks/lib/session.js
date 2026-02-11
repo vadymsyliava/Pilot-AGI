@@ -510,6 +510,88 @@ function getAllSessionStates() {
 }
 
 /**
+ * Proactively reap zombie sessions: PID dead → session ended.
+ * Called on every getActiveSessions() to ensure callers never see ghosts.
+ * Also cleans up orphaned lockfiles for ended sessions.
+ *
+ * @returns {number} Number of sessions reaped
+ */
+function _reapZombies() {
+  const stateDir = getSessionStateDir();
+  if (!fs.existsSync(stateDir)) return 0;
+
+  let reaped = 0;
+  const files = fs.readdirSync(stateDir)
+    .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'));
+
+  for (const file of files) {
+    try {
+      const filePath = path.join(stateDir, file);
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+
+      // Fix inconsistent state: ended_at set but status still active
+      if (data.status === 'active' && data.ended_at) {
+        endSession(data.session_id, data.end_reason || 'zombie_cleanup');
+        logEvent({
+          type: 'session_zombie_reaped',
+          session_id: data.session_id,
+          reason: 'inconsistent_state',
+          had_task: data.claimed_task || null
+        });
+        reaped++;
+        continue;
+      }
+
+      // Active session with dead PID → reap it
+      if (data.status === 'active' && !data.ended_at) {
+        if (!isSessionAlive(data.session_id)) {
+          endSession(data.session_id, 'process_dead');
+          logEvent({
+            type: 'session_zombie_reaped',
+            session_id: data.session_id,
+            reason: 'pid_dead',
+            parent_pid: data.parent_pid,
+            had_task: data.claimed_task || null
+          });
+          reaped++;
+        }
+      }
+    } catch (e) {
+      // Skip invalid files
+    }
+  }
+
+  // Clean up orphaned lockfiles: lock exists but session is ended or missing
+  try {
+    const lockDir = getSessionLockDir();
+    if (fs.existsSync(lockDir)) {
+      const lockFiles = fs.readdirSync(lockDir).filter(f => f.endsWith('.lock'));
+      for (const lockFile of lockFiles) {
+        const sessionId = lockFile.replace('.lock', '');
+        const sessFile = path.join(stateDir, `${sessionId}.json`);
+        try {
+          if (!fs.existsSync(sessFile)) {
+            // Session file missing — remove orphan lock
+            fs.unlinkSync(path.join(lockDir, lockFile));
+          } else {
+            const sessData = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+            if (sessData.status === 'ended') {
+              fs.unlinkSync(path.join(lockDir, lockFile));
+            }
+          }
+        } catch (e) {
+          // Best effort
+        }
+      }
+    }
+  } catch (e) {
+    // Best effort lockfile cleanup
+  }
+
+  return reaped;
+}
+
+/**
  * Determine if a session is still active based on heartbeat
  */
 function isSessionActive(session, policy) {
@@ -533,6 +615,9 @@ function isSessionActive(session, policy) {
  * This prevents falsely excluding sessions with stale heartbeats but live processes.
  */
 function getActiveSessions(currentSessionId = null) {
+  // Proactively reap zombies before returning results
+  _reapZombies();
+
   const policy = loadPolicy();
   const allSessions = getAllSessionStates();
 
@@ -863,7 +948,9 @@ function updateHeartbeat(sessionId) {
 }
 
 /**
- * Find and update heartbeat for the current (most recent active) session.
+ * Find and update heartbeat for the CURRENT session only.
+ * Matches by parent_pid — will NOT fall back to other sessions.
+ * This prevents one terminal's heartbeat hook from refreshing another session.
  * Logs heartbeat event periodically (every 5 minutes).
  *
  * @returns {{ updated: boolean, session_id?: string, logged?: boolean }}
@@ -874,46 +961,24 @@ function heartbeat() {
 
   try {
     // Find the session file belonging to THIS terminal (by parent_pid).
-    // Falls back to most recent active session if parent_pid matching fails.
+    // No fallback — if parent_pid doesn't match, we don't touch anything.
     const parentPid = getParentClaudePID();
+    if (!parentPid) return { updated: false };
+
     const allFiles = fs.readdirSync(stateDir)
-      .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'))
-      .map(f => ({
-        name: f,
-        mtime: fs.statSync(path.join(stateDir, f)).mtime.getTime()
-      }))
-      .sort((a, b) => b.mtime - a.mtime);
+      .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'));
 
-    if (allFiles.length === 0) return { updated: false };
-
-    // Prefer matching by parent_pid (correct terminal)
     let sessionFile = null;
     let session = null;
-    if (parentPid) {
-      for (const f of allFiles) {
-        try {
-          const data = JSON.parse(fs.readFileSync(path.join(stateDir, f.name), 'utf8'));
-          if (data.parent_pid === parentPid && data.status === 'active' && !data.ended_at) {
-            sessionFile = path.join(stateDir, f.name);
-            session = data;
-            break;
-          }
-        } catch (e) { /* skip */ }
-      }
-    }
-
-    // Fallback: most recent active session (skip ended ones)
-    if (!session) {
-      for (const f of allFiles) {
-        try {
-          const data = JSON.parse(fs.readFileSync(path.join(stateDir, f.name), 'utf8'));
-          if (data.status === 'active' && !data.ended_at) {
-            sessionFile = path.join(stateDir, f.name);
-            session = data;
-            break;
-          }
-        } catch (e) { /* skip */ }
-      }
+    for (const f of allFiles) {
+      try {
+        const data = JSON.parse(fs.readFileSync(path.join(stateDir, f), 'utf8'));
+        if (data.parent_pid === parentPid && data.status === 'active' && !data.ended_at) {
+          sessionFile = path.join(stateDir, f);
+          session = data;
+          break;
+        }
+      } catch (e) { /* skip */ }
     }
 
     if (!session || !sessionFile) return { updated: false };
@@ -1804,5 +1869,7 @@ module.exports = {
   // Session resolution (multi-agent fix)
   resolveCurrentSession,
   // Session archival (Phase 4.1)
-  archiveSessions
+  archiveSessions,
+  // Session Guardian v2 (Phase 4.9)
+  _reapZombies
 };
