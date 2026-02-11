@@ -128,15 +128,20 @@ function shouldInjectGuardian(prompt, activeTask) {
  */
 function buildSessionAwareness(currentSessionId) {
   try {
-    const allSessions = session.getAllSessionStates();
     const policy = loadPolicy();
     const maxSessions = policy.session?.max_concurrent_sessions || 6;
 
-    // Filter to sessions that are alive (lockfile + PID check)
-    const liveSessions = allSessions.filter(s => {
-      if (s.status !== 'active') return false;
-      return session.isSessionAlive(s.session_id);
-    });
+    // Use getActiveSessions() which triggers _reapZombies() — ensures
+    // dead-PID sessions are cleaned up before we count them.
+    // This is the fix for zombie sessions appearing in the awareness display.
+    const liveSessions = session.getActiveSessions(currentSessionId);
+    // Re-add current session to the list for display purposes
+    try {
+      const currentState = session.getAllSessionStates().find(s => s.session_id === currentSessionId);
+      if (currentState && currentState.status === 'active') {
+        liveSessions.unshift(currentState);
+      }
+    } catch (e) { /* best effort */ }
 
     if (liveSessions.length <= 1) return null;
 
