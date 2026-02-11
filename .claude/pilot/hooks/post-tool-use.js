@@ -389,6 +389,86 @@ function enqueueCompactRequest(sessionId, stats) {
 }
 
 // =============================================================================
+// EXIT-ON-CHECKPOINT (Phase 4.3)
+// =============================================================================
+
+/**
+ * Check if this is a daemon-spawned agent that should exit on checkpoint.
+ * Only daemon-spawned agents exit; interactive sessions compact instead.
+ *
+ * @returns {boolean}
+ */
+function shouldExitOnCheckpoint() {
+  // Only daemon-spawned agents do exit-on-checkpoint
+  if (process.env.PILOT_DAEMON_SPAWNED !== '1') return false;
+
+  try {
+    const respawnTracker = require('./lib/respawn-tracker');
+    return respawnTracker.isRespawnEnabled();
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Execute exit-on-checkpoint: save handoff state, emit bus event, then exit.
+ *
+ * @param {string} sessionId
+ * @param {object} stats - pressure stats
+ * @param {number} checkpointVersion - version from auto-checkpoint
+ */
+function exitOnCheckpoint(sessionId, stats, checkpointVersion) {
+  const taskId = getClaimedTaskId(sessionId);
+  if (!taskId) return; // No task claimed — can't do handoff
+
+  try {
+    // 1. Run pre-exit protocol (stash changes, write handoff state)
+    const taskHandoff = require('./lib/task-handoff');
+    taskHandoff.preExitProtocol({
+      sessionId,
+      taskId,
+      projectRoot: process.cwd(),
+      checkpointData: {
+        tool_call_count: stats.calls,
+        output_bytes: stats.bytes,
+        current_context: `Exit-on-checkpoint at ${stats.pct_estimate}% pressure`
+      },
+      exitReason: 'checkpoint_respawn'
+    });
+
+    // 2. Emit checkpoint_exit bus event for PM daemon
+    emitBusEvent(sessionId, 'checkpoint_exit', {
+      task_id: taskId,
+      session_id: sessionId,
+      pressure_pct: stats.pct_estimate,
+      checkpoint_version: checkpointVersion,
+      exit_reason: 'checkpoint_respawn'
+    });
+
+    // 3. Log the exit
+    try {
+      const session = require('./lib/session');
+      session.logEvent({
+        type: 'checkpoint_exit',
+        session_id: sessionId,
+        task_id: taskId,
+        pressure_pct: stats.pct_estimate,
+        checkpoint_version: checkpointVersion
+      });
+    } catch (e) { /* best effort */ }
+
+    // 4. Exit the process cleanly
+    // Use a short delay to allow the bus event to be written
+    setTimeout(() => {
+      process.exit(0);
+    }, 100);
+  } catch (e) {
+    // If exit-on-checkpoint fails, fall back to compact request
+    // This ensures the agent doesn't get stuck
+  }
+}
+
+// =============================================================================
 // MAIN
 // =============================================================================
 
@@ -456,7 +536,24 @@ async function main() {
     const autoResult = autoCheckpoint(sessionId, stats);
 
     if (autoResult) {
-      // After successful auto-checkpoint, enqueue a compact request
+      // --- Phase 4.3: Exit-on-checkpoint for daemon-spawned agents ---
+      // If this is a daemon-spawned agent with respawn enabled,
+      // exit cleanly instead of compacting. PM daemon will respawn.
+      if (shouldExitOnCheckpoint()) {
+        const output = {
+          hookSpecificOutput: {
+            hookEventName: 'PostToolUse',
+            notification: `Context pressure at ${stats.pct_estimate}% — checkpoint saved (v${autoResult.version}). Exiting for PM daemon respawn.`
+          }
+        };
+        console.log(JSON.stringify(output));
+
+        // This will exit the process after saving handoff state
+        exitOnCheckpoint(sessionId, stats, autoResult.version);
+        return; // Won't reach here — process exits above
+      }
+
+      // Non-daemon agents: enqueue a compact request (original behavior)
       enqueueCompactRequest(sessionId, stats);
 
       const output = {

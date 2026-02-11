@@ -30,6 +30,7 @@ const pmDecisions = require('./pm-decisions');
 const agentLogger = require('./agent-logger');
 const processSpawner = require('./process-spawner');
 const taskHandoff = require('./task-handoff');
+const respawnTracker = require('./respawn-tracker');
 
 // ============================================================================
 // CONSTANTS
@@ -643,7 +644,7 @@ class PmDaemon {
 
   /**
    * Handle agent process exit — mark the agent's session as ended,
-   * run post-exit validation (Phase 4.6).
+   * run post-exit validation (Phase 4.6), and handle checkpoint-respawn (Phase 4.3).
    *
    * @param {number} pid - The exited process PID
    * @param {string} taskId - The task the agent was working on
@@ -651,6 +652,8 @@ class PmDaemon {
    * @param {string|null} signal - Signal that killed the process
    */
   _onAgentExit(pid, taskId, code, signal) {
+    let agentSessionId = null;
+
     try {
       const allSessions = session.getAllSessionStates();
       // Find the session owned by this PID (check parent_pid since session hooks
@@ -660,6 +663,7 @@ class PmDaemon {
       );
 
       if (agentSession) {
+        agentSessionId = agentSession.session_id;
         const reason = signal ? `signal_${signal}` : (code === 0 ? 'completed' : `exit_code_${code}`);
         session.endSession(agentSession.session_id, reason);
         this.log.info('Agent session ended on process exit', {
@@ -695,6 +699,13 @@ class PmDaemon {
           error: e.message
         });
       }
+
+      // Phase 4.3: Checkpoint-Respawn detection
+      // If this was a clean exit (code 0) and there's a handoff state with
+      // exit_reason "checkpoint_respawn", trigger automatic respawn.
+      if (code === 0 && !signal) {
+        this._handleCheckpointRespawn(taskId, agentSessionId);
+      }
     } catch (e) {
       this.log.error('Failed to end agent session on exit', {
         pid,
@@ -702,6 +713,100 @@ class PmDaemon {
         error: e.message
       });
     }
+  }
+
+  /**
+   * Phase 4.3: Handle checkpoint-respawn for an agent that exited cleanly.
+   * Checks handoff state to determine if this was a checkpoint exit,
+   * verifies respawn limits, and spawns a fresh process.
+   *
+   * @param {string} taskId
+   * @param {string|null} exitedSessionId
+   */
+  _handleCheckpointRespawn(taskId, exitedSessionId) {
+    if (!respawnTracker.isRespawnEnabled(this.projectRoot)) return;
+
+    // Check handoff state for checkpoint_respawn reason
+    const handoffPath = path.join(
+      this.projectRoot,
+      taskHandoff.HANDOFF_STATE_DIR,
+      taskId.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase() + '.json'
+    );
+
+    let handoff = null;
+    try {
+      if (fs.existsSync(handoffPath)) {
+        handoff = JSON.parse(fs.readFileSync(handoffPath, 'utf8'));
+      }
+    } catch (e) {
+      // No handoff state — not a checkpoint exit
+      return;
+    }
+
+    if (!handoff || handoff.exit_reason !== 'checkpoint_respawn') {
+      return; // Not a checkpoint exit
+    }
+
+    this.log.info('Checkpoint-respawn detected', {
+      task_id: taskId,
+      exited_session: exitedSessionId
+    });
+
+    // Check respawn limits
+    const check = respawnTracker.canRespawn(taskId, {
+      projectRoot: this.projectRoot
+    });
+
+    if (!check.allowed) {
+      this.log.warn('Respawn limit reached, escalating', {
+        task_id: taskId,
+        respawn_count: check.respawn_count,
+        max: check.max,
+        reason: check.reason
+      });
+
+      this._escalateToHuman({
+        type: 'respawn_limit_reached',
+        task_id: taskId,
+        respawn_count: check.respawn_count,
+        max_limit: check.max,
+        reason: check.reason,
+        ts: new Date().toISOString()
+      });
+
+      return;
+    }
+
+    // Record the respawn
+    respawnTracker.recordRespawn(taskId, {
+      sessionId: exitedSessionId,
+      exitReason: 'checkpoint_respawn',
+      pressurePct: handoff.checkpoint_version ? null : null
+    }, this.projectRoot);
+
+    // Get task info for respawn
+    let task = { id: taskId, title: taskId };
+    try {
+      const { execFileSync } = require('child_process');
+      const output = execFileSync('bd', ['show', taskId, '--json'], {
+        cwd: this.projectRoot,
+        encoding: 'utf8',
+        timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      task = JSON.parse(output);
+    } catch (e) {
+      // Use minimal task info
+    }
+
+    this.log.info('Respawning agent for checkpoint-resume', {
+      task_id: taskId,
+      respawn_count: check.respawn_count + 1,
+      max: check.max
+    });
+
+    // Spawn fresh agent with resume context
+    this._spawnAgent(task);
   }
 
   // ==========================================================================

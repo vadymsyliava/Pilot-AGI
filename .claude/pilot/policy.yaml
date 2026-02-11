@@ -596,6 +596,22 @@ checkpoint:
   # Maximum checkpoint versions to keep per session (older ones rotated out)
   max_checkpoints_per_session: 5
 
+  # Checkpoint-Respawn Loop (Phase 4.3)
+  # When enabled, agents exit cleanly on checkpoint and PM respawns them
+  respawn:
+    # Master switch for exit-on-checkpoint behavior
+    enabled: true
+
+    # Maximum respawns per task before escalating to human
+    max_respawn_limit: 10
+
+    # Minimum seconds between respawns (prevents rapid loops)
+    cooldown_sec: 5
+
+    # Pressure threshold to trigger exit-on-checkpoint
+    # (uses checkpoint.pressure_threshold_pct if not set)
+    exit_threshold_pct: null
+
 # =============================================================================
 # QUALITY GATES (optional, disabled by default)
 # Pre-commit quality checks - these duplicate Claude Code native functionality
