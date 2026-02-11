@@ -23,6 +23,7 @@ const session = require('./session');
 const messaging = require('./messaging');
 const pmResearch = require('./pm-research');
 const decomposition = require('./decomposition');
+const pmDecisions = require('./pm-decisions');
 
 // ============================================================================
 // CONSTANTS
@@ -1213,7 +1214,8 @@ class PmLoop {
   }
 
   /**
-   * Log an action for audit trail
+   * Log an action for audit trail.
+   * Includes decision_type classification (mechanical/judgment) per Phase 4.4.
    */
   logAction(type, data = {}) {
     try {
@@ -1226,6 +1228,7 @@ class PmLoop {
       const entry = {
         ts: new Date().toISOString(),
         type,
+        decision_type: data.decision_type || pmDecisions.classifyDecision(type),
         pm_session: this.pmSessionId,
         ...data
       };
