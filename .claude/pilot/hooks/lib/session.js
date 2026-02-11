@@ -134,29 +134,45 @@ function removeSessionLock(sessionId) {
  * Alive = lockfile exists AND the PID recorded in it is still running.
  */
 function isSessionAlive(sessionId) {
+  // Try lockfile first (fast path)
   const lockFile = path.join(getSessionLockDir(), `${sessionId}.lock`);
-  if (!fs.existsSync(lockFile)) return false;
-
-  try {
-    const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
-    const pidToCheck = lockData.parent_pid || lockData.pid;
-
-    // process.kill(pid, 0) sends no signal — just checks if process exists
-    process.kill(pidToCheck, 0);
-    return true;
-  } catch (e) {
-    if (e.code === 'ESRCH') {
-      // Process not found — session is dead, clean up stale lockfile
-      try { fs.unlinkSync(lockFile); } catch (_) {}
-      return false;
-    }
-    if (e.code === 'EPERM') {
-      // Process exists but we can't signal it — still alive
+  if (fs.existsSync(lockFile)) {
+    try {
+      const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+      const pidToCheck = lockData.parent_pid || lockData.pid;
+      process.kill(pidToCheck, 0);
       return true;
+    } catch (e) {
+      if (e.code === 'ESRCH') {
+        try { fs.unlinkSync(lockFile); } catch (_) {}
+        // Fall through to session state check
+      } else if (e.code === 'EPERM') {
+        return true;
+      }
     }
-    // JSON parse error or other — treat as dead
-    return false;
   }
+
+  // Fallback: check parent_pid from session state file directly.
+  // This handles cases where lockfile is missing or stale (e.g. after resurrection).
+  try {
+    const sessFile = path.join(getSessionStateDir(), `${sessionId}.json`);
+    if (fs.existsSync(sessFile)) {
+      const sessData = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+      const ppid = sessData.parent_pid;
+      if (ppid) {
+        try {
+          process.kill(ppid, 0);
+          return true;
+        } catch (e) {
+          if (e.code === 'EPERM') return true;
+        }
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  return false;
 }
 
 /**
