@@ -146,7 +146,8 @@ function getRecentEvents(limit = 20) {
 
 /**
  * Get health status for all active agents.
- * Detects stale sessions, expired leases, and unresponsive agents.
+ * Uses lockfile-based process detection as primary liveness signal,
+ * with heartbeat as secondary fallback.
  */
 function getAgentHealth() {
   const policy = loadPolicy();
@@ -161,8 +162,14 @@ function getAgentHealth() {
       ? new Date(s.lease_expires_at).getTime()
       : null;
 
+    // Primary liveness: lockfile + process check
+    const processAlive = session.isSessionAlive(s.session_id);
+
     let status = 'healthy';
-    if (heartbeatAge > heartbeatInterval * 3) {
+    if (!processAlive) {
+      // Process is dead — definitive signal, regardless of heartbeat
+      status = 'dead';
+    } else if (heartbeatAge > heartbeatInterval * 3) {
       status = 'unresponsive';
     } else if (heartbeatAge > heartbeatInterval * 2) {
       status = 'stale';
@@ -173,6 +180,7 @@ function getAgentHealth() {
     return {
       session_id: s.session_id,
       status,
+      process_alive: processAlive,
       claimed_task: s.claimed_task,
       locked_areas: s.locked_areas || [],
       heartbeat_age_sec: Math.round(heartbeatAge / 1000),
@@ -185,11 +193,12 @@ function getAgentHealth() {
 }
 
 /**
- * Get stale agents whose heartbeats have expired.
+ * Get stale or dead agents.
+ * Includes agents whose process has exited (dead) or heartbeat expired (stale/unresponsive).
  */
 function getStaleAgents() {
   return getAgentHealth().filter(a =>
-    a.status === 'stale' || a.status === 'unresponsive'
+    a.status === 'dead' || a.status === 'stale' || a.status === 'unresponsive'
   );
 }
 
@@ -746,6 +755,29 @@ function handleStaleAgents(pmSessionId) {
   const results = [];
 
   for (const agent of staleAgents) {
+    // Dead agents (process exited) are always cleaned up immediately
+    if (agent.status === 'dead') {
+      session.releaseTask(agent.session_id);
+      session.endSession(agent.session_id, 'process_dead');
+      session.removeSessionLock(agent.session_id);
+
+      session.logEvent({
+        type: 'pm_dead_agent_cleanup',
+        pm_session: pmSessionId,
+        dead_session: agent.session_id,
+        task_id: agent.claimed_task,
+        action: 'cleaned_up'
+      });
+
+      results.push({
+        session_id: agent.session_id,
+        task_id: agent.claimed_task,
+        status: 'dead',
+        action: 'cleaned_up'
+      });
+      continue;
+    }
+
     if (!agent.claimed_task) continue;
 
     if (policy.orchestrator?.auto_reassign_stale) {
@@ -764,6 +796,7 @@ function handleStaleAgents(pmSessionId) {
       results.push({
         session_id: agent.session_id,
         task_id: agent.claimed_task,
+        status: agent.status,
         action: 'released_and_ended'
       });
     } else {
@@ -771,12 +804,14 @@ function handleStaleAgents(pmSessionId) {
       publishDecision('stale_agent_detected', {
         session_id: agent.session_id,
         task_id: agent.claimed_task,
-        heartbeat_age_sec: agent.heartbeat_age_sec
+        heartbeat_age_sec: agent.heartbeat_age_sec,
+        process_alive: agent.process_alive
       });
 
       results.push({
         session_id: agent.session_id,
         task_id: agent.claimed_task,
+        status: agent.status,
         action: 'flagged'
       });
     }

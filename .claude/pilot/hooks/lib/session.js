@@ -8,11 +8,13 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 const { loadPolicy } = require('./policy');
 const worktree = require('./worktree');
 
 const EVENT_STREAM_FILE = 'runs/sessions.jsonl';
 const SESSION_STATE_DIR = '.claude/pilot/state/sessions';
+const SESSION_LOCK_DIR = '.claude/pilot/state/locks';
 const HEARTBEAT_STALE_MULTIPLIER = 2; // Session stale after 2x heartbeat interval
 const DEFAULT_LEASE_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -38,6 +40,121 @@ function getEventStreamPath() {
  */
 function getSessionStateDir() {
   return path.join(process.cwd(), SESSION_STATE_DIR);
+}
+
+/**
+ * Get path to session lock directory
+ */
+function getSessionLockDir() {
+  return path.join(process.cwd(), SESSION_LOCK_DIR);
+}
+
+/**
+ * Walk the process tree upward to find the parent claude process PID.
+ * Uses execFileSync (no shell) for safety.
+ * Returns the parent claude PID or falls back to process.pid.
+ */
+function getParentClaudePID() {
+  try {
+    let pid = process.pid;
+    // Walk up to 10 levels to avoid infinite loops
+    for (let i = 0; i < 10; i++) {
+      const ppidStr = execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], {
+        encoding: 'utf8',
+        timeout: 3000
+      }).trim();
+      const ppid = parseInt(ppidStr, 10);
+      if (!ppid || ppid <= 1) break;
+
+      // Check if the parent is a claude process
+      try {
+        const comm = execFileSync('ps', ['-o', 'comm=', '-p', String(ppid)], {
+          encoding: 'utf8',
+          timeout: 3000
+        }).trim();
+        if (comm.includes('claude') || comm.includes('Claude')) {
+          return ppid;
+        }
+      } catch (e) {
+        // Process may have exited between checks
+        break;
+      }
+      pid = ppid;
+    }
+  } catch (e) {
+    // Fallback to own PID
+  }
+  return process.pid;
+}
+
+/**
+ * Create a session lockfile at .claude/pilot/state/locks/{sessionId}.lock
+ * Contains PID + start time. File existence = session alive (verified via PID check).
+ */
+function createSessionLock(sessionId) {
+  const lockDir = getSessionLockDir();
+  if (!fs.existsSync(lockDir)) {
+    fs.mkdirSync(lockDir, { recursive: true });
+  }
+
+  const parentPid = getParentClaudePID();
+  const lockData = {
+    session_id: sessionId,
+    pid: process.pid,
+    parent_pid: parentPid,
+    created_at: new Date().toISOString()
+  };
+
+  const lockFile = path.join(lockDir, `${sessionId}.lock`);
+  fs.writeFileSync(lockFile, JSON.stringify(lockData, null, 2));
+
+  return { success: true, lock_file: lockFile, parent_pid: parentPid };
+}
+
+/**
+ * Remove a session lockfile on clean exit.
+ */
+function removeSessionLock(sessionId) {
+  const lockFile = path.join(getSessionLockDir(), `${sessionId}.lock`);
+  try {
+    if (fs.existsSync(lockFile)) {
+      fs.unlinkSync(lockFile);
+      return { success: true };
+    }
+    return { success: true, note: 'lockfile already absent' };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Check if a session is alive using its lockfile.
+ * Alive = lockfile exists AND the PID recorded in it is still running.
+ */
+function isSessionAlive(sessionId) {
+  const lockFile = path.join(getSessionLockDir(), `${sessionId}.lock`);
+  if (!fs.existsSync(lockFile)) return false;
+
+  try {
+    const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+    const pidToCheck = lockData.parent_pid || lockData.pid;
+
+    // process.kill(pid, 0) sends no signal — just checks if process exists
+    process.kill(pidToCheck, 0);
+    return true;
+  } catch (e) {
+    if (e.code === 'ESRCH') {
+      // Process not found — session is dead, clean up stale lockfile
+      try { fs.unlinkSync(lockFile); } catch (_) {}
+      return false;
+    }
+    if (e.code === 'EPERM') {
+      // Process exists but we can't signal it — still alive
+      return true;
+    }
+    // JSON parse error or other — treat as dead
+    return false;
+  }
 }
 
 /**
@@ -79,6 +196,9 @@ function registerSession(sessionId, context = {}) {
     fs.mkdirSync(stateDir, { recursive: true });
   }
 
+  // Resolve parent claude PID for accurate liveness checks
+  const parentPid = getParentClaudePID();
+
   const sessionState = {
     session_id: sessionId,
     started_at: new Date().toISOString(),
@@ -89,13 +209,17 @@ function registerSession(sessionId, context = {}) {
     locked_areas: [],
     locked_files: [],
     cwd: process.cwd(),
-    pid: process.pid
+    pid: process.pid,
+    parent_pid: parentPid
   };
 
   fs.writeFileSync(
     path.join(stateDir, `${sessionId}.json`),
     JSON.stringify(sessionState, null, 2)
   );
+
+  // Create lockfile for process-based liveness detection
+  createSessionLock(sessionId);
 
   return sessionState;
 }
@@ -536,6 +660,9 @@ function endSession(sessionId, reason = 'user_exit') {
   const stateDir = getSessionStateDir();
   const sessionFile = path.join(stateDir, `${sessionId}.json`);
 
+  // Remove lockfile on clean exit
+  removeSessionLock(sessionId);
+
   // Log event
   logEvent({
     type: 'session_ended',
@@ -863,5 +990,10 @@ module.exports = {
   unlockArea,
   releaseAllLocks,
   // Heartbeat
-  heartbeat
+  heartbeat,
+  // Lockfile-based liveness (Session Guardian)
+  getParentClaudePID,
+  createSessionLock,
+  removeSessionLock,
+  isSessionAlive
 };
