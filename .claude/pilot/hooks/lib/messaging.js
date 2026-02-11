@@ -19,9 +19,11 @@ const MESSAGE_BUS_PATH = '.claude/pilot/messages/bus.jsonl';
 const CURSOR_DIR = '.claude/pilot/messages/cursors';
 const ARCHIVE_DIR = '.claude/pilot/messages/archive';
 const NUDGE_DIR = '.claude/pilot/messages/nudge';
+const DLQ_PATH = '.claude/pilot/messages/dlq.jsonl';
+const PENDING_ACKS_PATH = '.claude/pilot/messages/pending_acks.jsonl';
 
 const MSG_SIZE_LIMIT = 4000; // bytes, within PIPE_BUF for safety
-const COMPACTION_THRESHOLD = 1024 * 1024; // 1MB
+const COMPACTION_THRESHOLD = 100 * 1024; // 100KB (lowered for earlier compaction)
 const CURSOR_PROCESSED_MAX = 100;
 const DEFAULT_TTL_MS = {
   blocking: 30000,   // 30 seconds
@@ -29,6 +31,8 @@ const DEFAULT_TTL_MS = {
   fyi: 300000        // 5 minutes
 };
 const DEFAULT_ACK_DEADLINE_MS = 30000; // 30 seconds
+const ACK_MAX_RETRIES = 3;
+const PRIORITY_ORDER = { blocking: 0, normal: 1, fyi: 2 };
 
 const VALID_TYPES = ['request', 'response', 'notify', 'task_delegate', 'broadcast'];
 const VALID_PRIORITIES = ['blocking', 'normal', 'fyi'];
@@ -55,6 +59,14 @@ function getArchiveDir() {
 
 function getNudgeDir() {
   return path.join(process.cwd(), NUDGE_DIR);
+}
+
+function getDlqPath() {
+  return path.join(process.cwd(), DLQ_PATH);
+}
+
+function getPendingAcksPath() {
+  return path.join(process.cwd(), PENDING_ACKS_PATH);
 }
 
 // ============================================================================
@@ -117,6 +129,41 @@ function validateMessage(msg) {
 }
 
 // ============================================================================
+// SEQUENCE NUMBERS (per-sender FIFO ordering)
+// ============================================================================
+
+// In-memory sender sequence counters (initialized from bus on first use)
+const _senderSeqs = {};
+
+/**
+ * Get next sequence number for a sender.
+ * Lazily reads bus to find max seq for this sender on first call.
+ */
+function getNextSenderSeq(senderId) {
+  if (_senderSeqs[senderId] === undefined) {
+    // Bootstrap from bus
+    const busPath = getBusPath();
+    let maxSeq = 0;
+    try {
+      if (fs.existsSync(busPath)) {
+        const lines = fs.readFileSync(busPath, 'utf8').split('\n').filter(l => l.trim());
+        for (const line of lines) {
+          try {
+            const msg = JSON.parse(line);
+            if (msg.from === senderId && msg.sender_seq !== undefined && msg.sender_seq > maxSeq) {
+              maxSeq = msg.sender_seq;
+            }
+          } catch (e) { /* skip */ }
+        }
+      }
+    } catch (e) { /* start from 0 */ }
+    _senderSeqs[senderId] = maxSeq;
+  }
+  _senderSeqs[senderId]++;
+  return _senderSeqs[senderId];
+}
+
+// ============================================================================
 // SEND
 // ============================================================================
 
@@ -144,6 +191,7 @@ function sendMessage(msg) {
 
   const id = msg.id || generateMessageId();
   const ttl_ms = msg.ttl_ms || DEFAULT_TTL_MS[msg.priority] || DEFAULT_TTL_MS.normal;
+  const senderSeq = getNextSenderSeq(msg.from);
 
   const fullMessage = {
     id,
@@ -152,8 +200,10 @@ function sendMessage(msg) {
     from: msg.from,
     priority: msg.priority,
     ttl_ms,
+    sender_seq: senderSeq,
     ...msg,
     id, // ensure id is not overridden by spread
+    sender_seq: senderSeq, // ensure seq is not overridden
   };
 
   const line = JSON.stringify(fullMessage) + '\n';
@@ -161,9 +211,19 @@ function sendMessage(msg) {
   // Atomic append (safe for multi-process, empirically verified)
   fs.appendFileSync(busPath, line);
 
+  // Track ACK if required
+  if (msg.ack && msg.ack.required) {
+    trackPendingAck(id, msg.from, msg.to, msg.ack.deadline_ms || DEFAULT_ACK_DEADLINE_MS);
+  }
+
   // Nudge recipient for blocking messages
   if (msg.priority === 'blocking' && msg.to && msg.to !== '*') {
     nudgeSession(msg.to);
+  }
+
+  // Auto-compact if bus exceeds threshold
+  if (needsCompaction()) {
+    try { compactBus(); } catch (e) { /* non-critical */ }
   }
 
   return { success: true, id };
@@ -207,19 +267,71 @@ function checkNudge(sessionId) {
 // ============================================================================
 
 /**
- * Load cursor for a session
+ * Load cursor for a session with corruption recovery.
+ * If cursor is corrupt or invalid, resets to the last archive boundary
+ * instead of replaying all messages from the start.
  * @returns {{ session_id: string, last_seq: number, byte_offset: number, processed_ids: string[], updated_at: string } | null}
  */
 function loadCursor(sessionId) {
   const cursorPath = getCursorPath(sessionId);
   try {
-    if (fs.existsSync(cursorPath)) {
-      return JSON.parse(fs.readFileSync(cursorPath, 'utf8'));
+    if (!fs.existsSync(cursorPath)) return null;
+    const raw = fs.readFileSync(cursorPath, 'utf8');
+    const cursor = JSON.parse(raw);
+
+    // Validate structure
+    if (typeof cursor.byte_offset !== 'number' || cursor.byte_offset < 0) {
+      throw new Error('Invalid byte_offset');
     }
+    if (!Array.isArray(cursor.processed_ids)) {
+      throw new Error('Invalid processed_ids');
+    }
+
+    // Validate byte_offset doesn't exceed bus size
+    const busPath = getBusPath();
+    if (fs.existsSync(busPath)) {
+      const busSize = fs.statSync(busPath).size;
+      if (cursor.byte_offset > busSize) {
+        // Cursor points past end of bus (bus was truncated/compacted)
+        // Reset to current bus end to avoid reading garbage
+        cursor.byte_offset = busSize;
+        writeCursor(sessionId, cursor);
+      }
+    }
+
+    return cursor;
   } catch (e) {
-    // Corrupt cursor — start fresh
+    // Corrupt cursor — recover to archive boundary
+    const busPath = getBusPath();
+    let safeOffset = 0;
+    try {
+      // Find the latest archive to determine safe starting point
+      const archiveDir = getArchiveDir();
+      if (fs.existsSync(archiveDir)) {
+        const archives = fs.readdirSync(archiveDir).filter(f => f.endsWith('.jsonl')).sort();
+        if (archives.length > 0) {
+          // We've been compacted, so offset 0 in the current bus is safe
+          safeOffset = 0;
+        }
+      }
+      // If no archives, bus hasn't been compacted — start from current end
+      // to avoid replaying everything (accept missing messages over replay storm)
+      if (safeOffset === 0 && fs.existsSync(busPath)) {
+        safeOffset = fs.statSync(busPath).size;
+      }
+    } catch (e2) { /* use 0 */ }
+
+    const recovered = {
+      session_id: sessionId,
+      last_seq: -1,
+      byte_offset: safeOffset,
+      processed_ids: [],
+      updated_at: new Date().toISOString(),
+      _recovered: true
+    };
+    writeCursor(sessionId, recovered);
+    return recovered;
   }
-  return null;
 }
 
 /**
@@ -367,6 +479,18 @@ function readMessages(sessionId, opts = {}) {
     }
   }
 
+  // Sort by priority (blocking → normal → fyi), then by sender_seq within same sender
+  messages.sort((a, b) => {
+    const pa = PRIORITY_ORDER[a.priority] ?? 1;
+    const pb = PRIORITY_ORDER[b.priority] ?? 1;
+    if (pa !== pb) return pa - pb;
+    // Within same sender, sort by sender_seq (FIFO)
+    if (a.from === b.from && a.sender_seq !== undefined && b.sender_seq !== undefined) {
+      return a.sender_seq - b.sender_seq;
+    }
+    return 0; // preserve arrival order otherwise
+  });
+
   // Update cursor position (advance to end of what we read)
   const newCursor = {
     ...cursor,
@@ -496,6 +620,211 @@ function delegateTask(from, to, taskData) {
     payload: { action: 'create_task', data: taskData },
     ack: { required: true, deadline_ms: 60000 }
   });
+}
+
+// ============================================================================
+// ACK / NACK PROTOCOL
+// ============================================================================
+
+/**
+ * Track a pending ACK (persisted to file for crash recovery)
+ */
+function trackPendingAck(messageId, from, to, deadlineMs) {
+  const acksPath = getPendingAcksPath();
+  const dir = path.dirname(acksPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  const entry = {
+    message_id: messageId,
+    from,
+    to,
+    deadline_at: new Date(Date.now() + deadlineMs).toISOString(),
+    retries: 0,
+    created_at: new Date().toISOString()
+  };
+  fs.appendFileSync(acksPath, JSON.stringify(entry) + '\n');
+}
+
+/**
+ * Load all pending ACKs
+ * @returns {object[]}
+ */
+function loadPendingAcks() {
+  const acksPath = getPendingAcksPath();
+  if (!fs.existsSync(acksPath)) return [];
+
+  const lines = fs.readFileSync(acksPath, 'utf8').split('\n').filter(l => l.trim());
+  const acks = [];
+  for (const line of lines) {
+    try { acks.push(JSON.parse(line)); } catch (e) { /* skip */ }
+  }
+  return acks;
+}
+
+/**
+ * Remove a pending ACK (message was acknowledged)
+ */
+function clearPendingAck(messageId) {
+  const acksPath = getPendingAcksPath();
+  if (!fs.existsSync(acksPath)) return;
+
+  const acks = loadPendingAcks().filter(a => a.message_id !== messageId);
+  fs.writeFileSync(acksPath, acks.map(a => JSON.stringify(a)).join('\n') + (acks.length ? '\n' : ''));
+}
+
+/**
+ * Send an ACK for a received message
+ * @param {string} from - The acknowledging session
+ * @param {string} originalMessageId - The message being acknowledged
+ * @param {string} originalSender - Who sent the original message
+ */
+function sendAck(from, originalMessageId, originalSender) {
+  const result = sendMessage({
+    type: 'response',
+    from,
+    to: originalSender,
+    priority: 'normal',
+    correlation_id: originalMessageId,
+    payload: { action: 'ack', data: { status: 'acknowledged' } }
+  });
+  // Clear from pending acks on the sender side (if we are the sender reading our own ack)
+  clearPendingAck(originalMessageId);
+  return result;
+}
+
+/**
+ * Send a NACK (rejection) for a received message
+ * @param {string} from - The rejecting session
+ * @param {string} originalMessageId - The message being rejected
+ * @param {string} originalSender - Who sent the original message
+ * @param {string} reason - Why the message was rejected
+ */
+function sendNack(from, originalMessageId, originalSender, reason) {
+  return sendMessage({
+    type: 'response',
+    from,
+    to: originalSender,
+    priority: 'normal',
+    correlation_id: originalMessageId,
+    payload: { action: 'nack', data: { status: 'rejected', reason } }
+  });
+}
+
+/**
+ * Process pending ACKs: retry expired ones or move to DLQ
+ * Should be called periodically (e.g., in PM loop)
+ * @returns {{ retried: number, dlqd: number }}
+ */
+function processAckTimeouts() {
+  const acks = loadPendingAcks();
+  if (acks.length === 0) return { retried: 0, dlqd: 0 };
+
+  const now = Date.now();
+  const stillPending = [];
+  let retried = 0;
+  let dlqd = 0;
+
+  for (const ack of acks) {
+    const deadlineAt = new Date(ack.deadline_at).getTime();
+    if (now <= deadlineAt) {
+      stillPending.push(ack);
+      continue;
+    }
+
+    // Deadline passed
+    if (ack.retries < ACK_MAX_RETRIES) {
+      // Retry: re-send a nudge
+      if (ack.to) nudgeSession(ack.to);
+      ack.retries++;
+      ack.deadline_at = new Date(now + DEFAULT_ACK_DEADLINE_MS).toISOString();
+      stillPending.push(ack);
+      retried++;
+    } else {
+      // Exhausted retries → DLQ
+      moveToDlq(ack.message_id, 'ack_timeout', {
+        from: ack.from,
+        to: ack.to,
+        retries: ack.retries,
+        original_deadline: ack.created_at
+      });
+      dlqd++;
+    }
+  }
+
+  // Rewrite pending acks
+  const acksPath = getPendingAcksPath();
+  fs.writeFileSync(acksPath, stillPending.map(a => JSON.stringify(a)).join('\n') + (stillPending.length ? '\n' : ''));
+
+  return { retried, dlqd };
+}
+
+// ============================================================================
+// DEAD LETTER QUEUE
+// ============================================================================
+
+/**
+ * Move a message to the dead letter queue
+ * @param {string} messageId - ID of the failed message
+ * @param {string} reason - Why it was moved to DLQ
+ * @param {object} metadata - Additional context
+ */
+function moveToDlq(messageId, reason, metadata = {}) {
+  const dlqPath = getDlqPath();
+  const dir = path.dirname(dlqPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  // Try to find the original message from bus
+  let originalMessage = null;
+  try {
+    const busPath = getBusPath();
+    if (fs.existsSync(busPath)) {
+      const lines = fs.readFileSync(busPath, 'utf8').split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg.id === messageId) { originalMessage = msg; break; }
+        } catch (e) { /* skip */ }
+      }
+    }
+  } catch (e) { /* no original found */ }
+
+  const dlqEntry = {
+    message_id: messageId,
+    reason,
+    moved_at: new Date().toISOString(),
+    metadata,
+    original_message: originalMessage
+  };
+
+  fs.appendFileSync(dlqPath, JSON.stringify(dlqEntry) + '\n');
+}
+
+/**
+ * Read all messages in the dead letter queue
+ * @returns {object[]}
+ */
+function getDLQMessages() {
+  const dlqPath = getDlqPath();
+  if (!fs.existsSync(dlqPath)) return [];
+
+  const lines = fs.readFileSync(dlqPath, 'utf8').split('\n').filter(l => l.trim());
+  const entries = [];
+  for (const line of lines) {
+    try { entries.push(JSON.parse(line)); } catch (e) { /* skip */ }
+  }
+  return entries;
+}
+
+/**
+ * Clear the dead letter queue (after PM review)
+ * @returns {number} Number of entries cleared
+ */
+function clearDLQ() {
+  const dlqPath = getDlqPath();
+  if (!fs.existsSync(dlqPath)) return 0;
+  const count = getDLQMessages().length;
+  fs.writeFileSync(dlqPath, '');
+  return count;
 }
 
 // ============================================================================
@@ -759,10 +1088,14 @@ module.exports = {
   // Constants
   MESSAGE_BUS_PATH,
   CURSOR_DIR,
+  DLQ_PATH,
   MSG_SIZE_LIMIT,
   VALID_TYPES,
   VALID_PRIORITIES,
   DEFAULT_TTL_MS,
+  DEFAULT_ACK_DEADLINE_MS,
+  ACK_MAX_RETRIES,
+  PRIORITY_ORDER,
   // Core
   generateMessageId,
   validateMessage,
@@ -776,6 +1109,17 @@ module.exports = {
   sendBroadcast,
   sendAgentIntroduction,
   delegateTask,
+  // ACK protocol
+  sendAck,
+  sendNack,
+  trackPendingAck,
+  loadPendingAcks,
+  clearPendingAck,
+  processAckTimeouts,
+  // Dead letter queue
+  moveToDlq,
+  getDLQMessages,
+  clearDLQ,
   // Cursor management
   loadCursor,
   writeCursor,
