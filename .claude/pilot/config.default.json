@@ -56,6 +56,26 @@
       "warn_severities": ["moderate"]
     }
   },
+  "cost_tracking": {
+    "enabled": true,
+    "cost_per_million_tokens": 10.0,
+    "bytes_per_token": 4,
+    "budgets": {
+      "per_task": {
+        "warn_tokens": 500000,
+        "block_tokens": 2000000
+      },
+      "per_agent_per_day": {
+        "warn_tokens": 1000000,
+        "block_tokens": 3000000
+      },
+      "per_day": {
+        "warn_tokens": 5000000,
+        "block_tokens": 10000000
+      },
+      "enforcement": "soft"
+    }
+  },
   "benchmarks": {
     "enabled": true,
     "targets": {

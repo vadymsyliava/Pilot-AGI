@@ -467,11 +467,22 @@ orchestrator:
   # Require tests to pass before merge approval
   require_tests_pass: false
 
-  # Cost tracking (token usage per agent/task)
+  # Cost tracking (token usage per agent/task) — Phase 3.11
   cost_tracking:
     enabled: true
+    # Per-task budgets (existing thresholds, now part of structured budget)
     warn_threshold_tokens: 500000   # Warn at 500k tokens per task
     block_threshold_tokens: 2000000 # Block at 2M tokens per task
+    # Per-agent-per-day budgets
+    per_agent_per_day:
+      warn_tokens: 1000000          # Warn at 1M tokens/agent/day
+      block_tokens: 3000000         # Block at 3M tokens/agent/day
+    # Per-day budgets (all agents combined)
+    per_day:
+      warn_tokens: 5000000          # Warn at 5M tokens/day total
+      block_tokens: 10000000        # Block at 10M tokens/day total
+    # Enforcement mode: "soft" = warn only, "hard" = block edits
+    enforcement: "soft"
 
 # =============================================================================
 # AUTONOMY (Full Agent Loop)

@@ -457,6 +457,18 @@ async function main() {
   const pressure = require('./lib/pressure');
   pressure.recordToolCall(sessionId, outputBytes);
 
+  // --- Phase 3.11: Per-task cost tracking ---
+  // Record cost against the agent's claimed task (fire-and-forget).
+  try {
+    const taskId = getClaimedTaskId(sessionId);
+    if (taskId) {
+      const costTracker = require('./lib/cost-tracker');
+      costTracker.recordTaskCost(sessionId, taskId, outputBytes);
+    }
+  } catch (e) {
+    // Best effort — never block tool execution
+  }
+
   // Check if we should nudge
   const threshold = getThreshold();
   const { shouldNudge, pressure: stats } = pressure.checkAndNudge(sessionId, threshold);

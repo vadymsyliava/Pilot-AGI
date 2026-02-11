@@ -32,6 +32,7 @@ const HEALTH_SCAN_INTERVAL_MS = 30000;    // 30s between health scans
 const TASK_SCAN_INTERVAL_MS = 10000;      // 10s between task assignment scans
 const DRIFT_SCAN_INTERVAL_MS = 120000;    // 2min between drift scans
 const PRESSURE_SCAN_INTERVAL_MS = 60000;  // 60s between pressure scans (Phase 3.5)
+const COST_SCAN_INTERVAL_MS = 60000;      // 60s between cost/budget scans (Phase 3.11)
 const PRESSURE_NUDGE_THRESHOLD_PCT = 70;  // PM nudges agents above this if no auto-checkpoint
 const MAX_ACTIONS_PER_CYCLE = 10;         // Prevent runaway action storms
 const ACTION_LOG_PATH = '.claude/pilot/state/orchestrator/action-log.jsonl';
@@ -50,6 +51,7 @@ class PmLoop {
     this.lastTaskScan = 0;
     this.lastDriftScan = 0;
     this.lastPressureScan = 0;
+    this.lastCostScan = 0;
     this.lastRecoveryScan = 0;
     this.actionQueue = [];  // Used by pm-queue.js for persistence
     this.opts = {
@@ -57,6 +59,7 @@ class PmLoop {
       taskScanIntervalMs: opts.taskScanIntervalMs || TASK_SCAN_INTERVAL_MS,
       driftScanIntervalMs: opts.driftScanIntervalMs || DRIFT_SCAN_INTERVAL_MS,
       pressureScanIntervalMs: opts.pressureScanIntervalMs || PRESSURE_SCAN_INTERVAL_MS,
+      costScanIntervalMs: opts.costScanIntervalMs || COST_SCAN_INTERVAL_MS,
       maxActionsPerCycle: opts.maxActionsPerCycle || MAX_ACTIONS_PER_CYCLE,
       dryRun: opts.dryRun || false,
       ...opts
@@ -146,6 +149,13 @@ class PmLoop {
       this.lastPressureScan = now;
       const pressureResults = this._pressureScan();
       results.push(...pressureResults);
+    }
+
+    // Cost/budget scan (Phase 3.11)
+    if (now - this.lastCostScan >= this.opts.costScanIntervalMs) {
+      this.lastCostScan = now;
+      const costResults = this._costScan();
+      results.push(...costResults);
     }
 
     // Recovery scan (Phase 3.8) — runs at health scan interval
@@ -766,6 +776,97 @@ class PmLoop {
   }
 
   /**
+   * Cost/budget scan (Phase 3.11): check all active agents' token budgets.
+   * Sends warnings or escalations when thresholds are approached/exceeded.
+   * Also publishes cost data to shared memory channel.
+   */
+  _costScan() {
+    const results = [];
+
+    try {
+      const costTracker = require('./cost-tracker');
+      const activeSessions = session.getActiveSessions();
+
+      for (const agent of activeSessions) {
+        const sid = agent.session_id;
+        const taskId = agent.claimed_task;
+        if (!sid || !taskId || sid === this.pmSessionId) continue;
+
+        const budget = costTracker.checkBudget(sid, taskId);
+
+        if (budget.status === 'exceeded') {
+          this.logAction('cost_exceeded', {
+            agent: sid,
+            task_id: taskId,
+            task_tokens: budget.task_tokens,
+            details: budget.details
+          });
+
+          if (!this.opts.dryRun) {
+            messaging.sendNotification(
+              this.pmSessionId,
+              sid,
+              'cost_exceeded',
+              {
+                task_id: taskId,
+                task_tokens: budget.task_tokens,
+                agent_today_tokens: budget.agent_today_tokens,
+                details: budget.details,
+                message: `Budget exceeded on task ${taskId} (${budget.task_tokens.toLocaleString()} tokens). Consider wrapping up or splitting the task.`
+              }
+            );
+          }
+
+          results.push({
+            action: 'cost_scan',
+            agent: sid,
+            task_id: taskId,
+            status: 'exceeded',
+            task_tokens: budget.task_tokens
+          });
+        } else if (budget.status === 'warning') {
+          this.logAction('cost_warning', {
+            agent: sid,
+            task_id: taskId,
+            task_tokens: budget.task_tokens,
+            details: budget.details
+          });
+
+          if (!this.opts.dryRun) {
+            messaging.sendNotification(
+              this.pmSessionId,
+              sid,
+              'cost_warning',
+              {
+                task_id: taskId,
+                task_tokens: budget.task_tokens,
+                message: `Approaching budget limit on task ${taskId} (${budget.task_tokens.toLocaleString()} tokens).`
+              }
+            );
+          }
+
+          results.push({
+            action: 'cost_scan',
+            agent: sid,
+            task_id: taskId,
+            status: 'warning',
+            task_tokens: budget.task_tokens
+          });
+        }
+      }
+
+      // Publish cost data to shared memory (best-effort)
+      if (!this.opts.dryRun) {
+        try { costTracker.publishCostChannel(); } catch (e) { /* best effort */ }
+      }
+    } catch (e) {
+      this.logAction('cost_scan_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  /**
    * Recovery scan (Phase 3.8): check for recoverable tasks and delegate
    * them to idle agents with checkpoint context.
    */
@@ -957,7 +1058,8 @@ class PmLoop {
       last_health_scan: this.lastHealthScan ? new Date(this.lastHealthScan).toISOString() : null,
       last_task_scan: this.lastTaskScan ? new Date(this.lastTaskScan).toISOString() : null,
       last_drift_scan: this.lastDriftScan ? new Date(this.lastDriftScan).toISOString() : null,
-      last_pressure_scan: this.lastPressureScan ? new Date(this.lastPressureScan).toISOString() : null
+      last_pressure_scan: this.lastPressureScan ? new Date(this.lastPressureScan).toISOString() : null,
+      last_cost_scan: this.lastCostScan ? new Date(this.lastCostScan).toISOString() : null
     };
   }
 }
