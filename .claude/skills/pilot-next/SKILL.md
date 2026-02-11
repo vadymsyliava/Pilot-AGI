@@ -144,38 +144,27 @@ Use AskUserQuestion:
 
 When user selects "Start implementation":
 
-### 5.1: Change status to in_progress
-```bash
-bd update {id} --status in_progress
-```
+### 5.1: Atomic claim — bd status + session lease + broadcast
 
-### 5.2: Claim task in session state (multi-session coordination)
-
-Find and update the current session state file to claim this task.
+Change bd status AND claim in session state in one step.
 This prevents other Claude Code sessions from working on the same task.
 
 ```bash
-# Find the most recent active session file
-SESSION_FILE=$(ls -t .claude/pilot/state/sessions/S-*.json 2>/dev/null | head -1)
-
-# Update claimed_task if session file exists
-if [ -n "$SESSION_FILE" ]; then
-  # Use node for reliable JSON manipulation
-  node -e "
-    const fs = require('fs');
-    const f = '$SESSION_FILE';
-    const s = JSON.parse(fs.readFileSync(f, 'utf8'));
-    s.claimed_task = '{task-id}';
-    s.last_heartbeat = new Date().toISOString();
-    fs.writeFileSync(f, JSON.stringify(s, null, 2));
-    console.log('Claimed task in session:', s.session_id);
-  "
-fi
+bd update {id} --status in_progress && node .claude/pilot/hooks/cli/claim-task.js {id}
 ```
 
-Note: Replace `{task-id}` with the actual task ID being claimed.
+The CLI helper does three things atomically:
+1. Calls `session.claimTask()` — sets lease, locks session state
+2. Broadcasts `task_claimed` event to all agents via message bus
+3. Returns JSON with claim details (session_id, lease_expires_at)
 
-### 5.3: Create session capsule
+**If claim fails** (already claimed by another session), show:
+```
+⚠ Task {id} is already claimed by session {other-session-id}
+```
+Then offer to pick a different task or wait.
+
+### 5.2: Create session capsule
 ```bash
 mkdir -p runs
 echo "## $(date +%Y-%m-%d) Session
@@ -187,7 +176,7 @@ echo "## $(date +%Y-%m-%d) Session
 " >> runs/$(date +%Y-%m-%d).md
 ```
 
-### 5.4: AUTOMATICALLY create implementation plan
+### 5.3: AUTOMATICALLY create implementation plan
 
 Do NOT say "Run /pilot-plan". Instead, immediately:
 
@@ -222,7 +211,7 @@ VERIFICATION
 ────────────────────────────────────────────────────────────────
 ```
 
-### 5.5: Ask for approval
+### 5.4: Ask for approval
 
 Use AskUserQuestion:
 
@@ -268,3 +257,16 @@ open (To-Do) → [user picks "Start Implementation"] → in_progress → [work d
 ```
 
 The status change happens at the moment of commitment, not at display time.
+
+## Multi-Session Coordination
+
+When claiming a task via `claim-task.js`, the following happens atomically:
+1. `session.claimTask()` — writes claimed_task + lease to session state file
+2. `messaging.sendBroadcast()` — sends `task_claimed` event to all agents
+3. `session.logEvent()` — writes `task_claimed` to event stream
+
+Other sessions can check `.claude/pilot/state/sessions/*.json` to see:
+- Which tasks are currently claimed
+- Which sessions are active (based on lockfile + PID)
+
+To release a task: `node .claude/pilot/hooks/cli/release-task.js`

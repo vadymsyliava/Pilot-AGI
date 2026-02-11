@@ -215,15 +215,47 @@ async function main() {
 
     // Announce new session to event stream + message bus
     try {
+      const { execFileSync } = require('child_process');
+
+      // Gather task context for the announcement
+      let readyCount = 0;
+      let topTaskId = null;
+      let topTaskTitle = null;
+      try {
+        const readyJson = execFileSync('bd', ['ready', '--json'], {
+          encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe']
+        });
+        const readyTasks = JSON.parse(readyJson);
+        readyCount = readyTasks.length;
+        if (readyTasks.length > 0) {
+          topTaskId = readyTasks[0].id;
+          topTaskTitle = readyTasks[0].title;
+        }
+      } catch (bdErr) {
+        // bd not available — skip task context
+      }
+
+      // Count live peers (excluding self)
+      const peerCount = session.getActiveSessions(sessionId).filter(s =>
+        session.isSessionAlive(s.session_id)
+      ).length;
+
       session.logEvent({
         type: 'session_announced',
         session_id: sessionId,
-        pid: process.pid
+        pid: process.pid,
+        peers: peerCount,
+        ready_tasks: readyCount,
+        top_task: topTaskId
       });
+
       const messaging = require('./lib/messaging');
       messaging.sendBroadcast(sessionId, 'session_announced', {
         session_id: sessionId,
-        message: `New agent joined: ${sessionId}`
+        message: `New agent joined: ${sessionId}`,
+        peers: peerCount,
+        ready_tasks: readyCount,
+        top_task: topTaskId ? { id: topTaskId, title: topTaskTitle } : null
       });
     } catch (announceErr) {
       // Best effort — don't block startup
@@ -249,10 +281,31 @@ async function main() {
       return `  ${s.session_id}: ${task}${areas}`;
     });
 
+    // Gather ready task count for the welcome summary
+    let announcedReadyCount = 0;
+    let announcedTopTask = null;
+    try {
+      const { execFileSync } = require('child_process');
+      const readyJson = execFileSync('bd', ['ready', '--json'], {
+        encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe']
+      });
+      const readyTasks = JSON.parse(readyJson);
+      announcedReadyCount = readyTasks.length;
+      if (readyTasks.length > 0) {
+        announcedTopTask = `[${readyTasks[0].id}] ${readyTasks[0].title}`;
+      }
+    } catch (bdErr) {
+      // bd not available
+    }
+
     messages.push(
       `You are Agent ${activeSessions.length + 1} of ${maxSessions} max\n` +
       `Active peers (${activeSessions.length}):\n` +
-      agentLines.join('\n')
+      agentLines.join('\n') +
+      (announcedReadyCount > 0
+        ? `\n${announcedReadyCount} tasks available` +
+          (announcedTopTask ? `, top: ${announcedTopTask}` : '')
+        : '')
     );
 
     // Get locked files and areas
