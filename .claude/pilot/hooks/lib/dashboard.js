@@ -61,6 +61,7 @@ function collect() {
     memory: [],
     drift: [],
     pressure: [],
+    costs: [],
     events: [],
     collected_at: new Date().toISOString()
   };
@@ -148,6 +149,24 @@ function collect() {
           calls: p.calls || 0,
           bytes: p.bytes || 0,
           pct_estimate: p.pct_estimate || 0
+        });
+      }
+    } catch (e) {
+      // partial data is fine
+    }
+  }
+
+  // --- Cost Estimates (per active agent) ---
+  if (pressure) {
+    try {
+      for (const agent of result.agents) {
+        const cost = pressure.getCostEstimate(agent.session_id);
+        result.costs.push({
+          session_id: agent.session_id,
+          claimed_task: agent.claimed_task,
+          tokens_estimate: cost.tokens_estimate || 0,
+          cost_usd: cost.cost_usd || 0,
+          calls: cost.calls || 0
         });
       }
     } catch (e) {
@@ -269,6 +288,26 @@ function getAlerts(data) {
     }
   }
 
+  // --- Cost Threshold Exceeded ---
+  const costPolicy = getCostPolicy();
+  for (const c of (data.costs || [])) {
+    if (costPolicy.warn_threshold_tokens && c.tokens_estimate >= costPolicy.warn_threshold_tokens) {
+      alerts.push({
+        severity: c.tokens_estimate >= (costPolicy.block_threshold_tokens || Infinity) ? SEVERITY.CRITICAL : SEVERITY.WARNING,
+        type: 'cost_threshold_exceeded',
+        message: `Agent ${c.session_id} used ~${c.tokens_estimate.toLocaleString()} tokens ($${c.cost_usd.toFixed(4)}) on task ${c.claimed_task || 'unknown'}`,
+        details: {
+          session_id: c.session_id,
+          claimed_task: c.claimed_task,
+          tokens_estimate: c.tokens_estimate,
+          cost_usd: c.cost_usd,
+          warn_threshold: costPolicy.warn_threshold_tokens,
+          block_threshold: costPolicy.block_threshold_tokens
+        }
+      });
+    }
+  }
+
   // --- Bus Compaction Needed ---
   if (data.messaging.needs_compaction) {
     alerts.push({
@@ -280,6 +319,26 @@ function getAlerts(data) {
   }
 
   return alerts;
+}
+
+// ============================================================================
+// HELPERS
+// ============================================================================
+
+/**
+ * Load cost tracking thresholds from policy.yaml.
+ */
+function getCostPolicy() {
+  try {
+    const policy = loadModule('policy');
+    if (policy) {
+      const p = policy.loadPolicy();
+      return p.orchestrator?.cost_tracking || {};
+    }
+  } catch (e) {
+    // fallback
+  }
+  return {};
 }
 
 // ============================================================================
