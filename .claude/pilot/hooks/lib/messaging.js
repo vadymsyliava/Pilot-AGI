@@ -470,6 +470,20 @@ function sendBroadcast(from, topic, payload) {
 }
 
 /**
+ * Broadcast agent introduction with identity and capabilities.
+ * Sent on session start so other agents discover who's online.
+ */
+function sendAgentIntroduction(sessionId, { role, agentName, capabilities }) {
+  return sendBroadcast(sessionId, 'agent_introduced', {
+    session_id: sessionId,
+    agent_name: agentName,
+    role: role,
+    capabilities: capabilities || [],
+    status: 'available'
+  });
+}
+
+/**
  * Delegate a task to another agent
  */
 function delegateTask(from, to, taskData) {
@@ -760,6 +774,7 @@ module.exports = {
   sendResponse,
   sendNotification,
   sendBroadcast,
+  sendAgentIntroduction,
   delegateTask,
   // Cursor management
   loadCursor,
