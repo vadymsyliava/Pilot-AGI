@@ -296,4 +296,10 @@ test('design-tokens channel exists in memory index', () => {
 
 console.log(`\n${'='.repeat(50)}`);
 console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);
-process.exit(failed > 0 ? 1 : 0);
+
+// When run directly (not under a test runner), exit with appropriate code
+if (require.main === module) {
+  process.exit(failed > 0 ? 1 : 0);
+} else if (failed > 0) {
+  throw new Error(`${failed} test(s) failed`);
+}
