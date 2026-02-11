@@ -256,6 +256,42 @@
       }
     },
 
+    "pm": {
+      "name": "PM Orchestrator Agent",
+      "description": "Team lead that coordinates multiple agents, assigns tasks, detects drift, and manages merge approvals",
+      "rules_file": null,
+      "capabilities": [
+        "task_assignment",
+        "drift_detection",
+        "work_review",
+        "merge_approval",
+        "agent_coordination",
+        "stale_agent_management",
+        "cost_tracking"
+      ],
+      "file_patterns": [
+        "**/*"
+      ],
+      "task_indicators": [
+        "coordinate",
+        "manage",
+        "assign",
+        "review",
+        "approve",
+        "orchestrate",
+        "pm",
+        "team lead",
+        "merge"
+      ],
+      "excluded_patterns": [],
+      "model_preference": "opus",
+      "memory": {
+        "publishes": ["pm-decisions"],
+        "consumes": ["design-tokens", "api-types", "component-registry"]
+      },
+      "decomposition": null
+    },
+
     "review": {
       "name": "Review Agent",
       "description": "Code review and quality assurance specialist",

@@ -41,7 +41,7 @@ test('loadIndex returns valid index', () => {
 // 2. List channels
 test('listChannels returns all channels', () => {
   const channels = memory.listChannels();
-  assert(channels.length === 3, 'should have 3 channels');
+  assert(channels.length === 4, 'should have 4 channels (including pm-decisions)');
   assert(channels.includes('design-tokens'), 'should include design-tokens');
 });
 

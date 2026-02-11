@@ -1,0 +1,11 @@
+{
+  "channel": "pm-decisions",
+  "version": 1,
+  "publishedBy": "system",
+  "sessionId": null,
+  "publishedAt": "2026-02-10T23:50:00Z",
+  "summary": "PM decisions channel initialized. No decisions yet.",
+  "data": {
+    "decisions": []
+  }
+}
