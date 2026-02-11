@@ -744,48 +744,49 @@ function sendToAgent(from, agentName, topic, payload, opts = {}) {
 }
 
 /**
- * Send a message to any agent with a specific capability.
- * Uses agent registry + active sessions to find the best recipient.
- * Falls back to role-based routing if no live agent found.
+ * Send a message to any agent that has a specific capability.
+ * Uses service discovery to find the recipient.
  *
  * @param {string} from - Sender session ID
- * @param {string} capability - Capability to look for (e.g., 'api_design')
+ * @param {string} capability - Required capability (e.g., 'api_design')
  * @param {string} topic - Message topic
  * @param {object} payload - Message data
- * @param {object} opts - Options
- * @returns {{ success: boolean, id?: string, routed_to?: string }}
+ * @param {object} [opts] - { priority, ttl_ms, ack }
+ * @returns {{ success: boolean, id?: string, matched_agent?: object, error?: string }}
  */
 function sendToCapability(from, capability, topic, payload, opts = {}) {
-  try {
-    const agentContext = require('./agent-context');
-    const agents = agentContext.discoverAgentByCap(capability);
-    if (agents.length > 0) {
-      const target = agents[0]; // Pick first available
-      const result = sendToAgent(from, target.agent_name, topic, payload, opts);
-      return { ...result, routed_to: target.agent_name };
-    }
-  } catch (e) {
-    // Fall through to role-based
+  // Lazy-load to avoid circular dependency
+  const agentContext = require('./agent-context');
+  const agents = agentContext.discoverAgentByCap(capability);
+
+  if (agents.length === 0) {
+    return {
+      success: false,
+      error: `No active agent found with capability: ${capability}`
+    };
   }
 
-  // Fallback: try to find a role with this capability in the registry
-  try {
-    const session = require('./session');
-    const registry = session.loadAgentRegistry();
-    if (registry && registry.agents) {
-      for (const [role, config] of Object.entries(registry.agents)) {
-        const caps = config.capabilities || [];
-        if (caps.includes(capability)) {
-          const result = sendToRole(from, role, topic, payload, opts);
-          return { ...result, routed_to: role };
-        }
-      }
-    }
-  } catch (e) {
-    // Best effort
-  }
+  // Pick the first available (not busy) agent, or fall back to first match
+  const target = agents.find(a => !a.claimed_task) || agents[0];
 
-  return { success: false, error: `No agent found with capability: ${capability}` };
+  const result = sendMessage({
+    type: opts.type || 'request',
+    from,
+    to: target.session_id,
+    to_agent: target.agent_name,
+    topic,
+    priority: opts.priority || 'normal',
+    payload: { action: topic, data: payload },
+    ttl_ms: opts.ttl_ms || DEFAULT_TTL_MS[opts.priority || 'normal'],
+    ack: opts.ack || undefined
+  });
+
+  return {
+    success: result.success,
+    id: result.id,
+    matched_agent: { session_id: target.session_id, agent_name: target.agent_name, role: target.role },
+    error: result.error
+  };
 }
 
 /**
@@ -1097,7 +1098,7 @@ function processAckTimeouts() {
 
       if (nextLevel < chain.length) {
         const nextStep = chain[nextLevel];
-        if (nextStep.target === 'human') {
+        if ((nextStep.level || nextStep.target) === 'human') {
           // Human escalation — write to JSONL for human review
           try {
             const agentContext = require('./agent-context');
@@ -1118,7 +1119,7 @@ function processAckTimeouts() {
           sendMessage({
             type: 'request',
             from: ack.from,
-            to_role: nextStep.target,
+            to_role: nextStep.level || nextStep.target,
             topic: 'escalation.timeout',
             priority: 'blocking',
             payload: {
