@@ -249,10 +249,20 @@ async function main() {
         top_task: topTaskId
       });
 
+      // Read back session state for agent identity
+      const sessionState = session.updateSession(sessionId, {}) || {};
+      const agentRole = sessionState.role || null;
+      const agentName = sessionState.agent_name || sessionId;
+      const capabilities = session.getAgentCapabilities(agentRole);
+
       const messaging = require('./lib/messaging');
-      messaging.sendBroadcast(sessionId, 'session_announced', {
+
+      // Broadcast session announcement with agent identity
+      messaging.sendBroadcast(sessionId, 'agent_introduced', {
         session_id: sessionId,
-        message: `New agent joined: ${sessionId}`,
+        agent_name: agentName,
+        role: agentRole,
+        capabilities: capabilities,
         peers: peerCount,
         ready_tasks: readyCount,
         top_task: topTaskId ? { id: topTaskId, title: topTaskTitle } : null
@@ -272,13 +282,15 @@ async function main() {
     // Build rich agent awareness status
     const maxSessions = policy?.session?.max_concurrent_sessions || 6;
     const agentLines = activeSessions.map(s => {
+      const name = s.agent_name || s.session_id;
+      const roleTag = s.role ? `[${s.role}]` : '';
       const task = s.claimed_task
         ? `working on [${s.claimed_task}]`
         : 'idle';
       const areas = (s.locked_areas || []).length > 0
         ? ` (locked: ${s.locked_areas.join(', ')})`
         : '';
-      return `  ${s.session_id}: ${task}${areas}`;
+      return `  ${name} ${roleTag}: ${task}${areas}`;
     });
 
     // Gather ready task count for the welcome summary
@@ -424,6 +436,63 @@ async function main() {
     }
   } catch (e) {
     // Cache refresh failed, continue without
+  }
+
+  // -------------------------------------------------------------------------
+  // 7a. Auto-Resume from Checkpoint (Phase 3.5)
+  // -------------------------------------------------------------------------
+
+  try {
+    const checkpoint = require('./lib/checkpoint');
+
+    // Check all recent sessions for checkpoints (current + previous)
+    // A checkpoint may exist under a prior session ID if the agent restarted
+    const sessDir = path.join(process.cwd(), '.claude/pilot/state/sessions');
+    let savedCheckpoint = null;
+
+    // First try: load checkpoint for the new session ID
+    savedCheckpoint = checkpoint.loadCheckpoint(sessionId);
+
+    // Second try: scan recent session files for a checkpoint with a claimed task
+    if (!savedCheckpoint && fs.existsSync(sessDir)) {
+      const sessFiles = fs.readdirSync(sessDir)
+        .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'))
+        .sort()
+        .reverse()
+        .slice(0, 5); // Check last 5 sessions
+
+      for (const f of sessFiles) {
+        try {
+          const data = JSON.parse(fs.readFileSync(path.join(sessDir, f), 'utf8'));
+          if (data.session_id && data.session_id !== sessionId) {
+            const cp = checkpoint.loadCheckpoint(data.session_id);
+            if (cp && cp.task_id) {
+              savedCheckpoint = cp;
+              break;
+            }
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+    }
+
+    if (savedCheckpoint && savedCheckpoint.task_id) {
+      const restorePrompt = checkpoint.buildRestorationPrompt(savedCheckpoint);
+      if (restorePrompt) {
+        context.checkpoint_restored = true;
+        context.restored_task = savedCheckpoint.task_id;
+        context.restored_version = savedCheckpoint.version;
+
+        // Prepend restoration context so the agent sees it first
+        messages.unshift(`CHECKPOINT RESTORED (v${savedCheckpoint.version}): Task ${savedCheckpoint.task_id}`);
+
+        // Add the full restoration prompt to system message
+        output.systemMessage = restorePrompt + '\n\n' + (output.systemMessage || '');
+      }
+    }
+  } catch (e) {
+    // Checkpoint restore failed — continue without, agent can use /pilot-resume-context
   }
 
   // -------------------------------------------------------------------------

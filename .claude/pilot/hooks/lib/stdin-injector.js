@@ -200,6 +200,9 @@ function actionToPrompt(action) {
     case 'health_alert':
       return `Health issue: ${data.agents?.length || 0} stale/dead agents detected. Details: ${JSON.stringify(data.agents || []).substring(0, 500)}`;
 
+    case 'compact_request':
+      return `Agent ${data.session_id} auto-checkpointed at ${data.pressure_pct}% context pressure. Run /compact to free context window. The agent will auto-resume from checkpoint on restart.`;
+
     default:
       return `PM action required: ${type}. Data: ${JSON.stringify(data).substring(0, 500)}`;
   }
