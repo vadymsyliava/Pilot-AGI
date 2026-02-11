@@ -22,6 +22,7 @@ let _memory = null;
 let _pmResearch = null;
 let _agentContext = null;
 let _recovery = null;
+let _artifactRegistry = null;
 
 function getCheckpoint() {
   if (!_checkpoint) _checkpoint = require('./checkpoint');
@@ -47,6 +48,13 @@ function getAgentContext() {
     try { _agentContext = require('./agent-context'); } catch (e) { _agentContext = null; }
   }
   return _agentContext;
+}
+
+function getArtifactRegistry() {
+  if (!_artifactRegistry) {
+    try { _artifactRegistry = require('./artifact-registry'); } catch (e) { _artifactRegistry = null; }
+  }
+  return _artifactRegistry;
 }
 
 function getRecovery() {
@@ -85,6 +93,7 @@ function buildContextCapsule(task, options = {}) {
     plan: null,
     related_decisions: [],
     related_agents: [],
+    artifacts: [],
     agent_type: agentType || null
   };
 
@@ -104,6 +113,9 @@ function buildContextCapsule(task, options = {}) {
 
   // 5. Get related agent working context
   capsule.related_agents = _gatherRelatedAgents(task.id);
+
+  // 6. Gather available artifact inputs from dependencies (Phase 4.7)
+  capsule.artifacts = _gatherArtifacts(task.id, projectRoot);
 
   return capsule;
 }
@@ -322,6 +334,20 @@ function buildSpawnPrompt(capsule) {
     lines.push('');
   }
 
+  // Available artifacts from dependencies (Phase 4.7)
+  if (capsule.artifacts && capsule.artifacts.length > 0) {
+    lines.push('## Available Artifacts');
+    lines.push('The following artifacts were produced by dependency tasks and are available for use:');
+    lines.push('');
+    for (const art of capsule.artifacts) {
+      lines.push(`### ${art.name} (from ${art.task_id})`);
+      lines.push('```');
+      lines.push(art.content_preview);
+      lines.push('```');
+      lines.push('');
+    }
+  }
+
   // Instructions
   lines.push('## Instructions');
   if (capsule.resume) {
@@ -381,6 +407,39 @@ function detectResume(taskId, projectRoot) {
   return { isResume: false };
 }
 
+/**
+ * Gather artifact inputs that this task needs from other tasks.
+ * Reads the manifest to find inputs, then loads each artifact's content preview.
+ *
+ * @param {string} taskId
+ * @param {string} [projectRoot]
+ * @returns {Array<{task_id: string, name: string, content_preview: string}>}
+ */
+function _gatherArtifacts(taskId, projectRoot) {
+  const artRegistry = getArtifactRegistry();
+  if (!artRegistry) return [];
+
+  try {
+    const manifest = artRegistry.getManifest(taskId, projectRoot);
+    if (!manifest.inputs || manifest.inputs.length === 0) return [];
+
+    const artifacts = [];
+    for (const input of manifest.inputs) {
+      const content = artRegistry.readArtifact(input.taskId, input.name, projectRoot);
+      if (content !== null) {
+        artifacts.push({
+          task_id: input.taskId,
+          name: input.name,
+          content_preview: content.slice(0, 1000)
+        });
+      }
+    }
+    return artifacts;
+  } catch (e) {
+    return [];
+  }
+}
+
 // ============================================================================
 // EXPORTS
 // ============================================================================
@@ -394,5 +453,6 @@ module.exports = {
   _gatherResearch,
   _loadExistingPlan,
   _gatherDecisions,
-  _gatherRelatedAgents
+  _gatherRelatedAgents,
+  _gatherArtifacts
 };
