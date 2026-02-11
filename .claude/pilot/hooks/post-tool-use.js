@@ -183,6 +183,133 @@ function emitBusEvent(sessionId, topic, data) {
 }
 
 // =============================================================================
+// AUTO-CHECKPOINT (Phase 3.5)
+// =============================================================================
+
+/**
+ * Automatically save a checkpoint when pressure threshold is hit.
+ * Gathers minimal context from session state and claimed task.
+ *
+ * Security: Uses execFileSync (no shell) for all subprocess calls.
+ *
+ * @param {string} sessionId
+ * @param {object} stats - { calls, bytes, pct_estimate }
+ * @returns {{ version: number }|null} - checkpoint version or null on failure
+ */
+function autoCheckpoint(sessionId, stats) {
+  try {
+    const { execFileSync } = require('child_process');
+    const checkpoint = require('./lib/checkpoint');
+
+    // Gather task context from session state file
+    const sessDir = path.join(process.cwd(), '.claude/pilot/state/sessions');
+    let taskId = null;
+    let taskTitle = null;
+
+    try {
+      const sessFiles = fs.readdirSync(sessDir)
+        .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'))
+        .sort().reverse();
+
+      for (const f of sessFiles) {
+        try {
+          const data = JSON.parse(fs.readFileSync(path.join(sessDir, f), 'utf8'));
+          if (data.session_id === sessionId && data.claimed_task) {
+            taskId = data.claimed_task;
+            break;
+          }
+        } catch (e) { continue; }
+      }
+    } catch (e) {
+      // No session state — continue without task context
+    }
+
+    // Try to get task title from bd (best-effort, fast timeout)
+    // Security: execFileSync with array args — no shell injection
+    if (taskId) {
+      try {
+        const result = execFileSync('bd', ['show', taskId, '--json'], {
+          encoding: 'utf8', timeout: 3000, stdio: ['pipe', 'pipe', 'pipe']
+        });
+        const task = JSON.parse(result);
+        taskTitle = task.title || null;
+      } catch (e) {
+        // Skip title — not critical
+      }
+    }
+
+    // Get recently modified files from git (fast, no network)
+    // Security: execFileSync with array args — no shell injection
+    let filesModified = [];
+    try {
+      const gitFiles = execFileSync('git', ['diff', '--name-only', 'HEAD~3'], {
+        encoding: 'utf8', timeout: 3000, stdio: ['pipe', 'pipe', 'pipe']
+      }).trim();
+      if (gitFiles) {
+        filesModified = gitFiles.split('\n').filter(Boolean).slice(0, 20);
+      }
+    } catch (e) {
+      try {
+        const gitFiles = execFileSync('git', ['diff', '--name-only'], {
+          encoding: 'utf8', timeout: 3000, stdio: ['pipe', 'pipe', 'pipe']
+        }).trim();
+        if (gitFiles) {
+          filesModified = gitFiles.split('\n').filter(Boolean).slice(0, 20);
+        }
+      } catch (e2) {
+        // No git context — continue
+      }
+    }
+
+    const result = checkpoint.saveCheckpoint(sessionId, {
+      task_id: taskId,
+      task_title: taskTitle,
+      files_modified: filesModified,
+      current_context: `Auto-checkpoint at ${stats.pct_estimate}% pressure (${stats.calls} tool calls)`,
+      tool_call_count: stats.calls,
+      output_bytes: stats.bytes
+    });
+
+    if (result.success) {
+      // Reset pressure counters after successful checkpoint
+      const pressureMod = require('./lib/pressure');
+      pressureMod.resetPressure(sessionId);
+      return { version: result.version };
+    }
+
+    return null;
+  } catch (e) {
+    // Auto-checkpoint is best-effort — never block
+    return null;
+  }
+}
+
+/**
+ * Enqueue a compact request via the stdin-injector action queue.
+ * The user-prompt-submit hook will detect this and prompt the agent.
+ *
+ * @param {string} sessionId
+ * @param {object} stats - pressure stats at time of checkpoint
+ */
+function enqueueCompactRequest(sessionId, stats) {
+  try {
+    const injector = require('./lib/stdin-injector');
+    injector.enqueueAction(process.cwd(), {
+      type: 'compact_request',
+      priority: 'blocking',
+      source_event_id: `auto-checkpoint-${sessionId}`,
+      data: {
+        session_id: sessionId,
+        pressure_pct: stats.pct_estimate,
+        reason: 'Auto-checkpoint saved, context compaction recommended'
+      }
+    });
+  } catch (e) {
+    // Best-effort — if queue fails, the nudge message is still shown
+  }
+}
+
+// =============================================================================
 // MAIN
 // =============================================================================
 
@@ -223,14 +350,31 @@ async function main() {
   const { shouldNudge, pressure: stats } = pressure.checkAndNudge(sessionId, threshold);
 
   if (shouldNudge) {
-    // Output a nudge message that gets injected into the conversation
-    const output = {
-      hookSpecificOutput: {
-        hookEventName: 'PostToolUse',
-        notification: `Context pressure at ${stats.pct_estimate}% (${stats.calls} tool calls, ~${Math.round(stats.bytes / 1024)}KB). Consider running /pilot-checkpoint to save your working state before context compaction.`
-      }
-    };
-    console.log(JSON.stringify(output));
+    // --- Phase 3.5: Auto-checkpoint at pressure threshold ---
+    // Instead of just nudging, automatically save a checkpoint.
+    const autoResult = autoCheckpoint(sessionId, stats);
+
+    if (autoResult) {
+      // After successful auto-checkpoint, enqueue a compact request
+      enqueueCompactRequest(sessionId, stats);
+
+      const output = {
+        hookSpecificOutput: {
+          hookEventName: 'PostToolUse',
+          notification: `Context pressure at ${stats.pct_estimate}% — auto-checkpoint saved (v${autoResult.version}). A compact request has been queued. Run /compact to free context, then resume automatically.`
+        }
+      };
+      console.log(JSON.stringify(output));
+    } else {
+      // Fallback: if auto-checkpoint fails, nudge manually
+      const output = {
+        hookSpecificOutput: {
+          hookEventName: 'PostToolUse',
+          notification: `Context pressure at ${stats.pct_estimate}% (${stats.calls} tool calls, ~${Math.round(stats.bytes / 1024)}KB). Auto-checkpoint failed — please run /pilot-checkpoint manually.`
+        }
+      };
+      console.log(JSON.stringify(output));
+    }
   }
 
   // --- Status events for PM Watcher (Pilot AGI-v1k) ---
