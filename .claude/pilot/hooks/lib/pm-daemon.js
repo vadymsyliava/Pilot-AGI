@@ -267,7 +267,14 @@ class PmDaemon {
       this.log.error('Watcher error', { error: err.message });
     });
 
-    // Start watcher
+    if (this.opts.once) {
+      // Single tick mode — no watcher needed, just run one tick and stop
+      this._tick();
+      this.stop('once_complete');
+      return { success: true, mode: 'once', pm_session: this.pmSessionId };
+    }
+
+    // Start watcher (watch mode only)
     try {
       this.watcher.start();
     } catch (e) {
@@ -279,13 +286,6 @@ class PmDaemon {
     // Register signal handlers (only when running as standalone process)
     if (!this.opts.skipSignalHandlers) {
       this._registerSignalHandlers();
-    }
-
-    if (this.opts.once) {
-      // Single tick mode
-      this._tick();
-      this.stop('once_complete');
-      return { success: true, mode: 'once', pm_session: this.pmSessionId };
     }
 
     // Start tick timer for periodic work
@@ -446,14 +446,33 @@ class PmDaemon {
 
     // Determine agent type from skill registry
     const agentType = this._resolveAgentType(task);
-    const agentProfile = agentType
-      ? `.claude/agents/${agentType}.md`
-      : null;
 
     // Build spawn command — headless claude session
-    const args = ['--yes', '-p', '/pilot-next'];
-    if (agentProfile && fs.existsSync(resolvePath(this.projectRoot, agentProfile))) {
-      args.push('--agent-profile', agentProfile);
+    const prompt = [
+      `You are an autonomous agent spawned by the PM daemon.`,
+      `Your assigned task is: ${task.id} — ${task.title || ''}`,
+      `Run the full canonical loop: claim the task, plan, execute all steps, commit, and close.`,
+      `Use /pilot-next if you need to pick up the task, then /pilot-plan, /pilot-exec, /pilot-commit, /pilot-close.`,
+      `Work autonomously — do not ask questions. If blocked, log the issue and move on.`
+    ].join('\n');
+
+    const args = ['-p', prompt, '--permission-mode', 'acceptEdits'];
+
+    // Set model from agent registry if available
+    if (agentType) {
+      args.push('--agent', agentType);
+      try {
+        const registry = require('./orchestrator').loadSkillRegistry();
+        const roleConfig = registry?.roles?.[agentType];
+        if (roleConfig?.model) {
+          args.push('--model', roleConfig.model);
+        }
+      } catch (e) { /* use default model */ }
+    }
+
+    // Budget limit per agent if configured
+    if (this.opts.budgetPerAgentUsd) {
+      args.push('--max-budget-usd', String(this.opts.budgetPerAgentUsd));
     }
 
     try {
@@ -785,12 +804,75 @@ class PmDaemon {
 
 function main() {
   const args = process.argv.slice(2);
+
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(`PM Daemon — autonomous multi-agent orchestrator
+
+Usage:
+  node pm-daemon.js [options]
+
+Options:
+  --watch             Long-running poll mode (default)
+  --once              Single tick then exit (for cron)
+  --agents <N>        Max concurrent agents (default: ${DEFAULT_MAX_AGENTS})
+  --budget <USD>      Budget per agent in USD (passed as --max-budget-usd)
+  --tick <ms>         Tick interval in ms (default: ${DEFAULT_TICK_INTERVAL_MS})
+  --dry-run           Log actions without executing
+  --root <path>       Project root (default: cwd)
+  --status            Show daemon status and exit
+  --stop              Stop running daemon and exit
+  -h, --help          Show this help`);
+    process.exit(0);
+  }
+
   const once = args.includes('--once');
   const dryRun = args.includes('--dry-run');
   const projectRoot = args.find(a => a.startsWith('--root='))?.split('=')[1]
+    || args[args.indexOf('--root') + 1]
     || process.cwd();
 
-  const daemon = new PmDaemon(projectRoot, { once, dryRun });
+  // --status: show daemon status and exit
+  if (args.includes('--status')) {
+    const state = loadDaemonState(projectRoot);
+    const running = isDaemonRunning(projectRoot);
+    const pidInfo = readDaemonPid(projectRoot);
+    console.log(JSON.stringify({ running, pid: pidInfo?.pid, ...state }, null, 2));
+    process.exit(0);
+  }
+
+  // --stop: stop running daemon and exit
+  if (args.includes('--stop')) {
+    const pidInfo = readDaemonPid(projectRoot);
+    if (!pidInfo || !isDaemonRunning(projectRoot)) {
+      console.log('No PM daemon running.');
+      process.exit(0);
+    }
+    try {
+      process.kill(pidInfo.pid, 'SIGTERM');
+      console.log(`Sent SIGTERM to PM daemon (PID: ${pidInfo.pid})`);
+    } catch (e) {
+      console.error(`Failed to stop daemon: ${e.message}`);
+      process.exit(1);
+    }
+    process.exit(0);
+  }
+
+  // Parse optional numeric args
+  const maxAgentsIdx = args.indexOf('--agents');
+  const maxAgents = maxAgentsIdx >= 0 ? parseInt(args[maxAgentsIdx + 1], 10) : undefined;
+
+  const budgetIdx = args.indexOf('--budget');
+  const budgetPerAgentUsd = budgetIdx >= 0 ? parseFloat(args[budgetIdx + 1]) : undefined;
+
+  const tickIdx = args.indexOf('--tick');
+  const tickIntervalMs = tickIdx >= 0 ? parseInt(args[tickIdx + 1], 10) : undefined;
+
+  const opts = { once, dryRun };
+  if (maxAgents) opts.maxAgents = maxAgents;
+  if (budgetPerAgentUsd) opts.budgetPerAgentUsd = budgetPerAgentUsd;
+  if (tickIntervalMs) opts.tickIntervalMs = tickIntervalMs;
+
+  const daemon = new PmDaemon(projectRoot, opts);
   const result = daemon.start();
 
   if (!result.success) {
@@ -798,10 +880,13 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`PM Daemon started (PID: ${process.pid}, mode: ${once ? 'once' : 'watch'})`);
+  console.log(`PM Daemon started (PID: ${process.pid}, mode: ${once ? 'once' : 'watch'}, agents: ${maxAgents || DEFAULT_MAX_AGENTS})`);
 
-  if (!once) {
-    // Keep process alive
+  if (once) {
+    // Exit cleanly after single tick
+    process.exit(0);
+  } else {
+    // Keep process alive for watch mode
     process.stdin.resume();
   }
 }

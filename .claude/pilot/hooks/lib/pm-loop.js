@@ -494,13 +494,8 @@ class PmLoop {
     const results = [];
 
     try {
-      // Collect all ready tasks first
-      const readyTasks = [];
-      let task = this._getNextReadyTask();
-      while (task) {
-        readyTasks.push(task);
-        task = this._getNextReadyTask();
-      }
+      // Get all ready tasks in one call
+      const readyTasks = this._getAllReadyTasks();
       if (readyTasks.length === 0) return results;
 
       const assignedAgents = new Set();
@@ -970,9 +965,9 @@ class PmLoop {
   // ==========================================================================
 
   /**
-   * Get next ready task from bd (using execFileSync for safety)
+   * Get all ready tasks from bd (using execFileSync for safety)
    */
-  _getNextReadyTask() {
+  _getAllReadyTasks() {
     try {
       const output = execFileSync('bd', ['ready', '--json'], {
         cwd: this.projectRoot,
@@ -980,11 +975,18 @@ class PmLoop {
         timeout: 5000,
         stdio: ['pipe', 'pipe', 'pipe']
       });
-      const tasks = JSON.parse(output);
-      return tasks.length > 0 ? tasks[0] : null;
+      return JSON.parse(output);
     } catch (e) {
-      return null;
+      return [];
     }
+  }
+
+  /**
+   * Get next ready task from bd (convenience wrapper)
+   */
+  _getNextReadyTask() {
+    const tasks = this._getAllReadyTasks();
+    return tasks.length > 0 ? tasks[0] : null;
   }
 
   /**
