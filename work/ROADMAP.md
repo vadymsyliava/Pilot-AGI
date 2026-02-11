@@ -166,7 +166,9 @@ You: Open 5 terminals, type "/pilot-start" in each
 - Dependency graph: which subtasks can run in parallel
 - Size estimation: classify tasks as S/M/L based on scope
 - Re-decomposition: if subtask is still too large, break further
-- Deliverables: Decomposition engine, bd subtask creation, dependency DAG builder
+- Auto-dependency detection: infer task dependencies from code analysis (import graphs, shared files, API contracts, DB schema refs) rather than relying solely on PM reasoning
+- Dependency validation: cross-check PM-declared deps against code-detected deps, flag missing or spurious edges
+- Deliverables: Decomposition engine, bd subtask creation, dependency DAG builder, code-aware dependency detector
 
 #### Phase 3.4: Intelligent Task Scheduler
 - Skill-based routing: match task requirements to agent capabilities
@@ -178,7 +180,19 @@ You: Open 5 terminals, type "/pilot-start" in each
 
 ### Stream B: Agent Autonomy
 
-#### Phase 3.5: Agent Self-Activation
+#### Phase 3.5: Autonomous Context Window Management
+- **The critical enabler**: agents must run indefinitely without human intervention on context pressure
+- Auto-checkpoint at 60% threshold — no human trigger needed, post-tool-use hook saves state automatically
+- Auto-compact: system programmatically triggers `/compact` when checkpoint is saved
+- Auto-resume: new session detects checkpoint, loads it, continues from exact plan step
+- PM context awareness: PM monitors all agents' context pressure, orchestrates compaction timing
+- PM self-management: PM's own context window is also managed — saves PM state, compacts, resumes coordination
+- Session continuity protocol: same task + same plan + same decisions = seamless transition across context windows
+- Builds on existing infrastructure: pressure.js (60% tracking), checkpoint.js (state save/load), resume-context skill
+- Missing piece today: the automation glue — detect → save → compact → resume without any human input
+- Deliverables: Auto-checkpoint hook, programmatic compact trigger, auto-resume on session-start, PM pressure monitor
+
+#### Phase 3.6: Agent Self-Activation
 - Agents auto-start workflow on terminal open (`/pilot-start` → auto-claim → auto-plan → auto-exec)
 - stdin injection from PM watcher triggers agent actions
 - Agent polls inbox, picks up delegations, starts working
@@ -186,7 +200,7 @@ You: Open 5 terminals, type "/pilot-start" in each
 - Graceful idle: if no work, agent sleeps and wakes on bus event
 - Deliverables: Auto-start hook, inbox polling loop, wake-on-message
 
-#### Phase 3.6: Per-Agent Persistent Memory
+#### Phase 3.7: Per-Agent Persistent Memory
 - Each agent type maintains learned knowledge across sessions
 - Decision log: "chose library X because Y" (survives restarts)
 - Issue log: "task Z failed because of W" (prevents repeat mistakes)
@@ -195,15 +209,15 @@ You: Open 5 terminals, type "/pilot-start" in each
 - Cross-agent memory queries: "what did the design agent decide about colors?"
 - Deliverables: Agent memory writer in post-tool-use hook, memory loader in session-start, query API
 
-#### Phase 3.7: Self-Healing & Recovery
+#### Phase 3.8: Self-Healing & Recovery
 - Agent crash → auto-detect → restore checkpoint → resume work
-- Context compaction recovery: checkpoint saves before compaction
+- Context compaction recovery: checkpoint saves before compaction (builds on 3.5)
 - Stale agent → auto-release task → reassign to healthy agent
 - Merge conflict → auto-rebase or escalate with clear diff
 - Failed tests → auto-diagnose → fix or escalate
 - Deliverables: Recovery protocol, checkpoint-on-crash, auto-reassign on stale
 
-#### Phase 3.8: Agent-to-Agent Collaboration
+#### Phase 3.9: Agent-to-Agent Collaboration
 - Direct agent communication without PM intermediary
 - "Hey frontend agent, what's the API contract?" → response
 - Shared working context: agents on related tasks see each other's progress
@@ -212,7 +226,7 @@ You: Open 5 terminals, type "/pilot-start" in each
 
 ### Stream C: Reliability & Observability
 
-#### Phase 3.9: Reliable Message Bus
+#### Phase 3.10: Reliable Message Bus
 - ACK/NACK protocol: guaranteed message delivery
 - Dead letter queue: failed messages get retried or escalated
 - Message ordering guarantees within same sender
@@ -220,7 +234,7 @@ You: Open 5 terminals, type "/pilot-start" in each
 - Priority queue: blocking messages processed before FYI
 - Deliverables: ACK protocol, DLQ, compaction job, priority processing
 
-#### Phase 3.10: Cost & Budget Management
+#### Phase 3.11: Cost & Budget Management
 - Token usage tracking per agent, per task, per session
 - Budget limits: max tokens per task, per agent, per day
 - Cost alerts: PM notified when agent approaches budget
@@ -228,7 +242,7 @@ You: Open 5 terminals, type "/pilot-start" in each
 - Budget-aware scheduling: cheaper agents for simple tasks
 - Deliverables: Token counter hook, budget config, cost dashboard
 
-#### Phase 3.11: Auto-Escalation Rules
+#### Phase 3.12: Auto-Escalation Rules
 - Configurable escalation policies (YAML)
 - Drift detected → warning → block → reassign (progressive)
 - Test failure → retry once → escalate to PM → escalate to human
@@ -236,7 +250,7 @@ You: Open 5 terminals, type "/pilot-start" in each
 - Merge conflict → auto-rebase → manual merge → escalate
 - Deliverables: Escalation engine, policy YAML schema, escalation event types
 
-#### Phase 3.12: Performance Analytics
+#### Phase 3.13: Performance Analytics
 - Agent performance tracking: success rate, avg time, rework count
 - Task complexity scoring: predicted vs actual effort
 - Bottleneck detection: which tasks/agents slow down the pipeline
@@ -246,10 +260,26 @@ You: Open 5 terminals, type "/pilot-start" in each
 
 ### Dependencies
 ```
-Independent (Wave 1): 3.1, 3.6, 3.9
-Wave 2: 3.2 (needs 3.1), 3.5 (needs 3.1), 3.8 (needs 3.9)
-Wave 3: 3.3 (needs 3.2), 3.7 (needs 3.6+3.9), 3.10 (needs 3.9)
-Wave 4: 3.4 (needs 3.1+3.3), 3.11 (needs 3.10), 3.12 (needs 3.10)
+Independent (Wave 1): 3.1, 3.5, 3.7, 3.10
+  3.1  Agent Identity — no deps
+  3.5  Context Window Management — builds on existing pressure.js/checkpoint.js
+  3.7  Per-Agent Memory — builds on existing memory.js
+  3.10 Reliable Message Bus — builds on existing messaging.js
+
+Wave 2: 3.2, 3.6, 3.9
+  3.2  PM Auto-Research (needs 3.1 for agent routing)
+  3.6  Agent Self-Activation (needs 3.1 for identity + 3.5 for auto-resume)
+  3.9  Agent-to-Agent Collab (needs 3.10 for reliable bus)
+
+Wave 3: 3.3, 3.8, 3.11
+  3.3  Task Auto-Decomposition (needs 3.2 for research)
+  3.8  Self-Healing & Recovery (needs 3.5 for checkpoints + 3.7 for memory + 3.10 for bus)
+  3.11 Cost & Budget Management (needs 3.10 for reliable tracking)
+
+Wave 4: 3.4, 3.12, 3.13
+  3.4  Intelligent Scheduler (needs 3.1 + 3.3 for skills + decomposed tasks)
+  3.12 Auto-Escalation (needs 3.11 for budget awareness)
+  3.13 Performance Analytics (needs 3.11 for cost data)
 ```
 
 ### Success Criteria
@@ -257,10 +287,13 @@ Wave 4: 3.4 (needs 3.1+3.3), 3.11 (needs 3.10), 3.12 (needs 3.10)
 - [ ] PM decomposes "build authentication system" into 8+ subtasks automatically
 - [ ] PM researches best practices (web search) before assigning tasks
 - [ ] Agents remember decisions and issues from previous sessions
+- [ ] Agents auto-compact at 60% context and resume seamlessly — no human intervention
+- [ ] PM manages its own context window — compacts and resumes coordination autonomously
 - [ ] Crashed agent auto-recovers and resumes from checkpoint
 - [ ] Messages have guaranteed delivery with ACK protocol
 - [ ] Token budget enforced — agents stop when budget exceeded
 - [ ] Performance improves over time as PM learns from history
+- [ ] A big task set at 2pm runs to completion overnight — terminals self-manage their context windows
 
 ---
 
