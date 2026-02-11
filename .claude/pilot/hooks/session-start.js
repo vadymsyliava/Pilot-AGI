@@ -496,7 +496,28 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
-  // 7b. Worktree Context (Phase 2.1)
+  // 7b. Recoverable Tasks Check (Phase 3.8)
+  // -------------------------------------------------------------------------
+
+  try {
+    const orchestrator = require('./lib/orchestrator');
+    const recoverableTasks = orchestrator.getRecoverableTasks();
+    if (recoverableTasks.length > 0 && !context.checkpoint_restored) {
+      // There are tasks from dead agents that can be resumed
+      context.recoverable_tasks = recoverableTasks.map(rt => ({
+        task_id: rt.task_id,
+        plan_step: rt.plan_step,
+        total_steps: rt.total_steps,
+        title: rt.task_title
+      }));
+      messages.push(`${recoverableTasks.length} recoverable task(s) from dead agents`);
+    }
+  } catch (e) {
+    // Recovery check failed, continue without
+  }
+
+  // -------------------------------------------------------------------------
+  // 7c. Worktree Context (Phase 2.1)
   // -------------------------------------------------------------------------
 
   try {
