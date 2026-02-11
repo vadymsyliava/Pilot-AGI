@@ -931,6 +931,36 @@ function cleanupStaleSessions() {
 // =============================================================================
 
 /**
+ * Get all task IDs currently claimed by active sessions.
+ * Used by /pilot-next to filter out tasks that another agent is already working on.
+ *
+ * @param {string} [excludeSessionId] - Optional session ID to exclude (e.g., current session)
+ * @returns {string[]} Array of claimed task IDs
+ */
+function getClaimedTaskIds(excludeSessionId = null) {
+  const policy = loadPolicy();
+  const allSessions = getAllSessionStates();
+  const now = Date.now();
+  const claimed = [];
+
+  for (const session of allSessions) {
+    if (excludeSessionId && session.session_id === excludeSessionId) continue;
+    if (!isSessionActive(session, policy)) continue;
+    if (!session.claimed_task) continue;
+
+    // Check lease expiry
+    if (session.lease_expires_at) {
+      const expiresAt = new Date(session.lease_expires_at).getTime();
+      if (now >= expiresAt) continue; // Lease expired, task is available
+    }
+
+    claimed.push(session.claimed_task);
+  }
+
+  return claimed;
+}
+
+/**
  * Check if a task is currently claimed by any active session
  * Returns the claiming session info or null if unclaimed/expired
  */
@@ -1178,6 +1208,7 @@ module.exports = {
   cleanupStaleSessions,
   logEvent,
   // Task claim/lease protocol
+  getClaimedTaskIds,
   isTaskClaimed,
   claimTask,
   releaseTask,

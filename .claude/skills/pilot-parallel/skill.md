@@ -78,13 +78,21 @@ Choose the right model for the task:
 - `model: "sonnet"` - Standard tasks with clear requirements
 - `model: "haiku"` - Simple, fast tasks (analysis, formatting)
 
-## Step 1: Get Ready Tasks
+## Step 1: Get Ready Tasks (session-aware)
 
 ```bash
 bd ready --json 2>/dev/null
 ```
 
-If less than 2 tasks, inform user parallel execution isn't needed.
+Then filter out tasks already claimed by other active sessions:
+
+```bash
+node .claude/pilot/hooks/cli/list-claimed.js 2>/dev/null
+```
+
+Remove any task from the ready list whose `id` appears in the claimed array.
+
+If less than 2 unclaimed tasks, inform user parallel execution isn't needed.
 
 ## Step 2: Analyze Task Independence
 
