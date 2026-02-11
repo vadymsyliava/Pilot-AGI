@@ -47,6 +47,30 @@ jobs:
       - name: Run tests
         run: npm test
 
+  validate-exports:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Regenerate token exports
+        run: node design/scripts/export-all.js
+
+      - name: Check for stale generated files
+        run: |
+          git diff --exit-code design/generated/ || {
+            echo "ERROR: Generated token exports are stale."
+            echo "Run 'node design/scripts/export-all.js' and commit the results."
+            exit 1
+          }
+
   validate-hooks:
     runs-on: ubuntu-latest
     steps:
