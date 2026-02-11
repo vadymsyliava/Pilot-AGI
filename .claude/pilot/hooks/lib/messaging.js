@@ -34,7 +34,7 @@ const DEFAULT_ACK_DEADLINE_MS = 30000; // 30 seconds
 const ACK_MAX_RETRIES = 3;
 const PRIORITY_ORDER = { blocking: 0, normal: 1, fyi: 2 };
 
-const VALID_TYPES = ['request', 'response', 'notify', 'task_delegate', 'broadcast'];
+const VALID_TYPES = ['request', 'response', 'notify', 'task_delegate', 'broadcast', 'query', 'block_on_task'];
 const VALID_PRIORITIES = ['blocking', 'normal', 'fyi'];
 
 // ============================================================================
@@ -111,12 +111,16 @@ function validateMessage(msg) {
     errors.push('Response messages require correlation_id');
   }
 
-  if (msg.type === 'request' && !msg.to) {
-    errors.push('Request messages require a recipient (to)');
+  if (msg.type === 'request' && !msg.to && !msg.to_role && !msg.to_agent) {
+    errors.push('Request messages require a recipient (to, to_role, or to_agent)');
   }
 
-  if (msg.type === 'task_delegate' && !msg.to) {
-    errors.push('Task delegation requires a recipient (to)');
+  if (msg.type === 'task_delegate' && !msg.to && !msg.to_role) {
+    errors.push('Task delegation requires a recipient (to or to_role)');
+  }
+
+  if (msg.type === 'query' && !msg.to && !msg.to_role && !msg.to_agent) {
+    errors.push('Query messages require a recipient (to, to_role, or to_agent)');
   }
 
   // Size check (estimate serialized size)
@@ -213,7 +217,11 @@ function sendMessage(msg) {
 
   // Track ACK if required
   if (msg.ack && msg.ack.required) {
-    trackPendingAck(id, msg.from, msg.to, msg.ack.deadline_ms || DEFAULT_ACK_DEADLINE_MS);
+    const escalateTopm = !!(msg.payload && msg.payload.data && msg.payload.data.escalate_to_pm);
+    trackPendingAck(id, msg.from, msg.to, msg.ack.deadline_ms || DEFAULT_ACK_DEADLINE_MS, {
+      to_role: msg.to_role || null,
+      escalate_to_pm: escalateTopm
+    });
   }
 
   // Nudge recipient for blocking messages
@@ -409,6 +417,8 @@ function removeCursor(sessionId) {
  * @param {string[]} opts.types - Filter by message types
  * @param {string[]} opts.topics - Filter by topics
  * @param {boolean} opts.includeExpired - Include expired messages (default: false)
+ * @param {string} opts.role - Reader's agent role (enables role-addressed message matching)
+ * @param {string} opts.agentName - Reader's agent name (enables name-addressed message matching)
  * @returns {{ messages: object[], cursor: object }}
  */
 function readMessages(sessionId, opts = {}) {
@@ -458,8 +468,14 @@ function readMessages(sessionId, opts = {}) {
         if (now > expiresAt) continue;
       }
 
-      // Filter by recipient: only messages addressed to this session, broadcast, or '*'
-      if (msg.to && msg.to !== sessionId && msg.to !== '*' && msg.type !== 'broadcast') {
+      // Filter by recipient: session ID, role, agent name, broadcast, or '*'
+      const hasTargeting = msg.to || msg.to_role || msg.to_agent;
+      const isBroadcast = msg.type === 'broadcast' || msg.to === '*';
+      const isSessionMatch = msg.to && msg.to === sessionId;
+      const isRoleMatch = msg.to_role && opts.role && msg.to_role === opts.role;
+      const isNameMatch = msg.to_agent && opts.agentName && msg.to_agent === opts.agentName;
+      const isUntargeted = !hasTargeting; // Messages with no recipient go to everyone
+      if (!isBroadcast && !isSessionMatch && !isRoleMatch && !isNameMatch && !isUntargeted) {
         continue;
       }
 
@@ -622,6 +638,339 @@ function delegateTask(from, to, taskData) {
   });
 }
 
+/**
+ * Delegate a task to a role with automatic bd subtask creation.
+ * Creates a bd issue, then sends a task_delegate message on the bus.
+ *
+ * @param {string} from - Sender session ID
+ * @param {string} toRole - Target agent role
+ * @param {object} taskData - { title, description, parent_task_id, labels }
+ * @param {object} [opts] - { priority, deadline_ms }
+ * @returns {{ success: boolean, message_id?: string, bd_task_id?: string, error?: string }}
+ */
+function delegateTaskWithBd(from, toRole, taskData, opts = {}) {
+  const { execSync } = require('child_process');
+  let bdTaskId = null;
+
+  // 1. Create bd subtask
+  try {
+    const labelFlag = taskData.labels ? ` --label "${taskData.labels.join(',')}"` : '';
+    const parentFlag = taskData.parent_task_id ? ` --parent "${taskData.parent_task_id}"` : '';
+    const cmd = `bd create --title "${(taskData.title || 'Delegated task').replace(/"/g, '\\"')}" --label "delegated,${toRole}"${parentFlag} 2>/dev/null`;
+    const output = execSync(cmd, { cwd: process.cwd(), encoding: 'utf8', timeout: 10000 }).trim();
+    // Extract task ID from bd create output (typically the last word or ID pattern)
+    const idMatch = output.match(/[A-Za-z0-9]+-[a-z0-9]+/);
+    if (idMatch) bdTaskId = idMatch[0];
+  } catch (e) {
+    // bd may not be available — continue with bus message only
+  }
+
+  // 2. Send task_delegate message on bus
+  const result = sendMessage({
+    type: 'task_delegate',
+    from,
+    to_role: toRole,
+    topic: 'task.delegate',
+    priority: opts.priority || 'normal',
+    payload: {
+      action: 'delegate_task',
+      data: {
+        ...taskData,
+        bd_task_id: bdTaskId,
+        delegated_by: from,
+        delegated_at: new Date().toISOString()
+      }
+    },
+    ttl_ms: opts.deadline_ms || 5 * 60 * 1000,
+    ack: { required: true, deadline_ms: opts.deadline_ms || 60000 }
+  });
+
+  return {
+    success: result.success,
+    message_id: result.id,
+    bd_task_id: bdTaskId,
+    error: result.error
+  };
+}
+
+// ============================================================================
+// AGENT-TO-AGENT COLLABORATION (Phase 3.9)
+// ============================================================================
+
+/**
+ * Send a message to any active agent with a specific role.
+ * The message is addressed by role, not session ID.
+ * Any agent reading the bus with opts.role matching will receive it.
+ *
+ * @param {string} from - Sender session ID
+ * @param {string} targetRole - Target agent role (e.g., 'backend', 'frontend')
+ * @param {string} topic - Message topic
+ * @param {object} payload - Message data
+ * @param {object} opts - Options (priority, ttl_ms, ack)
+ */
+function sendToRole(from, targetRole, topic, payload, opts = {}) {
+  return sendMessage({
+    type: opts.type || 'request',
+    from,
+    to_role: targetRole,
+    topic,
+    priority: opts.priority || 'normal',
+    payload: { action: topic, data: payload },
+    ttl_ms: opts.ttl_ms || DEFAULT_TTL_MS[opts.priority || 'normal'],
+    ack: opts.ack || undefined
+  });
+}
+
+/**
+ * Send a message to a specific agent by name (e.g., "backend-1").
+ *
+ * @param {string} from - Sender session ID
+ * @param {string} agentName - Target agent name
+ * @param {string} topic - Message topic
+ * @param {object} payload - Message data
+ * @param {object} opts - Options
+ */
+function sendToAgent(from, agentName, topic, payload, opts = {}) {
+  return sendMessage({
+    type: opts.type || 'request',
+    from,
+    to_agent: agentName,
+    topic,
+    priority: opts.priority || 'normal',
+    payload: { action: topic, data: payload },
+    ttl_ms: opts.ttl_ms || DEFAULT_TTL_MS[opts.priority || 'normal'],
+    ack: opts.ack || undefined
+  });
+}
+
+/**
+ * Send a message to any agent with a specific capability.
+ * Uses agent registry + active sessions to find the best recipient.
+ * Falls back to role-based routing if no live agent found.
+ *
+ * @param {string} from - Sender session ID
+ * @param {string} capability - Capability to look for (e.g., 'api_design')
+ * @param {string} topic - Message topic
+ * @param {object} payload - Message data
+ * @param {object} opts - Options
+ * @returns {{ success: boolean, id?: string, routed_to?: string }}
+ */
+function sendToCapability(from, capability, topic, payload, opts = {}) {
+  try {
+    const agentContext = require('./agent-context');
+    const agents = agentContext.discoverAgentByCap(capability);
+    if (agents.length > 0) {
+      const target = agents[0]; // Pick first available
+      const result = sendToAgent(from, target.agent_name, topic, payload, opts);
+      return { ...result, routed_to: target.agent_name };
+    }
+  } catch (e) {
+    // Fall through to role-based
+  }
+
+  // Fallback: try to find a role with this capability in the registry
+  try {
+    const session = require('./session');
+    const registry = session.loadAgentRegistry();
+    if (registry && registry.agents) {
+      for (const [role, config] of Object.entries(registry.agents)) {
+        const caps = config.capabilities || [];
+        if (caps.includes(capability)) {
+          const result = sendToRole(from, role, topic, payload, opts);
+          return { ...result, routed_to: role };
+        }
+      }
+    }
+  } catch (e) {
+    // Best effort
+  }
+
+  return { success: false, error: `No agent found with capability: ${capability}` };
+}
+
+/**
+ * Send a query to an agent by role (peer-to-peer question/answer).
+ * Uses ACK protocol — caller expects a response.
+ *
+ * @param {string} from - Sender session ID
+ * @param {string} targetRole - Target agent role
+ * @param {string} question - The question or request
+ * @param {object} opts - { timeout_ms, context }
+ */
+function queryAgent(from, targetRole, question, opts = {}) {
+  const timeoutMs = opts.timeout_ms || 60000;
+  return sendMessage({
+    type: 'query',
+    from,
+    to_role: targetRole,
+    topic: 'agent.query',
+    priority: 'normal',
+    payload: {
+      action: 'query',
+      data: {
+        question,
+        context: opts.context || null,
+        response_requested: true
+      }
+    },
+    ttl_ms: timeoutMs,
+    ack: { required: true, deadline_ms: timeoutMs }
+  });
+}
+
+/**
+ * Respond to a peer query.
+ *
+ * @param {string} from - Responder session ID
+ * @param {string} queryMessageId - The original query message ID
+ * @param {string} querySender - Who sent the original query
+ * @param {object} answer - The response data
+ */
+function respondToQuery(from, queryMessageId, querySender, answer) {
+  return sendMessage({
+    type: 'response',
+    from,
+    to: querySender,
+    priority: 'normal',
+    correlation_id: queryMessageId,
+    payload: { action: 'query_response', data: answer }
+  });
+}
+
+/**
+ * Send a blocking request to an agent by role.
+ * If no response within deadline, auto-escalates to PM.
+ *
+ * @param {string} from - Sender session ID
+ * @param {string} targetRole - Target agent role
+ * @param {string} reason - Why this is blocking
+ * @param {object} opts - { deadline_ms, context }
+ */
+function sendBlockingRequest(from, targetRole, reason, opts = {}) {
+  const deadlineMs = opts.deadline_ms || 30000;
+  return sendMessage({
+    type: 'request',
+    from,
+    to_role: targetRole,
+    topic: 'agent.blocking_request',
+    priority: 'blocking',
+    payload: {
+      action: 'blocking_request',
+      data: {
+        reason,
+        context: opts.context || null,
+        escalate_to_pm: true
+      }
+    },
+    ttl_ms: deadlineMs * 2, // Message lives longer than ACK deadline
+    ack: { required: true, deadline_ms: deadlineMs }
+  });
+}
+
+// ============================================================================
+// ESCALATION CHAIN (Phase 3.9)
+// ============================================================================
+
+/**
+ * Default escalation chain: peer → PM → human
+ */
+const DEFAULT_ESCALATION_CHAIN = [
+  { level: 'peer', timeout_ms: 30000, retries: 2 },
+  { level: 'pm', timeout_ms: 60000, retries: 1 },
+  { level: 'human', timeout_ms: 0, retries: 0 }
+];
+
+/**
+ * Send a message with configurable escalation chain.
+ * If the initial recipient doesn't respond, escalates through the chain.
+ *
+ * @param {string} from - Sender session ID
+ * @param {string} to - Initial recipient (session ID or role via to_role)
+ * @param {string} topic - Message topic
+ * @param {object} payload - Message data
+ * @param {object[]} [escalationChain] - Array of { level, timeout_ms, retries }
+ * @returns {{ success: boolean, id?: string, escalation_chain: object[] }}
+ */
+function sendWithEscalation(from, to, topic, payload, escalationChain) {
+  const chain = escalationChain || DEFAULT_ESCALATION_CHAIN;
+  const firstLevel = chain[0];
+
+  const result = sendMessage({
+    type: 'request',
+    from,
+    to: firstLevel.level === 'peer' ? to : undefined,
+    to_role: firstLevel.level !== 'peer' ? to : undefined,
+    topic,
+    priority: 'blocking',
+    payload: { action: topic, data: payload },
+    ttl_ms: (firstLevel.timeout_ms || 30000) * 2,
+    ack: {
+      required: true,
+      deadline_ms: firstLevel.timeout_ms || 30000,
+      escalation_chain: chain.slice(1), // Store remaining chain for processAckTimeouts
+      current_level: 0
+    }
+  });
+
+  return {
+    success: result.success,
+    id: result.id,
+    escalation_chain: chain
+  };
+}
+
+// ============================================================================
+// DEPENDENCY BLOCKING PROTOCOL (Phase 3.9)
+// ============================================================================
+
+/**
+ * Send a "blocked on task" message. Agent declares it cannot proceed until taskId completes.
+ * Other agents or PM can see the block. When the task completes, notifyTaskComplete() resolves it.
+ *
+ * @param {string} from - Sender session ID
+ * @param {string} taskId - The task ID to wait for
+ * @param {string} reason - Why this agent is blocked
+ * @param {object} opts - { deadline_ms }
+ * @returns {{ success: boolean, id?: string }}
+ */
+function sendBlockOnTask(from, taskId, reason, opts = {}) {
+  const deadlineMs = opts.deadline_ms || 5 * 60 * 1000; // 5 minutes
+  return sendMessage({
+    type: 'block_on_task',
+    from,
+    to: '*', // broadcast so PM and all agents see it
+    topic: 'task.blocked_on',
+    priority: 'blocking',
+    payload: {
+      action: 'block_on_task',
+      data: {
+        blocked_task_id: taskId,
+        reason,
+        waiting_since: new Date().toISOString()
+      }
+    },
+    ttl_ms: deadlineMs * 2,
+    ack: { required: true, deadline_ms: deadlineMs }
+  });
+}
+
+/**
+ * Broadcast that a task has completed. Any agent blocked on this task gets notified.
+ *
+ * @param {string} from - Session ID of the agent that completed the task
+ * @param {string} taskId - The completed task ID
+ * @param {object} result - Summary of what was done
+ * @returns {{ success: boolean, id?: string }}
+ */
+function notifyTaskComplete(from, taskId, result = {}) {
+  return sendBroadcast(from, 'task.completed', {
+    task_id: taskId,
+    completed_by: from,
+    completed_at: new Date().toISOString(),
+    result
+  });
+}
+
 // ============================================================================
 // ACK / NACK PROTOCOL
 // ============================================================================
@@ -629,7 +978,7 @@ function delegateTask(from, to, taskData) {
 /**
  * Track a pending ACK (persisted to file for crash recovery)
  */
-function trackPendingAck(messageId, from, to, deadlineMs) {
+function trackPendingAck(messageId, from, to, deadlineMs, opts = {}) {
   const acksPath = getPendingAcksPath();
   const dir = path.dirname(acksPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -638,6 +987,8 @@ function trackPendingAck(messageId, from, to, deadlineMs) {
     message_id: messageId,
     from,
     to,
+    to_role: opts.to_role || null,
+    escalate_to_pm: opts.escalate_to_pm || false,
     deadline_at: new Date(Date.now() + deadlineMs).toISOString(),
     retries: 0,
     created_at: new Date().toISOString()
@@ -739,13 +1090,90 @@ function processAckTimeouts() {
       ack.deadline_at = new Date(now + DEFAULT_ACK_DEADLINE_MS).toISOString();
       stillPending.push(ack);
       retried++;
+    } else if (ack.escalation_chain && ack.escalation_level != null) {
+      // Multi-level escalation chain (Phase 3.9)
+      const nextLevel = (ack.escalation_level || 0) + 1;
+      const chain = ack.escalation_chain;
+
+      if (nextLevel < chain.length) {
+        const nextStep = chain[nextLevel];
+        if (nextStep.target === 'human') {
+          // Human escalation — write to JSONL for human review
+          try {
+            const agentContext = require('./agent-context');
+            agentContext.recordHumanEscalation({
+              from: ack.from,
+              reason: `Escalation chain exhausted automated levels`,
+              original_message_id: ack.message_id,
+              original_target: ack.to || ack.to_role,
+              retries: ack.retries
+            });
+          } catch (e) { /* best effort */ }
+          moveToDlq(ack.message_id, 'escalated_to_human', {
+            from: ack.from, escalation_level: nextLevel
+          });
+          dlqd++;
+        } else {
+          // Escalate to next level (e.g., pm)
+          sendMessage({
+            type: 'request',
+            from: ack.from,
+            to_role: nextStep.target,
+            topic: 'escalation.timeout',
+            priority: 'blocking',
+            payload: {
+              action: 'escalation',
+              data: {
+                original_message_id: ack.message_id,
+                original_target: ack.to || ack.to_role,
+                reason: `Timed out at escalation level ${ack.escalation_level}`,
+                from: ack.from,
+                level: nextLevel
+              }
+            },
+            ack: {
+              required: true,
+              deadline_ms: nextStep.timeout_ms || 60000,
+              escalation_chain: chain,
+              escalation_level: nextLevel
+            }
+          });
+          retried++;
+        }
+      } else {
+        moveToDlq(ack.message_id, 'escalation_exhausted', {
+          from: ack.from, levels_tried: nextLevel
+        });
+        dlqd++;
+      }
     } else {
-      // Exhausted retries → DLQ
+      // Legacy: escalate to PM if blocking request
+      if (ack.escalate_to_pm) {
+        sendMessage({
+          type: 'request',
+          from: ack.from,
+          to_role: 'pm',
+          topic: 'escalation.blocking_timeout',
+          priority: 'blocking',
+          payload: {
+            action: 'escalation',
+            data: {
+              original_message_id: ack.message_id,
+              original_target: ack.to || ack.to_role,
+              reason: `Blocking request timed out after ${ack.retries} retries`,
+              from: ack.from,
+              retries: ack.retries
+            }
+          }
+        });
+      }
       moveToDlq(ack.message_id, 'ack_timeout', {
         from: ack.from,
         to: ack.to,
+        to_role: ack.to_role,
         retries: ack.retries,
-        original_deadline: ack.created_at
+        original_deadline: ack.created_at,
+        escalated_to_pm: !!ack.escalate_to_pm
       });
       dlqd++;
     }
@@ -1130,6 +1558,18 @@ module.exports = {
   checkNudge,
   // Bus watcher
   createBusWatcher,
+  // Agent-to-agent collaboration (Phase 3.9)
+  sendToRole,
+  sendToAgent,
+  sendToCapability,
+  queryAgent,
+  respondToQuery,
+  sendBlockingRequest,
+  sendBlockOnTask,
+  notifyTaskComplete,
+  delegateTaskWithBd,
+  sendWithEscalation,
+  DEFAULT_ESCALATION_CHAIN,
   // Compaction & cleanup
   needsCompaction,
   compactBus,
