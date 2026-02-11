@@ -865,79 +865,209 @@ function publishDecision(type, data) {
 // ============================================================================
 
 /**
- * Handle stale agents: reassign their tasks or clean up.
+ * Handle stale agents: assess recovery options, then reassign or clean up.
+ * Phase 3.8: Uses recovery.assessRecovery() to determine optimal strategy.
  *
  * @param {string} pmSessionId - PM's session ID
  */
 function handleStaleAgents(pmSessionId) {
   const policy = loadPolicy();
+  const recovery = require('./recovery');
   const staleAgents = getStaleAgents();
   const results = [];
 
   for (const agent of staleAgents) {
-    // Dead agents (process exited) are always cleaned up immediately
+    // Assess recovery strategy for all agents with tasks
+    const assessment = agent.claimed_task
+      ? recovery.assessRecovery(agent.session_id)
+      : { strategy: recovery.STRATEGIES.CLEANUP };
+
+    // Dead agents (process exited) are always cleaned up
     if (agent.status === 'dead') {
-      session.releaseTask(agent.session_id);
-      session.endSession(agent.session_id, 'process_dead');
-      session.removeSessionLock(agent.session_id);
+      if (assessment.strategy === recovery.STRATEGIES.RESUME && agent.claimed_task) {
+        // Checkpoint exists — mark task as recoverable instead of losing progress
+        _addRecoverableTask(agent.claimed_task, agent.session_id, assessment.checkpoint);
 
-      session.logEvent({
-        type: 'pm_dead_agent_cleanup',
-        pm_session: pmSessionId,
-        dead_session: agent.session_id,
-        task_id: agent.claimed_task,
-        action: 'cleaned_up'
-      });
+        // Clean up the dead session but preserve checkpoint data
+        session.endSession(agent.session_id, 'process_dead');
+        session.removeSessionLock(agent.session_id);
+        recovery.cleanupOrphanResources(agent.session_id);
 
-      results.push({
-        session_id: agent.session_id,
-        task_id: agent.claimed_task,
-        status: 'dead',
-        action: 'cleaned_up'
-      });
+        session.logEvent({
+          type: 'pm_dead_agent_recovery',
+          pm_session: pmSessionId,
+          dead_session: agent.session_id,
+          task_id: agent.claimed_task,
+          action: 'marked_recoverable',
+          checkpoint_step: assessment.checkpoint?.plan_step
+        });
+
+        results.push({
+          session_id: agent.session_id,
+          task_id: agent.claimed_task,
+          status: 'dead',
+          action: 'marked_recoverable'
+        });
+      } else {
+        // No checkpoint — clean release
+        session.releaseTask(agent.session_id);
+        session.endSession(agent.session_id, 'process_dead');
+        session.removeSessionLock(agent.session_id);
+        recovery.cleanupOrphanResources(agent.session_id);
+
+        session.logEvent({
+          type: 'pm_dead_agent_cleanup',
+          pm_session: pmSessionId,
+          dead_session: agent.session_id,
+          task_id: agent.claimed_task,
+          action: 'cleaned_up'
+        });
+
+        results.push({
+          session_id: agent.session_id,
+          task_id: agent.claimed_task,
+          status: 'dead',
+          action: 'cleaned_up'
+        });
+      }
       continue;
     }
 
     if (!agent.claimed_task) continue;
 
     if (policy.orchestrator?.auto_reassign_stale) {
-      // Release the stale session's task
-      session.releaseTask(agent.session_id);
-      session.endSession(agent.session_id, 'stale');
+      if (assessment.strategy === recovery.STRATEGIES.RESUME) {
+        // Stale but has checkpoint — mark recoverable
+        _addRecoverableTask(agent.claimed_task, agent.session_id, assessment.checkpoint);
 
-      session.logEvent({
-        type: 'pm_stale_cleanup',
-        pm_session: pmSessionId,
-        stale_session: agent.session_id,
-        task_id: agent.claimed_task,
-        action: 'released'
-      });
+        session.releaseTask(agent.session_id);
+        session.endSession(agent.session_id, 'stale');
 
-      results.push({
-        session_id: agent.session_id,
-        task_id: agent.claimed_task,
-        status: agent.status,
-        action: 'released_and_ended'
-      });
+        session.logEvent({
+          type: 'pm_stale_recovery',
+          pm_session: pmSessionId,
+          stale_session: agent.session_id,
+          task_id: agent.claimed_task,
+          action: 'marked_recoverable'
+        });
+
+        results.push({
+          session_id: agent.session_id,
+          task_id: agent.claimed_task,
+          status: agent.status,
+          action: 'marked_recoverable'
+        });
+      } else {
+        // Release the stale session's task
+        session.releaseTask(agent.session_id);
+        session.endSession(agent.session_id, 'stale');
+
+        session.logEvent({
+          type: 'pm_stale_cleanup',
+          pm_session: pmSessionId,
+          stale_session: agent.session_id,
+          task_id: agent.claimed_task,
+          action: 'released'
+        });
+
+        results.push({
+          session_id: agent.session_id,
+          task_id: agent.claimed_task,
+          status: agent.status,
+          action: 'released_and_ended'
+        });
+      }
     } else {
       // Just flag it
       publishDecision('stale_agent_detected', {
         session_id: agent.session_id,
         task_id: agent.claimed_task,
         heartbeat_age_sec: agent.heartbeat_age_sec,
-        process_alive: agent.process_alive
+        process_alive: agent.process_alive,
+        recovery_strategy: assessment.strategy
       });
 
       results.push({
         session_id: agent.session_id,
         task_id: agent.claimed_task,
         status: agent.status,
-        action: 'flagged'
+        action: 'flagged',
+        recovery_strategy: assessment.strategy
       });
     }
   }
 
   return results;
+}
+
+// ============================================================================
+// RECOVERABLE TASKS (Phase 3.8)
+// ============================================================================
+
+const RECOVERABLE_TASKS_PATH = '.claude/pilot/state/orchestrator/recoverable-tasks.json';
+
+function _getRecoverableTasksPath() {
+  return path.join(process.cwd(), RECOVERABLE_TASKS_PATH);
+}
+
+/**
+ * Add a task to the recoverable queue.
+ */
+function _addRecoverableTask(taskId, deadSessionId, checkpoint) {
+  ensurePmStateDir();
+  const filePath = _getRecoverableTasksPath();
+
+  let tasks = [];
+  if (fs.existsSync(filePath)) {
+    try {
+      tasks = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch (e) { tasks = []; }
+  }
+
+  // Avoid duplicates
+  tasks = tasks.filter(t => t.task_id !== taskId);
+
+  tasks.push({
+    task_id: taskId,
+    dead_session_id: deadSessionId,
+    checkpoint_session: deadSessionId,
+    plan_step: checkpoint?.plan_step || null,
+    total_steps: checkpoint?.total_steps || null,
+    task_title: checkpoint?.task_title || null,
+    added_at: new Date().toISOString()
+  });
+
+  fs.writeFileSync(filePath, JSON.stringify(tasks, null, 2));
+}
+
+/**
+ * Get tasks that have checkpoints and can be resumed by a new agent.
+ *
+ * @returns {Array<{ task_id, dead_session_id, checkpoint_session, plan_step, total_steps, task_title, added_at }>}
+ */
+function getRecoverableTasks() {
+  const filePath = _getRecoverableTasksPath();
+  if (!fs.existsSync(filePath)) return [];
+
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Remove a task from the recoverable queue (after it's been picked up).
+ */
+function removeRecoverableTask(taskId) {
+  const filePath = _getRecoverableTasksPath();
+  if (!fs.existsSync(filePath)) return;
+
+  try {
+    let tasks = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    tasks = tasks.filter(t => t.task_id !== taskId);
+    fs.writeFileSync(filePath, JSON.stringify(tasks, null, 2));
+  } catch (e) { /* best effort */ }
 }
 
 // ============================================================================
@@ -1096,8 +1226,10 @@ module.exports = {
   approveMerge,
   rejectMerge,
 
-  // Stale management
+  // Stale management & recovery (Phase 3.8)
   handleStaleAgents,
+  getRecoverableTasks,
+  removeRecoverableTask,
 
   // PM state
   initializePm,

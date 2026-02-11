@@ -156,6 +156,7 @@ class AgentLoop {
   /**
    * Start the agent loop.
    * Initializes the poller and begins watching for work.
+   * Phase 3.8: Attempts self-recovery from checkpoint on crash restart.
    */
   start() {
     if (this._running) return { success: false, error: 'Already running' };
@@ -164,15 +165,20 @@ class AgentLoop {
     this._running = true;
     this.state = STATES.IDLE;
 
-    // Restore state from crash
-    const saved = loadLoopState(this.sessionId);
-    if (saved && saved.state !== STATES.IDLE && saved.state !== STATES.DONE) {
-      this.state = saved.state;
-      this.currentTaskId = saved.currentTaskId;
-      this.currentTaskTitle = saved.currentTaskTitle;
-      this.planRequestId = saved.planRequestId;
-      this.execStep = saved.execStep || 0;
-      this.totalSteps = saved.totalSteps || 0;
+    // Phase 3.8: Attempt self-recovery from crashed state
+    const recoveryResult = this._attemptSelfRecovery();
+
+    // Restore state from crash (if no recovery happened)
+    if (!recoveryResult.recovered) {
+      const saved = loadLoopState(this.sessionId);
+      if (saved && saved.state !== STATES.IDLE && saved.state !== STATES.DONE) {
+        this.state = saved.state;
+        this.currentTaskId = saved.currentTaskId;
+        this.currentTaskTitle = saved.currentTaskTitle;
+        this.planRequestId = saved.planRequestId;
+        this.execStep = saved.execStep || 0;
+        this.totalSteps = saved.totalSteps || 0;
+      }
     }
 
     // Start poller
@@ -192,7 +198,11 @@ class AgentLoop {
     this._poller.start();
 
     this._persistState();
-    return { success: true, state: this.state };
+    return {
+      success: true,
+      state: this.state,
+      recovery: recoveryResult.recovered ? recoveryResult : undefined
+    };
   }
 
   /**
@@ -482,24 +492,64 @@ class AgentLoop {
 
   /**
    * Handle an error during execution.
+   * Phase 3.8: Uses recovery module to diagnose test failures and
+   * include fix suggestions in escalation messages.
    */
   handleError(error) {
     this.consecutiveErrors++;
+    const errorMsg = typeof error === 'string' ? error : error.message;
     this.errors.push({
       ts: new Date().toISOString(),
       state: this.state,
-      error: typeof error === 'string' ? error : error.message
+      error: errorMsg
     });
 
     if (this.consecutiveErrors >= MAX_ERRORS) {
-      // Too many errors — stop and escalate
+      // Phase 3.8: Try to diagnose before escalating
+      let diagnosis = null;
+      try {
+        const recovery = require('./recovery');
+        diagnosis = recovery.handleTestFailure(this.sessionId, errorMsg);
+      } catch (e) { /* best effort */ }
+
+      if (diagnosis && diagnosis.known_pattern && diagnosis.suggestion) {
+        // Known pattern — include fix suggestion, don't stop yet
+        this.consecutiveErrors = 0; // Reset — we have a potential fix
+        this._persistState();
+        return {
+          success: true,
+          known_pattern: true,
+          suggestion: diagnosis.suggestion,
+          consecutive_errors: 0
+        };
+      }
+
+      // Unknown pattern or no diagnosis — escalate and stop
       const messaging = require('./messaging');
       messaging.sendBlockingRequest(
         this.sessionId,
         'pm',
         `Agent ${this.agentName} hit ${MAX_ERRORS} consecutive errors on task ${this.currentTaskId}`,
-        { context: { errors: this.errors.slice(-MAX_ERRORS) } }
+        {
+          context: {
+            errors: this.errors.slice(-MAX_ERRORS),
+            diagnosis: diagnosis || null
+          }
+        }
       );
+
+      // Record in agent memory for future pattern matching
+      if (this.role) {
+        try {
+          const memory = require('./memory');
+          memory.recordError(this.role, {
+            error_type: 'max_errors_reached',
+            context: `${MAX_ERRORS} consecutive errors on task ${this.currentTaskId}`,
+            resolution: 'escalated_to_pm',
+            task_id: this.currentTaskId
+          });
+        } catch (e) { /* best effort */ }
+      }
 
       this.stop('max_errors');
       return { success: false, stopped: true, reason: 'max_errors' };
@@ -649,6 +699,66 @@ class AgentLoop {
       }
     } catch (e) {
       // bd not available or no tasks
+    }
+  }
+
+  /**
+   * Phase 3.8: Attempt self-recovery from a previous crash.
+   * Checks for checkpoint from current or dead session, restores state.
+   *
+   * @returns {{ recovered: boolean, task_id?: string, plan_step?: number }}
+   */
+  _attemptSelfRecovery() {
+    try {
+      const recovery = require('./recovery');
+
+      // Check if there's a crashed loop state for this session
+      const saved = loadLoopState(this.sessionId);
+      if (!saved || saved.state === STATES.IDLE || saved.state === STATES.DONE) {
+        return { recovered: false };
+      }
+
+      // Attempt checkpoint-based recovery
+      const ctx = recovery.recoverFromCheckpoint(this.sessionId);
+      if (ctx && ctx.task_id) {
+        this.state = STATES.EXECUTING;
+        this.currentTaskId = ctx.task_id;
+        this.currentTaskTitle = ctx.task_title || ctx.task_id;
+        this.execStep = ctx.plan_step || 0;
+        this.totalSteps = ctx.total_steps || 0;
+        this.consecutiveErrors = 0;
+
+        recovery.logRecoveryEvent(this.sessionId, 'self_recovery_success', {
+          task_id: ctx.task_id,
+          resumed_from_step: ctx.plan_step
+        });
+
+        return {
+          recovered: true,
+          task_id: ctx.task_id,
+          plan_step: ctx.plan_step,
+          restoration: ctx.restoration
+        };
+      }
+
+      // No checkpoint — can't resume, fall back to IDLE
+      if (saved.currentTaskId) {
+        // Release the task claim gracefully
+        try {
+          const session = require('./session');
+          session.releaseTask(this.sessionId);
+        } catch (e) { /* best effort */ }
+
+        recovery.logRecoveryEvent(this.sessionId, 'self_recovery_fallback_idle', {
+          task_id: saved.currentTaskId,
+          reason: 'no_checkpoint'
+        });
+      }
+
+      return { recovered: false };
+    } catch (e) {
+      // Recovery module not available or error — proceed normally
+      return { recovered: false };
     }
   }
 
