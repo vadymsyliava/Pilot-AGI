@@ -25,24 +25,9 @@ if (sessionIdx !== -1 && args[sessionIdx + 1]) {
   sessionId = args[sessionIdx + 1];
 }
 
-// Find current session ID if not provided
+// Resolve current session via PID matching (not mtime — multi-agent safe)
 if (!sessionId) {
-  const stateDir = path.join(process.cwd(), '.claude/pilot/state/sessions');
-  if (fs.existsSync(stateDir)) {
-    const files = fs.readdirSync(stateDir)
-      .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'))
-      .map(f => ({
-        name: f,
-        mtime: fs.statSync(path.join(stateDir, f)).mtime.getTime()
-      }))
-      .sort((a, b) => b.mtime - a.mtime);
-
-    if (files.length > 0) {
-      const content = fs.readFileSync(path.join(stateDir, files[0].name), 'utf8');
-      const sess = JSON.parse(content);
-      if (sess.status === 'active') sessionId = sess.session_id;
-    }
-  }
+  sessionId = session.resolveCurrentSession();
 }
 
 if (!sessionId) {

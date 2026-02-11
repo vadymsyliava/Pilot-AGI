@@ -1552,6 +1552,115 @@ function recoverSession(deadSessionId, newSessionId, leaseDurationMs = DEFAULT_L
   }
 }
 
+/**
+ * Resolve the current session ID for the calling process.
+ *
+ * Resolution order:
+ * 1. PILOT_SESSION_ID env var (set by hooks if available)
+ * 2. Match process.ppid against pid/parent_pid in active sessions
+ * 3. Walk process tree via getParentClaudePID() and match
+ * 4. null (caller must handle — never guess wrong)
+ *
+ * This replaces the broken "most-recent-mtime" approach that caused
+ * all terminals to resolve to the same session in multi-agent setups.
+ */
+function resolveCurrentSession() {
+  // 1. Env var — fastest, most reliable when set
+  if (process.env.PILOT_SESSION_ID) {
+    return process.env.PILOT_SESSION_ID;
+  }
+
+  const stateDir = getSessionStateDir();
+  if (!fs.existsSync(stateDir)) return null;
+
+  const files = fs.readdirSync(stateDir)
+    .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'));
+
+  const activeSessions = [];
+  const endedSessions = [];
+  for (const f of files) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(stateDir, f), 'utf8'));
+      if (data.status === 'active') {
+        activeSessions.push(data);
+      } else if (data.status === 'ended' && data.parent_pid) {
+        endedSessions.push({ file: f, data });
+      }
+    } catch (e) { /* skip invalid */ }
+  }
+
+  // Helper: pick best match when multiple sessions share a PID
+  // Prefer most recent heartbeat (the one actively in use)
+  function bestMatch(candidates) {
+    if (candidates.length === 1) return candidates[0].session_id;
+    candidates.sort((a, b) =>
+      new Date(b.last_heartbeat || 0).getTime() - new Date(a.last_heartbeat || 0).getTime()
+    );
+    return candidates[0].session_id;
+  }
+
+  // Collect PIDs to try: direct ppid first, then walked claude parent PID
+  const pidsToTry = [];
+  if (process.ppid) pidsToTry.push(process.ppid);
+  try {
+    const claudePid = getParentClaudePID();
+    if (claudePid && claudePid !== process.pid && claudePid !== process.ppid) {
+      pidsToTry.push(claudePid);
+    }
+  } catch (e) { /* ignore */ }
+
+  // 2. Try matching active sessions by PID
+  for (const pid of pidsToTry) {
+    const matches = activeSessions.filter(s => s.pid === pid || s.parent_pid === pid);
+    if (matches.length > 0) return bestMatch(matches);
+  }
+
+  // 3. No active session matched — try to resurrect an ended session
+  //    whose parent_pid matches (same Claude terminal restarted hooks).
+  //    This mirrors the resurrection logic in registerSession().
+  for (const pid of pidsToTry) {
+    const candidates = endedSessions.filter(e => e.data.parent_pid === pid);
+    if (candidates.length === 0) continue;
+
+    // Pick most recently updated
+    candidates.sort((a, b) => {
+      const aTime = new Date(a.data.last_heartbeat || a.data.started_at || 0).getTime();
+      const bTime = new Date(b.data.last_heartbeat || b.data.started_at || 0).getTime();
+      return bTime - aTime;
+    });
+
+    const toResurrect = candidates[0];
+    const resurrected = toResurrect.data;
+    resurrected.status = 'active';
+    resurrected.last_heartbeat = new Date().toISOString();
+    resurrected.pid = process.pid; // Update hook pid
+    delete resurrected.ended_at;
+    delete resurrected.end_reason;
+
+    try {
+      fs.writeFileSync(
+        path.join(stateDir, toResurrect.file),
+        JSON.stringify(resurrected, null, 2)
+      );
+      // Re-create lockfile
+      createSessionLock(resurrected.session_id);
+      logEvent({
+        type: 'session_resurrected',
+        session_id: resurrected.session_id,
+        parent_pid: pid,
+        source: 'resolveCurrentSession',
+        claimed_task: resurrected.claimed_task
+      });
+      return resurrected.session_id;
+    } catch (e) {
+      // Resurrection failed — continue trying other PIDs
+    }
+  }
+
+  // No match — return null instead of guessing wrong
+  return null;
+}
+
 module.exports = {
   generateSessionId,
   registerSession,
@@ -1601,5 +1710,7 @@ module.exports = {
   discoverAgentByCap,
   discoverAgentByFile,
   // Recovery (Phase 3.8)
-  recoverSession
+  recoverSession,
+  // Session resolution (multi-agent fix)
+  resolveCurrentSession
 };

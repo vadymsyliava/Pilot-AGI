@@ -30,36 +30,13 @@ const path = require('path');
  * Checks environment variable first, then finds most recent active session.
  */
 function getCurrentSessionId() {
-  // Check environment variable (set by session-start hook)
-  if (process.env.PILOT_SESSION_ID) {
-    return process.env.PILOT_SESSION_ID;
-  }
-
-  // Fall back to finding most recent session file
-  const sessDir = path.join(process.cwd(), '.claude/pilot/state/sessions');
-  if (!fs.existsSync(sessDir)) return null;
-
+  // Use PID-based resolution (multi-agent safe)
   try {
-    const files = fs.readdirSync(sessDir)
-      .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'))
-      .sort()
-      .reverse();
-
-    for (const f of files) {
-      try {
-        const data = JSON.parse(fs.readFileSync(path.join(sessDir, f), 'utf8'));
-        if (data.status === 'active') {
-          return data.session_id;
-        }
-      } catch (e) {
-        continue;
-      }
-    }
+    const session = require('./lib/session');
+    return session.resolveCurrentSession();
   } catch (e) {
-    // ignore
+    return null;
   }
-
-  return null;
 }
 
 /**

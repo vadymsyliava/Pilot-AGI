@@ -158,26 +158,12 @@ function buildSessionAwareness(currentSessionId) {
 }
 
 /**
- * Find the current session ID from the most recent active session file.
+ * Find the current session ID via PID-based resolution (multi-agent safe).
  */
 function getCurrentSessionId() {
   try {
-    const stateDir = path.join(process.cwd(), '.claude/pilot/state/sessions');
-    if (!fs.existsSync(stateDir)) return null;
-
-    const files = fs.readdirSync(stateDir)
-      .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'))
-      .map(f => ({
-        name: f,
-        mtime: fs.statSync(path.join(stateDir, f)).mtime.getTime()
-      }))
-      .sort((a, b) => b.mtime - a.mtime);
-
-    if (files.length === 0) return null;
-
-    const content = fs.readFileSync(path.join(stateDir, files[0].name), 'utf8');
-    const sess = JSON.parse(content);
-    return sess.status === 'active' ? sess.session_id : null;
+    const session = require('./lib/session');
+    return session.resolveCurrentSession();
   } catch (e) {
     return null;
   }
