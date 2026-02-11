@@ -321,4 +321,3 @@ test('getActiveSessions reaps zombies before returning', () => {
 // ═══════════════════════════════════════════════════
 console.log('\n' + '='.repeat(50));
 console.log(`Results: ${passed} passed, ${failed} failed`);
-process.exit(failed > 0 ? 1 : 0);

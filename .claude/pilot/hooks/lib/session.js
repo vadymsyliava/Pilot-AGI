@@ -401,32 +401,55 @@ function registerSession(sessionId, context = {}) {
   // Resolve parent claude PID for accurate liveness checks
   const parentPid = getParentClaudePID();
 
-  // --- Session Resurrection ---
-  // If an ended session exists for the same parent_pid (same Claude terminal),
-  // resurrect it instead of creating a new one. This preserves claimed_task,
-  // locks, and prevents session proliferation when hooks re-fire.
+  // --- Session Dedup + Resurrection ---
+  // Enforce: ONE active session per parent_pid (one Claude terminal = one session).
+  // On session-start hook re-fire (/clear, /compact, context reset), we must:
+  // 1. End any stale active sessions for this parent_pid
+  // 2. Resurrect the most recent ended session if it had a claimed_task
+  // 3. Or create a fresh session
   if (parentPid) {
     try {
       const files = fs.readdirSync(stateDir)
         .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'));
-      // Sort newest first to find the most recent session for this terminal
-      const candidates = [];
+
+      const endedCandidates = [];
+      const activeDups = [];
+
       for (const f of files) {
         try {
           const data = JSON.parse(fs.readFileSync(path.join(stateDir, f), 'utf8'));
-          if (data.parent_pid === parentPid && data.status === 'ended') {
-            candidates.push({ file: f, data, mtime: fs.statSync(path.join(stateDir, f)).mtime.getTime() });
+          if (data.parent_pid !== parentPid) continue;
+          if (data.status === 'active' && !data.ended_at) {
+            activeDups.push({ file: f, data, mtime: fs.statSync(path.join(stateDir, f)).mtime.getTime() });
+          } else if (data.status === 'ended') {
+            endedCandidates.push({ file: f, data, mtime: fs.statSync(path.join(stateDir, f)).mtime.getTime() });
           }
         } catch (e) { /* skip invalid */ }
       }
-      if (candidates.length > 0) {
-        // Resurrect the most recent ended session for this terminal
-        candidates.sort((a, b) => b.mtime - a.mtime);
-        const toResurrect = candidates[0];
+
+      // End ALL existing active sessions for this parent_pid.
+      // The new registration will be the sole owner of this terminal.
+      for (const dup of activeDups) {
+        endSession(dup.data.session_id, 'replaced_by_new_session');
+        logEvent({
+          type: 'session_deduped',
+          session_id: dup.data.session_id,
+          parent_pid: parentPid,
+          had_task: dup.data.claimed_task || null,
+          reason: 'new_session_start_same_terminal'
+        });
+      }
+
+      // Resurrect most recent ended session (preserves claimed_task, locks)
+      if (endedCandidates.length > 0) {
+        endedCandidates.sort((a, b) => b.mtime - a.mtime);
+        const toResurrect = endedCandidates[0];
         const resurrected = toResurrect.data;
         resurrected.status = 'active';
         resurrected.last_heartbeat = new Date().toISOString();
         resurrected.pid = process.pid; // Update hook pid
+        delete resurrected.ended_at;
+        delete resurrected.end_reason;
         fs.writeFileSync(
           path.join(stateDir, toResurrect.file),
           JSON.stringify(resurrected, null, 2)
@@ -524,6 +547,8 @@ function _reapZombies() {
   const files = fs.readdirSync(stateDir)
     .filter(f => f.startsWith('S-') && f.endsWith('.json') && !f.includes('.pressure'));
 
+  // Phase 1: Load all active sessions and reap dead ones
+  const activeSessions = []; // collect survivors for dedup
   for (const file of files) {
     try {
       const filePath = path.join(stateDir, file);
@@ -554,14 +579,49 @@ function _reapZombies() {
             had_task: data.claimed_task || null
           });
           reaped++;
+          continue;
         }
+        activeSessions.push(data);
       }
     } catch (e) {
       // Skip invalid files
     }
   }
 
-  // Clean up orphaned lockfiles: lock exists but session is ended or missing
+  // Phase 2: Dedup — one active session per parent_pid.
+  // If multiple active sessions share a parent_pid (from /clear, /compact,
+  // context resets re-firing session-start), keep only the newest.
+  const byPpid = {};
+  for (const s of activeSessions) {
+    const ppid = s.parent_pid;
+    if (!ppid) continue;
+    if (!byPpid[ppid]) byPpid[ppid] = [];
+    byPpid[ppid].push(s);
+  }
+
+  for (const [ppid, sessions] of Object.entries(byPpid)) {
+    if (sessions.length <= 1) continue;
+    // Sort by last_heartbeat descending — newest wins
+    sessions.sort((a, b) =>
+      new Date(b.last_heartbeat || 0).getTime() - new Date(a.last_heartbeat || 0).getTime()
+    );
+    // Reap all but the newest
+    for (let i = 1; i < sessions.length; i++) {
+      const stale = sessions[i];
+      endSession(stale.session_id, 'duplicate_ppid');
+      logEvent({
+        type: 'session_zombie_reaped',
+        session_id: stale.session_id,
+        reason: 'duplicate_ppid',
+        parent_pid: parseInt(ppid, 10),
+        kept_session: sessions[0].session_id,
+        had_task: stale.claimed_task || null
+      });
+      reaped++;
+    }
+  }
+
+  // Phase 3: Clean up orphaned lockfiles
   try {
     const lockDir = getSessionLockDir();
     if (fs.existsSync(lockDir)) {
@@ -1770,49 +1830,13 @@ function resolveCurrentSession() {
     if (matches.length > 0) return bestMatch(matches);
   }
 
-  // 3. No active session matched — try to resurrect an ended session
-  //    whose parent_pid matches (same Claude terminal restarted hooks).
-  //    This mirrors the resurrection logic in registerSession().
-  for (const pid of pidsToTry) {
-    const candidates = endedSessions.filter(e => e.data.parent_pid === pid);
-    if (candidates.length === 0) continue;
-
-    // Pick most recently updated
-    candidates.sort((a, b) => {
-      const aTime = new Date(a.data.last_heartbeat || a.data.started_at || 0).getTime();
-      const bTime = new Date(b.data.last_heartbeat || b.data.started_at || 0).getTime();
-      return bTime - aTime;
-    });
-
-    const toResurrect = candidates[0];
-    const resurrected = toResurrect.data;
-    resurrected.status = 'active';
-    resurrected.last_heartbeat = new Date().toISOString();
-    resurrected.pid = process.pid; // Update hook pid
-    delete resurrected.ended_at;
-    delete resurrected.end_reason;
-
-    try {
-      fs.writeFileSync(
-        path.join(stateDir, toResurrect.file),
-        JSON.stringify(resurrected, null, 2)
-      );
-      // Re-create lockfile
-      createSessionLock(resurrected.session_id);
-      logEvent({
-        type: 'session_resurrected',
-        session_id: resurrected.session_id,
-        parent_pid: pid,
-        source: 'resolveCurrentSession',
-        claimed_task: resurrected.claimed_task
-      });
-      return resurrected.session_id;
-    } catch (e) {
-      // Resurrection failed — continue trying other PIDs
-    }
-  }
-
-  // No match — return null instead of guessing wrong
+  // 3. No active session matched.
+  // Do NOT resurrect ended sessions here — resolveCurrentSession() is a
+  // read-path function called on every heartbeat and tool call. Resurrection
+  // must only happen in registerSession() (session-start hook), which is the
+  // single controlled entry point for session lifecycle changes.
+  // Resurrecting here caused zombie proliferation: every tool call from a
+  // terminal with a reaped session would re-create it, fighting the reaper.
   return null;
 }
 
