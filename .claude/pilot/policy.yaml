@@ -976,3 +976,52 @@ notifications:
     agent_stall: true
     morning_report: true
     error_budget_exceeded: true
+
+# =============================================================================
+# TERMINAL ORCHESTRATION (Phase 6.4)
+# PM Daemon integration with physical terminal tabs for agent management
+# =============================================================================
+terminal_orchestration:
+  # Master switch — disabled by default, opt-in
+  enabled: false
+
+  # Provider: 'auto' (iTerm2 → AppleScript), 'iterm2', 'applescript'
+  provider: 'auto'
+
+  # How to spawn agent tabs: 'tab' (recommended), 'window', 'split'
+  spawn_mode: 'tab'
+
+  # Terminal scan interval in the PM daemon tick loop (ms)
+  scan_interval_ms: 10000
+
+  # Stall detection threshold — agent with no state change exceeding this is stalled
+  stall_threshold_ms: 300000
+
+  # Auto-approve permission prompts in terminal tabs
+  auto_approve:
+    # Master switch for auto-approval
+    enabled: true
+    # Auto-approve plan approval prompts
+    plan_approval: true
+    # Auto-approve tool permission prompts
+    permission: true
+
+  # Dynamic scaling based on queue depth
+  scaling:
+    enabled: true
+    min_agents: 1
+    max_agents: 8
+    # Spawn new agent when ready_tasks exceeds this
+    queue_depth_target: 3
+    # Cooldown between scale-up decisions (ms)
+    cooldown_ms: 10000
+
+  # Stall recovery settings
+  recovery:
+    enabled: true
+    # Automatically restart stalled agents
+    restart_on_stall: true
+    # Maximum restarts per task before escalating
+    max_restarts_per_task: 3
+    # Escalate to human when restart limit exceeded
+    escalate_on_exceed: true
