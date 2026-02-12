@@ -429,6 +429,36 @@ testAsync('spawn does not include --read when no contextFile', async () => {
   restoreMocks();
 });
 
+testAsync('spawn sets PILOT_CONTEXT_FILE when contextFile provided', async () => {
+  installMocks();
+  const { AiderAdapter } = freshModule('../aider-adapter');
+  const adapter = new AiderAdapter();
+
+  await adapter.spawn({
+    prompt: 'test',
+    cwd: '/tmp',
+    contextFile: '/path/to/context.json'
+  });
+  const env = mockSpawnCalls[0].opts.env;
+  assert.strictEqual(env.PILOT_CONTEXT_FILE, '/path/to/context.json');
+  restoreMocks();
+});
+
+testAsync('spawn sets PILOT_TOKEN_BUDGET when maxTokens provided', async () => {
+  installMocks();
+  const { AiderAdapter } = freshModule('../aider-adapter');
+  const adapter = new AiderAdapter();
+
+  await adapter.spawn({
+    prompt: 'test',
+    cwd: '/tmp',
+    maxTokens: 50000
+  });
+  const env = mockSpawnCalls[0].opts.env;
+  assert.strictEqual(env.PILOT_TOKEN_BUDGET, '50000');
+  restoreMocks();
+});
+
 testAsync('spawn sets AIDER_MODEL env var when model specified', async () => {
   installMocks();
   const { AiderAdapter } = freshModule('../aider-adapter');

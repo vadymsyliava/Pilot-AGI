@@ -126,6 +126,13 @@ class AiderAdapter extends AgentAdapter {
       env.AIDER_MODEL = opts.model;
     }
 
+    if (opts.contextFile) {
+      env.PILOT_CONTEXT_FILE = opts.contextFile;
+    }
+    if (opts.maxTokens) {
+      env.PILOT_TOKEN_BUDGET = String(opts.maxTokens);
+    }
+
     const proc = cp.spawn('aider', args, {
       cwd: opts.cwd,
       env,
@@ -238,6 +245,13 @@ class AiderAdapter extends AgentAdapter {
     }
 
     return parts.join(' ');
+  }
+
+  /**
+   * Clean up tracked process state (for testing or shutdown).
+   */
+  _clearProcesses() {
+    this._processes.clear();
   }
 }
 
