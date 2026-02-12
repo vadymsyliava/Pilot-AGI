@@ -34,7 +34,7 @@ const DEFAULT_ACK_DEADLINE_MS = 30000; // 30 seconds
 const ACK_MAX_RETRIES = 3;
 const PRIORITY_ORDER = { blocking: 0, normal: 1, fyi: 2 };
 
-const VALID_TYPES = ['request', 'response', 'notify', 'task_delegate', 'broadcast', 'query', 'block_on_task'];
+const VALID_TYPES = ['request', 'response', 'notify', 'task_delegate', 'broadcast', 'query', 'block_on_task', 'ask_pm', 'pm_response'];
 const VALID_PRIORITIES = ['blocking', 'normal', 'fyi'];
 
 // ============================================================================
@@ -1555,6 +1555,40 @@ function getBusStats() {
 }
 
 // ============================================================================
+// PM BRAIN MESSAGING (Phase 5.0)
+// ============================================================================
+
+/**
+ * Send an ask-pm message (agent → PM brain via file bus).
+ */
+function sendAskPm(from, question, context = {}) {
+  return sendMessage({
+    type: 'ask_pm',
+    from,
+    to: 'pm',
+    topic: 'ask_pm',
+    priority: 'normal',
+    payload: { question, context },
+    ttl_ms: DEFAULT_TTL_MS.normal
+  });
+}
+
+/**
+ * Send a pm-response message (PM brain → agent via file bus).
+ */
+function sendPmResponse(correlationId, recipientSessionId, answer) {
+  return sendMessage({
+    type: 'pm_response',
+    from: 'pm',
+    to: recipientSessionId,
+    topic: 'pm_response',
+    priority: 'normal',
+    payload: { answer, correlation_id: correlationId },
+    ttl_ms: DEFAULT_TTL_MS.normal
+  });
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
@@ -1616,6 +1650,9 @@ module.exports = {
   delegateTaskWithBd,
   sendWithEscalation,
   DEFAULT_ESCALATION_CHAIN,
+  // PM Brain messaging (Phase 5.0)
+  sendAskPm,
+  sendPmResponse,
   // Compaction & cleanup
   needsCompaction,
   compactBus,
