@@ -315,6 +315,296 @@ test('_taskScan does not loop infinitely', () => {
   assert.ok(Array.isArray(results));
 });
 
+// --- Phase 6.4: Terminal orchestration integration ---
+
+console.log('\n  Terminal orchestration (Phase 6.4)');
+
+test('constructor initializes terminal-related properties', () => {
+  const { PmDaemon } = freshRequire('../pm-daemon');
+  const daemon = new PmDaemon(testDir);
+  assert.strictEqual(daemon.terminalController, null);
+  assert.strictEqual(daemon.lastTerminalScan, 0);
+  assert.strictEqual(daemon.lastScaleCheck, 0);
+});
+
+test('_terminalScanLoop is no-op when no terminal controller', () => {
+  const { PmDaemon } = freshRequire('../pm-daemon');
+  const daemon = new PmDaemon(testDir, { skipSignalHandlers: true });
+  daemon.running = true;
+  daemon.log = { info() {}, warn() {}, error() {}, debug() {} };
+  // Should not throw
+  daemon._terminalScanLoop();
+});
+
+test('_terminalScanLoop respects scan interval', () => {
+  const { PmDaemon } = freshRequire('../pm-daemon');
+  const daemon = new PmDaemon(testDir, { skipSignalHandlers: true });
+  daemon.running = true;
+  daemon.log = { info() {}, warn() {}, error() {}, debug() {} };
+
+  // Create a mock terminal controller
+  let syncCalled = 0;
+  daemon.terminalController = {
+    _started: true,
+    sync: () => { syncCalled++; return Promise.resolve({ updated: 0, removed: 0, orphaned: 0 }); },
+    getAllTabs: () => [],
+    detectStalled: () => [],
+    getTabMetrics: () => ({ total: 0, byState: {}, byRole: {}, stalled: 0 })
+  };
+
+  // First call should proceed
+  daemon.lastTerminalScan = 0;
+  daemon._terminalScanLoop();
+  assert.strictEqual(syncCalled, 1);
+
+  // Immediate second call should be skipped (within interval)
+  daemon._terminalScanLoop();
+  assert.strictEqual(syncCalled, 1, 'Should skip scan within interval');
+});
+
+test('_reconcileTerminalState detects missing tabs', () => {
+  const { PmDaemon } = freshRequire('../pm-daemon');
+  const daemon = new PmDaemon(testDir, { skipSignalHandlers: true });
+  daemon.running = true;
+  daemon.log = { info() {}, warn() {}, error() {}, debug() {} };
+
+  // Mock terminal controller with no tabs
+  daemon.terminalController = {
+    _started: true,
+    getAllTabs: () => [],
+    detectStalled: () => []
+  };
+
+  // Track a terminal agent whose tab no longer exists
+  let exitCalled = false;
+  daemon._onAgentExit = (pid, taskId, code, signal) => {
+    exitCalled = true;
+    assert.strictEqual(taskId, 'test-1');
+    assert.strictEqual(code, -1);
+    assert.strictEqual(signal, 'tab_closed');
+  };
+
+  daemon.spawnedAgents.set('tab-123', {
+    taskId: 'test-1',
+    isTerminal: true,
+    tabId: 'tab-123',
+    exitCode: null,
+    spawnedAt: new Date().toISOString()
+  });
+
+  daemon._reconcileTerminalState();
+
+  const entry = daemon.spawnedAgents.get('tab-123');
+  assert.strictEqual(entry.exitCode, -1);
+  assert.ok(entry.exitedAt);
+  assert.ok(exitCalled, 'Should trigger _onAgentExit');
+});
+
+test('_reconcileTerminalState ignores already-exited agents', () => {
+  const { PmDaemon } = freshRequire('../pm-daemon');
+  const daemon = new PmDaemon(testDir, { skipSignalHandlers: true });
+  daemon.running = true;
+  daemon.log = { info() {}, warn() {}, error() {}, debug() {} };
+
+  daemon.terminalController = {
+    _started: true,
+    getAllTabs: () => [],
+    detectStalled: () => []
+  };
+
+  let exitCalled = false;
+  daemon._onAgentExit = () => { exitCalled = true; };
+
+  // Already exited — should not trigger again
+  daemon.spawnedAgents.set('tab-456', {
+    taskId: 'test-2',
+    isTerminal: true,
+    tabId: 'tab-456',
+    exitCode: 0,
+    exitedAt: new Date().toISOString(),
+    spawnedAt: new Date().toISOString()
+  });
+
+  daemon._reconcileTerminalState();
+  assert.strictEqual(exitCalled, false, 'Should not re-trigger exit for already exited');
+});
+
+test('_autoApproveTerminals sends approval for plan_approval state', () => {
+  const { PmDaemon } = freshRequire('../pm-daemon');
+  const daemon = new PmDaemon(testDir, { skipSignalHandlers: true });
+  daemon.running = true;
+  daemon.log = { info() {}, warn() {}, error() {}, debug() {} };
+
+  let approvedTabId = null;
+  daemon.terminalController = {
+    _started: true,
+    getAllTabs: () => [{
+      tabId: 'tab-a',
+      taskId: 'task-1',
+      role: 'agent',
+      state: 'plan_approval'
+    }],
+    autoApprove: (tabId) => {
+      approvedTabId = tabId;
+      return Promise.resolve();
+    },
+    detectStalled: () => []
+  };
+
+  daemon._autoApproveTerminals({
+    auto_approve: { enabled: true, plan_approval: true, permission: true }
+  });
+
+  assert.strictEqual(approvedTabId, 'tab-a');
+});
+
+test('_autoApproveTerminals does nothing when disabled', () => {
+  const { PmDaemon } = freshRequire('../pm-daemon');
+  const daemon = new PmDaemon(testDir, { skipSignalHandlers: true });
+  daemon.running = true;
+  daemon.log = { info() {}, warn() {}, error() {}, debug() {} };
+
+  let approveCalled = false;
+  daemon.terminalController = {
+    _started: true,
+    getAllTabs: () => [{ tabId: 'tab-b', taskId: 'task-2', state: 'plan_approval' }],
+    autoApprove: () => { approveCalled = true; return Promise.resolve(); }
+  };
+
+  daemon._autoApproveTerminals({ auto_approve: { enabled: false } });
+  assert.strictEqual(approveCalled, false, 'Should not call autoApprove when disabled');
+});
+
+test('_spawnAgent delegates to terminal when controller is active', () => {
+  const { PmDaemon } = freshRequire('../pm-daemon');
+  const daemon = new PmDaemon(testDir, { dryRun: true, skipSignalHandlers: true });
+  daemon.running = true;
+  daemon.pmSessionId = 'test-pm';
+  daemon.log = { info() {}, warn() {}, error() {}, debug() {} };
+
+  let terminalSpawnCalled = false;
+  daemon.terminalController = { _started: true };
+  daemon._spawnAgentViaTerminal = () => {
+    terminalSpawnCalled = true;
+    return Promise.resolve({ success: true, tabId: 'tab-x' });
+  };
+
+  const result = daemon._spawnAgent({ id: 'test-1', title: 'Test' });
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.terminal, true);
+  assert.ok(terminalSpawnCalled, 'Should call _spawnAgentViaTerminal');
+});
+
+test('_spawnAgent falls back to headless when no terminal controller', () => {
+  const { PmDaemon } = freshRequire('../pm-daemon');
+  const daemon = new PmDaemon(testDir, { dryRun: true, skipSignalHandlers: true });
+  daemon.running = true;
+  daemon.pmSessionId = 'test-pm';
+  daemon.log = { info() {}, warn() {}, error() {}, debug() {} };
+
+  // No terminal controller — should use headless
+  daemon.terminalController = null;
+  const result = daemon._spawnAgent({ id: 'test-2', title: 'Test 2' });
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.dry_run, true);
+});
+
+test('_detectAndHandleStalls with recovery disabled is no-op', () => {
+  const { PmDaemon } = freshRequire('../pm-daemon');
+  const daemon = new PmDaemon(testDir, { skipSignalHandlers: true });
+  daemon.running = true;
+  daemon.log = { info() {}, warn() {}, error() {}, debug() {} };
+
+  let closeCalled = false;
+  daemon.terminalController = {
+    _started: true,
+    detectStalled: () => [{ tabId: 'tab-stall', taskId: 'task-s', role: 'agent' }],
+    closeTab: () => { closeCalled = true; return Promise.resolve(true); }
+  };
+
+  // Recovery disabled — should not close any tabs
+  daemon._detectAndHandleStalls({
+    stall_threshold_ms: 100,
+    recovery: { enabled: false }
+  });
+
+  assert.strictEqual(closeCalled, false, 'Should not close tabs when recovery disabled');
+});
+
+test('getStatus includes terminal metrics when controller is active', () => {
+  const { PmDaemon } = freshRequire('../pm-daemon');
+  const daemon = new PmDaemon(testDir, { once: true, dryRun: true, skipSignalHandlers: true });
+  daemon.log = { info() {}, warn() {}, error() {}, debug() {} };
+  daemon.running = true;
+  daemon.pmSessionId = 'test-pm';
+
+  daemon.terminalController = {
+    _started: true,
+    activeProvider: 'applescript',
+    getTabMetrics: () => ({
+      total: 3,
+      byState: { working: 2, idle: 1 },
+      byRole: { agent: 3 },
+      stalled: 0
+    })
+  };
+
+  const status = daemon.getStatus();
+  assert.ok(status.terminal);
+  assert.strictEqual(status.terminal.started, true);
+  assert.strictEqual(status.terminal.provider, 'applescript');
+  assert.strictEqual(status.terminal.total, 3);
+  assert.strictEqual(status.terminal.stalled, 0);
+});
+
+test('getStatus terminal is null when no controller', () => {
+  const { PmDaemon } = freshRequire('../pm-daemon');
+  const daemon = new PmDaemon(testDir, { skipSignalHandlers: true });
+  daemon.running = false;
+  daemon.pmSessionId = 'test-pm';
+  daemon.log = { info() {}, warn() {}, error() {}, debug() {} };
+  daemon.state.started_at = new Date().toISOString();
+
+  const status = daemon.getStatus();
+  assert.strictEqual(status.terminal, null);
+});
+
+test('_dynamicScaleAgents does nothing when disabled', () => {
+  const { PmDaemon } = freshRequire('../pm-daemon');
+  const daemon = new PmDaemon(testDir, { skipSignalHandlers: true });
+  daemon.running = true;
+  daemon.log = { info() {}, warn() {}, error() {}, debug() {} };
+
+  let spawnCalled = false;
+  daemon._spawnAgent = () => { spawnCalled = true; };
+  daemon.terminalController = {
+    _started: true,
+    getAllTabs: () => []
+  };
+
+  daemon._dynamicScaleAgents({ scaling: { enabled: false } });
+  assert.strictEqual(spawnCalled, false, 'Should not spawn when scaling disabled');
+});
+
+test('stop cleans up terminal controller', () => {
+  const { PmDaemon } = freshRequire('../pm-daemon');
+  const daemon = new PmDaemon(testDir, { skipSignalHandlers: true });
+  daemon.running = true;
+  daemon.pmSessionId = 'test-pm';
+  daemon.log = { info() {}, warn() {}, error() {}, debug() {} };
+  daemon.state.started_at = new Date().toISOString();
+
+  let stopCalled = false;
+  daemon.terminalController = {
+    _started: true,
+    stop: () => { stopCalled = true; }
+  };
+
+  daemon.stop('test');
+  assert.ok(stopCalled, 'Should call terminalController.stop()');
+  assert.strictEqual(daemon.terminalController, null, 'Should null the controller');
+});
+
 // ============================================================================
 // SUMMARY
 // ============================================================================
