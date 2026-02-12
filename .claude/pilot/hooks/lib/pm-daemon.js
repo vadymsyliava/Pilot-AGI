@@ -644,6 +644,11 @@ class PmDaemon {
     });
     if (readyTasks.length === 0) return;
 
+    // Filter out tasks that already have a live spawned agent
+    const spawnedTaskIds = this._getSpawnedTaskIds();
+    readyTasks = readyTasks.filter(task => !spawnedTaskIds.has(task.id));
+    if (readyTasks.length === 0) return;
+
     // Check spawn cooldown
     const now = Date.now();
     if (now - this.lastSpawnTime < this.opts.spawnCooldownMs) return;
@@ -900,6 +905,28 @@ class PmDaemon {
     for (const pid of toRemove) {
       this.spawnedAgents.delete(pid);
     }
+  }
+
+  /**
+   * Get task IDs that already have a live spawned agent process.
+   * Used to prevent spawning duplicate agents for the same task.
+   *
+   * @returns {Set<string>} Set of task IDs with active spawned agents
+   */
+  _getSpawnedTaskIds() {
+    const taskIds = new Set();
+    for (const [pid, entry] of this.spawnedAgents) {
+      if (entry.exitCode === null) {
+        // Verify process is still alive
+        try {
+          process.kill(pid, 0);
+          taskIds.add(entry.taskId);
+        } catch (e) {
+          // Process is dead — don't count it
+        }
+      }
+    }
+    return taskIds;
   }
 
   // ==========================================================================
@@ -1383,8 +1410,10 @@ class PmDaemon {
       .filter(t => t.role !== 'pm');
     const currentCount = currentTerminalTabs.length;
 
-    // Count ready unclaimed tasks
-    const readyTasks = await this._getReadyUnclaimedTasks();
+    // Count ready unclaimed tasks, excluding already-spawned
+    let readyTasks = await this._getReadyUnclaimedTasks();
+    const spawnedTaskIds = this._getSpawnedTaskIds();
+    readyTasks = readyTasks.filter(t => !spawnedTaskIds.has(t.id));
     const readyCount = readyTasks.length;
 
     // Scale up if queue depth exceeds target and we have capacity
@@ -1488,7 +1517,7 @@ class PmDaemon {
       const promptFile = path.join(promptDir, `${task.id}.prompt`);
       fs.writeFileSync(promptFile, truncatedPrompt, 'utf8');
 
-      const args = ['--agent'];
+      const args = ['--agent', '--permission-mode', 'acceptEdits'];
       if (this.opts.budgetPerAgentUsd) {
         args.push('--max-budget-usd', String(this.opts.budgetPerAgentUsd));
       }
