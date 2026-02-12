@@ -1,0 +1,60 @@
+{
+  "channel": "research-findings",
+  "version": 2,
+  "publishedBy": "pm",
+  "sessionId": null,
+  "publishedAt": "2026-02-11T03:36:47.240Z",
+  "summary": "Tech decision: shared-memory-channels — File-based atomic writes with JSON schema validation",
+  "data": {
+    "findings": [
+      {
+        "task_id": "test-task-001",
+        "ts": "2026-02-11T03:36:47.228Z",
+        "complexity": "M",
+        "summary": "Found 20 relevant file(s) in the codebase. 1 existing pattern(s) can be reused.",
+        "recommendations": [
+          "Follow existing patterns: Shared memory pattern: memory.publish(channel, data) / memory.read(channel)",
+          "Start by reviewing: ./.claude/pilot/memory/index.json, ./.claude/pilot/state/approved-plans/Pilot AGI-7ne.json, ./.claude/pilot/hooks/lib/pm-loop.js"
+        ],
+        "technologies": [],
+        "relevant_files": [
+          "./.claude/pilot/memory/index.json",
+          "./.claude/pilot/state/approved-plans/Pilot AGI-7ne.json",
+          "./.claude/pilot/hooks/lib/pm-loop.js",
+          "./.claude/pilot/hooks/lib/pm-research.js",
+          "./node_modules/@octokit/plugin-paginate-rest/node_modules/@octokit/openapi-types/types.d.ts",
+          "./node_modules/@octokit/openapi-types/types.d.ts",
+          "./node_modules/@octokit/plugin-throttling/node_modules/@octokit/openapi-types/types.d.ts",
+          "./design/scripts/audit-tokens.js",
+          "./node_modules/@types/node/diagnostics_channel.d.ts",
+          "./node_modules/@types/node/tls.d.ts",
+          "./node_modules/@types/node/dns.d.ts",
+          "./node_modules/@types/node/inspector.generated.d.ts",
+          "./node_modules/@types/node/http.d.ts",
+          "./node_modules/@types/node/perf_hooks.d.ts",
+          "./node_modules/@types/node/dgram.d.ts",
+          "./node_modules/@types/node/child_process.d.ts",
+          "./node_modules/@types/node/module.d.ts",
+          "./node_modules/@types/node/dns/promises.d.ts",
+          "./node_modules/@types/node/net.d.ts",
+          "./node_modules/lodash-es/_realNames.js"
+        ],
+        "patterns": [
+          "Shared memory pattern: memory.publish(channel, data) / memory.read(channel)"
+        ]
+      }
+    ],
+    "tech_decisions": [
+      {
+        "name": "shared-memory-channels",
+        "reason": "File-based atomic writes with JSON schema validation",
+        "task_id": "test-task-001",
+        "alternatives_considered": [
+          "Redis",
+          "SQLite"
+        ],
+        "ts": "2026-02-11T03:36:47.239Z"
+      }
+    ]
+  }
+}

@@ -171,6 +171,19 @@ approval_matrix:
       require_human: true
       warn_message: "This action will delete files permanently."
 
+    # Design token changes - auto-approvable but require republish
+    design_token_change:
+      ai_auto_approve: true
+      require_human: false
+      escalate_if:
+        - removes_token_category
+        - changes_semantic_color_mapping
+      checklist:
+        - "Token validation passes?"
+        - "Shared memory republished?"
+        - "CSS and Tailwind config regenerated?"
+        - "Dark mode variants included?"
+
     # External API integrations - review required
     external_api:
       ai_auto_approve: false
@@ -355,6 +368,13 @@ areas:
       - "db/**"
     agent: "database-master"
 
+  design:
+    paths:
+      - "design/**"
+      - "**/tokens/**"
+      - "**/design-system/**"
+    agent: "design-master"
+
   infra:
     paths:
       - ".github/**"
@@ -401,6 +421,381 @@ session:
     enabled: true
 
 # =============================================================================
+# WORKTREE ENGINE (Phase 2.1)
+# Git worktree isolation for multi-agent parallel development
+# =============================================================================
+worktree:
+  # Master switch for worktree isolation
+  enabled: true
+
+  # Directory for linked worktrees (relative to project root)
+  base_dir: ".worktrees"
+
+  # Branch prefix for agent worktree branches
+  branch_prefix: "pilot/"
+
+  # Merge strategy when completing a task: squash | merge
+  merge_strategy: "squash"
+
+  # What to do when merge conflicts are detected: flag | abort
+  conflict_action: "flag"
+
+  # Automatically clean up orphaned worktrees on session start
+  auto_cleanup: true
+
+  # Base branch to create worktrees from
+  base_branch: "main"
+
+# =============================================================================
+# PM ORCHESTRATOR (Phase 2.4)
+# Controls for the PM team-lead agent coordination
+# =============================================================================
+orchestrator:
+  # Drift threshold: ratio of unplanned file edits that triggers alert
+  # 0.3 = if 30% or more of modified files weren't in the plan, flag drift
+  drift_threshold: 0.3
+
+  # Require PM approval before merging agent work back to base branch
+  require_merge_approval: true
+
+  # Automatically reassign tasks from stale agents (lease expired + heartbeat gone)
+  auto_reassign_stale: true
+
+  # Maximum agents that can work in parallel
+  max_concurrent_agents: 4
+
+  # Require tests to pass before merge approval
+  require_tests_pass: false
+
+  # Cost tracking (token usage per agent/task) — Phase 3.11
+  cost_tracking:
+    enabled: true
+    # Per-task budgets (existing thresholds, now part of structured budget)
+    warn_threshold_tokens: 500000   # Warn at 500k tokens per task
+    block_threshold_tokens: 2000000 # Block at 2M tokens per task
+    # Per-agent-per-day budgets
+    per_agent_per_day:
+      warn_tokens: 1000000          # Warn at 1M tokens/agent/day
+      block_tokens: 3000000         # Block at 3M tokens/agent/day
+    # Per-day budgets (all agents combined)
+    per_day:
+      warn_tokens: 5000000          # Warn at 5M tokens/day total
+      block_tokens: 10000000        # Block at 10M tokens/day total
+    # Enforcement mode: "soft" = warn only, "hard" = block edits
+    enforcement: "soft"
+
+  # Intelligent Task Scheduler — Phase 3.4
+  scheduling:
+    # Score weights (must sum to 1.0)
+    skill_weight: 0.55          # Skill match from scoreAgentForTask
+    load_weight: 0.20           # Agent availability / load balance
+    affinity_weight: 0.15       # Historical success with similar tasks
+    cost_weight: 0.10           # Token cost efficiency
+
+    # Load balancing
+    max_tasks_per_agent: 3      # Soft cap on concurrent tasks
+    complexity_multiplier:
+      S: 1
+      M: 2
+      L: 3
+
+    # Starvation prevention
+    starvation_threshold_sec: 300   # 5 min wait before priority boost
+    starvation_boost_per_sec: 0.001 # Boost per second past threshold
+
+  # Performance Analytics — Phase 3.13
+  analytics:
+    enabled: true
+    scan_interval_sec: 300           # 5 min between analytics aggregation
+    retention_days: 30               # Keep daily snapshots for 30 days
+    slow_task_threshold_min: 30      # Task cycle time to flag as "slow"
+    rework_alert_threshold: 0.3      # Rework rate to flag agents (30%)
+    queue_depth_warning: 5           # Unassigned ready tasks before warning
+
+  # Auto-Escalation Engine — Phase 3.12
+  escalation:
+    # Master switch
+    enabled: true
+
+    # How often PM loop runs escalation scan (seconds)
+    scan_interval_sec: 60
+
+    # Escalation paths — progressive severity per event type
+    # Each path defines ordered levels and cooldown between escalations
+    # Levels: warning → block → reassign → human
+    paths:
+      drift:
+        levels: [warning, block, reassign, human]
+        cooldown_sec: 120           # 2 min between escalation steps
+        auto_deescalate: true       # Resolve if drift clears
+
+      test_failure:
+        levels: [warning, reassign, human]
+        cooldown_sec: 60            # 1 min — test failures need fast response
+        auto_deescalate: true       # Resolve if tests pass again
+
+      budget_exceeded:
+        levels: [warning, block, human]
+        cooldown_sec: 300           # 5 min — budget issues are slow to resolve
+        auto_deescalate: false      # Requires manual budget review
+
+      merge_conflict:
+        levels: [warning, block, reassign, human]
+        cooldown_sec: 60
+        auto_deescalate: true       # Resolve if conflict is fixed
+
+      agent_unresponsive:
+        levels: [warning, reassign, human]
+        cooldown_sec: 30            # 30s — unresponsive needs quick escalation
+        auto_deescalate: false      # Agent must actively recover
+
+# =============================================================================
+# ADAPTIVE PLAN APPROVAL (Phase 5.1)
+# Confidence-based tiered approval: auto, notify, require
+# =============================================================================
+approval:
+  # Confidence thresholds (0.0 - 1.0)
+  # Plans above auto_threshold are auto-approved without human input
+  # Plans between notify and auto are approved with notification log
+  # Plans below notify_threshold require explicit human approval
+  confidence_thresholds:
+    auto: 0.85        # >= 0.85 → auto-approve (routine, familiar, low risk)
+    notify: 0.60      # >= 0.60 → notify-approve (log but proceed)
+    # Below 0.60 → require-approve (block until human confirms)
+
+  # Scoring weights (must sum to 1.0)
+  # Each factor produces a 0.0-1.0 score, weighted and combined
+  confidence_weights:
+    scope: 0.25       # Task scope: fewer files/lines = higher confidence
+    risk: 0.30        # Risk level: lower risk dimensions = higher confidence
+    familiarity: 0.25 # Code area familiarity: more history = higher confidence
+    history: 0.20     # Historical outcomes: past success = higher confidence
+
+  # Scope scoring — maps file/line counts to confidence
+  scope_thresholds:
+    # Number of files touched
+    files_low: 3      # <= 3 files = high scope confidence (1.0)
+    files_medium: 8   # <= 8 files = medium scope confidence (0.6)
+    # > 8 files = low scope confidence (0.3)
+
+    # Estimated lines changed
+    lines_low: 100    # <= 100 lines = high confidence
+    lines_medium: 300 # <= 300 lines = medium confidence
+    # > 300 lines = low confidence
+
+  # Risk patterns — grep patterns that indicate risk dimensions
+  # Each dimension scored 0.0 (safe) to 1.0 (risky)
+  risk_patterns:
+    data_loss:
+      - "fs.rmSync"
+      - "fs.unlinkSync"
+      - "DROP TABLE"
+      - "DELETE FROM"
+      - "truncate"
+      - ".destroy()"
+      - "rm -rf"
+    user_facing:
+      - "src/app/"
+      - "src/components/"
+      - "pages/"
+      - "app/"
+      - "components/"
+      - "*.tsx"
+      - "*.jsx"
+    security_sensitive:
+      - "auth"
+      - "login"
+      - "password"
+      - "token"
+      - "secret"
+      - "encrypt"
+      - "permission"
+      - "*.pem"
+      - "*.key"
+    infra_touching:
+      - ".github/"
+      - "docker"
+      - "Dockerfile"
+      - "terraform"
+      - "k8s/"
+      - "deploy"
+      - "ci/"
+      - "cd/"
+      - ".yml"
+
+  # Historical outcome tracking
+  outcomes:
+    # State directory for plan outcome records
+    state_dir: ".claude/pilot/state/plan-outcomes"
+    # Minimum outcomes needed before history affects confidence
+    min_samples: 5
+    # How much historical success/failure shifts the score
+    history_weight_factor: 0.3
+    # Days of history to consider (older outcomes decay)
+    lookback_days: 30
+
+  # Override: always require human approval for these areas
+  always_require_approval:
+    - "production_deploy"
+    - "database_migration"
+    - "auth_change"
+
+  # Override: always auto-approve these (regardless of confidence)
+  always_auto_approve:
+    - "documentation"
+    - "**.md"
+    - "runs/*.md"
+
+# =============================================================================
+# AUTONOMY (Full Agent Loop)
+# Controls whether agents run continuously without human intervention
+# =============================================================================
+autonomy:
+  # "manual" = agent stops for approval at each step (default)
+  # "full"   = agent loops continuously: plan -> exec all -> commit -> close -> next
+  mode: "full"
+
+  # Auto-approve plans without human confirmation
+  auto_approve_plans: true
+
+  # Execute all plan steps in sequence without stopping
+  auto_advance_steps: true
+
+  # Commit after each step automatically
+  auto_commit_steps: true
+
+  # After closing a task, auto-pick and start the next one
+  auto_chain_on_close: true
+
+  # Stop the loop if verification fails
+  stop_on_error: true
+
+  # Maximum tasks an agent can complete in one session
+  max_tasks_per_session: 10
+
+  # Stop after this many consecutive errors
+  max_consecutive_errors: 3
+
+# =============================================================================
+# CONTEXT CHECKPOINT (Phase 2.2.1)
+# Proactive context window management for agent continuity
+# =============================================================================
+checkpoint:
+  # Master switch for checkpoint system
+  enabled: true
+
+  # Context pressure threshold (percentage) — nudge agent at this level
+  pressure_threshold_pct: 60
+
+  # Automatically save checkpoint before context compaction
+  auto_save_before_compact: true
+
+  # Maximum checkpoint versions to keep per session (older ones rotated out)
+  max_checkpoints_per_session: 5
+
+  # Checkpoint-Respawn Loop (Phase 4.3)
+  # When enabled, agents exit cleanly on checkpoint and PM respawns them
+  respawn:
+    # Master switch for exit-on-checkpoint behavior
+    enabled: true
+
+    # Maximum respawns per task before escalating to human
+    max_respawn_limit: 10
+
+    # Minimum seconds between respawns (prevents rapid loops)
+    cooldown_sec: 5
+
+    # Pressure threshold to trigger exit-on-checkpoint
+    # (uses checkpoint.pressure_threshold_pct if not set)
+    exit_threshold_pct: null
+
+# =============================================================================
+# OVERNIGHT MODE (Phase 4.8)
+# Autonomous batch execution with error budgets and morning reports
+# =============================================================================
+overnight:
+  # Error budget — limits consecutive and total failures
+  error_budget:
+    # Max consecutive failures per task before pausing it
+    max_failures_per_task: 3
+    # Max total failures across all tasks before stopping the run
+    max_total_failures: 10
+
+  # Report generation
+  report:
+    # Auto-generate markdown report when run completes
+    auto_generate: true
+
+  # Drain mode — graceful shutdown
+  drain:
+    # Max minutes to wait for active agents to finish during drain
+    timeout_min: 15
+
+# =============================================================================
+# MEMORY CONSOLIDATION (Phase 5.7)
+# Relevance scoring, summarization, tiered loading, and budget management
+# =============================================================================
+memory:
+  # Relevance scoring weights (must sum to 1.0)
+  relevance_weights:
+    recency: 0.30       # How recently the entry was created/updated
+    frequency: 0.25     # How often the entry has been accessed
+    similarity: 0.25    # Semantic similarity to current task context
+    links: 0.20         # Cross-references from other entries/channels
+
+  # Per-channel memory budgets (max entries before eviction)
+  budgets:
+    default: 100         # Default budget for any channel
+    overrides:
+      design-tokens: 200   # Design tokens need more capacity
+      working-context: 50  # Working context is ephemeral
+      decisions: 150       # Decision log is high-value, keep more
+
+  # Summarization pipeline configuration
+  summarization:
+    # Minimum relevance score to keep entry at full fidelity
+    full_fidelity_threshold: 0.6
+
+    # Days after last access before summarizing (full → summary)
+    summary_after_days: 7
+
+    # Days after last access before archiving (summary → archived)
+    archive_after_days: 30
+
+    # Maximum summary length (characters)
+    max_summary_length: 500
+
+    # Minimum entries before triggering consolidation pass
+    min_entries_for_consolidation: 20
+
+  # Tiered loading configuration
+  loading:
+    # Minimum relevance score to include in context load
+    relevance_threshold: 0.3
+
+    # Maximum entries to load per channel per request
+    max_entries_per_load: 20
+
+    # Maximum total entries across all channels per load
+    max_total_per_load: 50
+
+    # Tiers: full (score >= 0.7), summary (0.3-0.7), skip (< 0.3)
+    tier_thresholds:
+      full: 0.7
+      summary: 0.3
+
+  # Eviction policy
+  eviction:
+    # Strategy: lru (least recently used) or lrs (lowest relevance score)
+    strategy: "lru"
+
+    # Run eviction when channel reaches this % of budget
+    trigger_pct: 90
+
+    # Evict down to this % of budget
+    target_pct: 75
+
+# =============================================================================
 # QUALITY GATES (optional, disabled by default)
 # Pre-commit quality checks - these duplicate Claude Code native functionality
 # Enable only if you need stricter checks than Claude Code provides
@@ -442,7 +837,7 @@ exceptions:
   no_plan_required:
     - "runs/*.md"
     - ".gitignore"
-    - "*.md"                # Documentation
+    - "**/*.md"             # Documentation (nested paths too)
 
   # Files that are always blocked from editing (security)
   never_edit:

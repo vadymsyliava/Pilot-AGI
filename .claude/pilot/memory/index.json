@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "description": "Shared memory channel registry for cross-agent knowledge sharing",
+  "channels": {
+    "design-tokens": {
+      "description": "Design system tokens (colors, spacing, typography, shadows)",
+      "publisher": "design",
+      "consumers": ["frontend", "review"],
+      "schema": "schemas/design-tokens.schema.json"
+    },
+    "api-types": {
+      "description": "API endpoint type definitions and contracts",
+      "publisher": "backend",
+      "consumers": ["frontend", "testing"],
+      "schema": "schemas/api-types.schema.json"
+    },
+    "component-registry": {
+      "description": "Exported component names, props, and file paths",
+      "publisher": "frontend",
+      "consumers": ["testing", "review"],
+      "schema": null
+    },
+    "pm-decisions": {
+      "description": "PM orchestrator decisions: task assignments, merge approvals, agent blocks, drift alerts",
+      "publisher": "pm",
+      "consumers": ["frontend", "backend", "testing", "security", "review"],
+      "schema": "schemas/pm-decisions.schema.json"
+    },
+    "research-findings": {
+      "description": "PM auto-research outputs: best practices, patterns, technology decisions per task",
+      "publisher": "pm",
+      "consumers": ["frontend", "backend", "testing", "security", "review", "design"],
+      "schema": "schemas/research-findings.schema.json"
+    },
+    "task-decompositions": {
+      "description": "Task decomposition DAGs: subtask breakdown, dependency graphs, wave grouping",
+      "publisher": "pm",
+      "consumers": ["frontend", "backend", "testing", "security", "review", "design"],
+      "schema": null
+    }
+  }
+}

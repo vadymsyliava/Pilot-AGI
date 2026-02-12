@@ -1,6 +1,6 @@
 ---
 name: pilot-plan
-description: Create a detailed implementation plan for the current bd task. Researches requirements, identifies files, creates step-by-step plan. ALWAYS wait for user approval before execution.
+description: Create a detailed implementation plan for the current bd task. Researches requirements, identifies files, creates step-by-step plan. In autonomous mode, auto-approves and continues.
 allowed-tools: Read, Glob, Grep, Bash
 ---
 
@@ -83,52 +83,130 @@ RISKS
   • {potential issue and mitigation}
 
 ────────────────────────────────────────────────────────────────
-Approve this plan? (yes / no / edit)
 ```
 
-## Step 5: STOP and wait for approval
+## Step 5: Compute confidence score (Phase 5.1)
 
-**CRITICAL**: Do not proceed until user approves.
+After generating the plan, compute the confidence score to determine the approval tier:
 
-Display:
+```bash
+node -e "
+const scorer = require('./.claude/pilot/hooks/lib/confidence-scorer');
+const plan = {
+  files: [/* list of files from the plan steps */],
+  steps: [/* plan steps with files */]
+};
+const task = {
+  id: '{bd-xxxx}',
+  title: '{task title}',
+  description: '{task description}',
+  labels: [/* task labels */]
+};
+const result = scorer.scoreAndRecord(plan, task);
+console.log(JSON.stringify(result));
+"
 ```
-⏸  Waiting for approval...
 
-Options:
-  • Type "yes" or "approve" to proceed
-  • Type "no" to cancel
-  • Suggest edits to refine the plan
+Display the confidence result in the plan output:
+
+```
+CONFIDENCE ASSESSMENT
+────────────────────────────────────────────────────────────────
+  Score:    {score} ({tier})
+  Factors:  scope={scope}, familiarity={familiarity},
+            history={history}, risk={risk}
+  Risks:    {risk_tags or 'none detected'}
+  Action:   {auto-approve | notify-approve | require human approval}
+────────────────────────────────────────────────────────────────
 ```
 
 ## Step 6: Save plan
 
-Once approved, save to `work/plans/{bd-id}-plan.md`:
+Save the plan to `work/plans/{bd-id}-plan.md`:
 
 ```markdown
 # Plan: {task title}
 
 **Task**: {bd-xxxx}
 **Created**: {timestamp}
-**Status**: Approved
+**Confidence**: {score} ({tier})
+**Status**: Awaiting Approval
 
 ## Steps
 [... plan content ...]
 ```
 
-## Step 7: Update session capsule
+## Step 7: Handle approval (confidence-tier-aware)
+
+Check if running in autonomous mode (the ask-interceptor hook blocks AskUserQuestion):
+
+```bash
+node -e "
+const fs = require('fs');
+const sessionDir = '.claude/pilot/state/sessions';
+const files = fs.readdirSync(sessionDir).filter(f => f.endsWith('.json') && !f.includes('.pressure'));
+const ppid = process.ppid;
+for (const f of files) {
+  try {
+    const d = JSON.parse(fs.readFileSync(sessionDir + '/' + f, 'utf8'));
+    if (d.parent_pid === ppid && d.status === 'active' && !d.ended_at) {
+      const isWorker = d.role || d.parent_pid;
+      console.log(JSON.stringify({ autonomous: true, session_id: d.session_id }));
+      process.exit(0);
+    }
+  } catch(e) {}
+}
+console.log(JSON.stringify({ autonomous: false }));
+"
+```
+
+**If autonomous mode**: Use the confidence tier from Step 5 to decide:
+
+- **auto_approve** (score >= 0.85): Auto-approve immediately:
+  1. Create approval file at `.claude/pilot/state/approved-plans/{taskId}.json` with `confidence_tier: 'auto_approve'`
+  2. Display: "Plan auto-approved (confidence: {score}, tier: auto). Executing..."
+  3. Do NOT use AskUserQuestion — proceed directly to /pilot-exec
+
+- **notify_approve** (0.60-0.85): Auto-approve with notification:
+  1. Create approval file with `confidence_tier: 'notify_approve'`
+  2. Display: "Plan notify-approved (confidence: {score}). Risk signals: {tags}. Proceeding..."
+  3. Proceed to /pilot-exec
+
+- **require_approve** (< 0.60): **STOP. Do not auto-approve.**
+  1. Display warning:
+     ```
+     ⚠ HIGH-RISK PLAN — Confidence {score} (requires human approval)
+     Risk signals: {risk_tags}
+
+     This plan touches sensitive areas and needs human review.
+     Run /pilot-approve to manually approve.
+     ```
+  2. Do NOT create approval file. Do NOT proceed to exec.
+
+**If interactive mode**: Display the plan with confidence info:
+```
+Plan saved to: work/plans/{bd-id}-plan.md
+Confidence: {score} ({tier})
+
+Ready to implement. Run /pilot-approve, then /pilot-exec to start.
+```
+
+## Step 8: Update session capsule
 
 Append to `runs/YYYY-MM-DD.md`:
 ```markdown
 ### Plan created: {HH:MM}
 - Task: {bd-xxxx}
 - Steps: {N}
-- Status: Approved
+- Confidence: {score} ({tier})
+- Status: {Approved/Notify-Approved/Awaiting Human Approval}
 - Next: /pilot-exec
 ```
 
 ## Important Rules
-- NEVER start implementation without approval
 - Keep steps small (each should be < 50 lines of change)
 - Each step must have a verification method
 - Follow existing patterns (check canonical/ first)
 - If task is too big, suggest breaking into multiple bd issues
+- In autonomous mode, auto-approve and proceed — do NOT wait for user input
+- In interactive mode, save the plan and tell the user to run /pilot-approve

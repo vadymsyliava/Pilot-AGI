@@ -1,0 +1,19 @@
+{
+  "channel": "pm-decisions",
+  "version": 2,
+  "publishedBy": "pm",
+  "sessionId": null,
+  "publishedAt": "2026-02-11T02:00:18.714Z",
+  "summary": "PM decision: merge_approved",
+  "data": {
+    "decisions": [
+      {
+        "type": "merge_approved",
+        "ts": "2026-02-11T02:00:18.714Z",
+        "task_id": "Pilot AGI-4ow",
+        "approved_by": "S-mlhdr201-11fc",
+        "merge_result": "failed"
+      }
+    ]
+  }
+}

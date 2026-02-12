@@ -40,6 +40,26 @@
             "command": "node .claude/pilot/hooks/pre-tool-use.js"
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/pilot/hooks/ask-interceptor.js"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/pilot/hooks/post-tool-use.js"
+          }
+        ]
       }
     ]
   }

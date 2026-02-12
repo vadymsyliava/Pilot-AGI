@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "description": "Design tokens in W3C DTCG format, organized by category",
+  "required": ["colors", "spacing", "typography", "shadows", "radii", "breakpoints", "zIndex", "animation"],
+  "properties": {
+    "colors": {
+      "type": "object",
+      "description": "Color palette tokens (primitive, semantic, dark mode) — each leaf has $value (hex) and $type: color"
+    },
+    "spacing": {
+      "type": "object",
+      "description": "Spacing scale tokens (0–96) — each has $value (rem/px) and $type: dimension"
+    },
+    "typography": {
+      "type": "object",
+      "description": "Typography tokens: family ($type: fontFamily), size ($type: dimension), weight ($type: fontWeight), lineHeight ($type: number), letterSpacing ($type: dimension)"
+    },
+    "shadows": {
+      "type": "object",
+      "description": "Box shadow tokens (none–2xl, inner) — $type: shadow, $value is object or array of {offsetX, offsetY, blur, spread, color}"
+    },
+    "radii": {
+      "type": "object",
+      "description": "Border radius tokens (none–full) — $type: dimension"
+    },
+    "breakpoints": {
+      "type": "object",
+      "description": "Responsive breakpoints (sm–2xl) — $type: dimension, $value in px"
+    },
+    "zIndex": {
+      "type": "object",
+      "description": "Z-index stacking layers (hide–tooltip) — $type: number"
+    },
+    "animation": {
+      "type": "object",
+      "description": "Animation tokens: duration ($type: duration, ms) and easing ($type: cubicBezier, [x1,y1,x2,y2])"
+    }
+  }
+}

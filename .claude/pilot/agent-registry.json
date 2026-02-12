@@ -48,6 +48,10 @@
         "**/*.spec.*"
       ],
       "model_preference": "opus",
+      "memory": {
+        "publishes": ["component-registry"],
+        "consumes": ["design-tokens", "api-types"]
+      },
       "decomposition": {
         "atomic_actions": [
           "create_component",
@@ -110,6 +114,10 @@
         "**/*.spec.*"
       ],
       "model_preference": "opus",
+      "memory": {
+        "publishes": ["api-types"],
+        "consumes": ["component-registry"]
+      },
       "decomposition": {
         "atomic_actions": [
           "create_api_route",
@@ -166,6 +174,10 @@
       ],
       "excluded_patterns": [],
       "model_preference": "sonnet",
+      "memory": {
+        "publishes": [],
+        "consumes": ["api-types", "component-registry"]
+      },
       "decomposition": {
         "atomic_actions": [
           "write_unit_tests",
@@ -219,6 +231,10 @@
         "**/node_modules/**/*"
       ],
       "model_preference": "opus",
+      "memory": {
+        "publishes": [],
+        "consumes": []
+      },
       "decomposition": {
         "atomic_actions": [
           "audit_authentication",
@@ -237,6 +253,104 @@
         },
         "execution_order": "post_implementation",
         "typical_subtask_count": "1 per security domain"
+      }
+    },
+
+    "pm": {
+      "name": "PM Orchestrator Agent",
+      "description": "Team lead that coordinates multiple agents, assigns tasks, detects drift, and manages merge approvals",
+      "rules_file": null,
+      "capabilities": [
+        "task_assignment",
+        "drift_detection",
+        "work_review",
+        "merge_approval",
+        "agent_coordination",
+        "stale_agent_management",
+        "cost_tracking"
+      ],
+      "file_patterns": [
+        "**/*"
+      ],
+      "task_indicators": [
+        "coordinate",
+        "manage",
+        "assign",
+        "review",
+        "approve",
+        "orchestrate",
+        "pm",
+        "team lead",
+        "merge"
+      ],
+      "excluded_patterns": [],
+      "model_preference": "opus",
+      "memory": {
+        "publishes": ["pm-decisions"],
+        "consumes": ["design-tokens", "api-types", "component-registry"]
+      },
+      "decomposition": null
+    },
+
+    "design": {
+      "name": "Design Agent",
+      "description": "Design system governance — token enforcement, component audit, drift detection",
+      "rules_file": ".claude/pilot/rules/design.yaml",
+      "capabilities": [
+        "token_governance",
+        "component_audit",
+        "drift_detection",
+        "design_system_maintenance",
+        "accessibility_review",
+        "token_publishing"
+      ],
+      "file_patterns": [
+        "design/**/*",
+        "**/tokens/**/*",
+        "**/design-system/**/*",
+        "**/styles/**/*",
+        "**/*.css"
+      ],
+      "task_indicators": [
+        "design tokens",
+        "design system",
+        "token audit",
+        "component audit",
+        "design drift",
+        "color palette",
+        "typography",
+        "spacing scale",
+        "design consistency"
+      ],
+      "excluded_patterns": [
+        "**/node_modules/**/*",
+        "**/*.test.*",
+        "**/*.spec.*"
+      ],
+      "model_preference": "sonnet",
+      "memory": {
+        "publishes": ["design-tokens"],
+        "consumes": []
+      },
+      "decomposition": {
+        "atomic_actions": [
+          "audit_hardcoded_values",
+          "detect_design_drift",
+          "publish_tokens",
+          "validate_token_schema",
+          "generate_platform_output",
+          "enforce_naming_conventions"
+        ],
+        "input_requirements": {
+          "always": ["design_tokens", "token_schema"],
+          "optional": ["component_registry", "git_diff"]
+        },
+        "output_format": {
+          "files": ["audit_report", "drift_report", "token_output"],
+          "data": ["violations", "suggestions", "token_coverage"]
+        },
+        "execution_order": "post_implementation",
+        "typical_subtask_count": "1-2 per audit scope"
       }
     },
 
@@ -270,6 +384,10 @@
         "**/*.lock"
       ],
       "model_preference": "sonnet",
+      "memory": {
+        "publishes": [],
+        "consumes": ["design-tokens"]
+      },
       "decomposition": {
         "atomic_actions": [
           "review_code_quality",
@@ -341,6 +459,18 @@
       "comprehensive": {
         "description": "Full review with all agents",
         "agents": ["frontend", "backend", "security"],
+        "sequence": "parallel",
+        "post_agents": ["testing", "review"]
+      },
+      "design_system_update": {
+        "description": "Design token or design system changes",
+        "agents": ["design"],
+        "sequence": "single",
+        "post_agents": ["frontend", "review"]
+      },
+      "ui_with_design": {
+        "description": "UI work with design system governance",
+        "agents": ["frontend", "design"],
         "sequence": "parallel",
         "post_agents": ["testing", "review"]
       }
