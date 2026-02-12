@@ -566,6 +566,224 @@ function readArchive(channel, opts = {}) {
 }
 
 // =============================================================================
+// MEMORY BUDGET & LRU EVICTION — Phase 5.7 (f6e.4)
+// =============================================================================
+
+/**
+ * Load budget config from policy.
+ *
+ * @param {object} [policy] - Pre-loaded policy object
+ * @returns {{ default: number, overrides: object }}
+ */
+function loadBudgetConfig(policy) {
+  if (!policy) {
+    try {
+      const { loadPolicy } = require('./policy');
+      policy = loadPolicy();
+    } catch (e) {
+      // fall through
+    }
+  }
+
+  const defaults = { default: 100, overrides: {} };
+  const configured = policy && policy.memory && policy.memory.budgets;
+  if (!configured) return defaults;
+
+  return {
+    default: typeof configured.default === 'number' ? configured.default : defaults.default,
+    overrides: configured.overrides || {}
+  };
+}
+
+/**
+ * Load eviction config from policy.
+ *
+ * @param {object} [policy] - Pre-loaded policy object
+ * @returns {{ strategy: string, trigger_pct: number, target_pct: number }}
+ */
+function loadEvictionConfig(policy) {
+  if (!policy) {
+    try {
+      const { loadPolicy } = require('./policy');
+      policy = loadPolicy();
+    } catch (e) {
+      // fall through
+    }
+  }
+
+  const defaults = { strategy: 'lru', trigger_pct: 90, target_pct: 75 };
+  const configured = policy && policy.memory && policy.memory.eviction;
+  if (!configured) return defaults;
+
+  return {
+    strategy: configured.strategy || defaults.strategy,
+    trigger_pct: typeof configured.trigger_pct === 'number' ? configured.trigger_pct : defaults.trigger_pct,
+    target_pct: typeof configured.target_pct === 'number' ? configured.target_pct : defaults.target_pct
+  };
+}
+
+/**
+ * Get the budget limit for a specific channel.
+ *
+ * @param {string} channel - Channel name
+ * @param {object} [policy] - Pre-loaded policy
+ * @returns {number} Max entries for this channel
+ */
+function getChannelBudget(channel, policy) {
+  const config = loadBudgetConfig(policy);
+  return config.overrides[channel] || config.default;
+}
+
+/**
+ * Check if a channel is over budget and needs eviction.
+ *
+ * @param {string} channel - Channel name
+ * @param {number} entryCount - Current number of entries
+ * @param {object} [policy] - Pre-loaded policy
+ * @returns {{ overBudget: boolean, budget: number, count: number, triggerPct: number }}
+ */
+function checkBudget(channel, entryCount, policy) {
+  const budget = getChannelBudget(channel, policy);
+  const evictionConfig = loadEvictionConfig(policy);
+  const triggerThreshold = Math.floor(budget * evictionConfig.trigger_pct / 100);
+
+  return {
+    overBudget: entryCount >= triggerThreshold,
+    budget,
+    count: entryCount,
+    triggerPct: evictionConfig.trigger_pct,
+    triggerThreshold
+  };
+}
+
+/**
+ * Evict entries from a channel to get back within budget.
+ * Removes lowest-relevance entries first (relevance-weighted LRU).
+ * Evicted entries go through the summarize→archive pipeline.
+ *
+ * @param {Array} scoredEntries - Entries with .relevance scores, sorted by relevance desc
+ * @param {string} channel - Channel name
+ * @param {object} [opts] - { policy, cwd, now, dryRun }
+ * @returns {{ kept: Array, evicted: Array, budget: number, targetCount: number }}
+ */
+function evict(scoredEntries, channel, opts = {}) {
+  const policy = opts.policy;
+  const budget = getChannelBudget(channel, policy);
+  const evictionConfig = loadEvictionConfig(policy);
+  const targetCount = Math.floor(budget * evictionConfig.target_pct / 100);
+  const cwd = opts.cwd || process.cwd();
+  const dryRun = opts.dryRun || false;
+
+  if (scoredEntries.length <= targetCount) {
+    return { kept: scoredEntries, evicted: [], budget, targetCount };
+  }
+
+  // Entries are sorted by relevance descending — keep the top ones
+  const kept = scoredEntries.slice(0, targetCount);
+  const toEvict = scoredEntries.slice(targetCount);
+
+  const evicted = [];
+  const sumConfig = loadSummarizationConfig(policy);
+
+  for (const entry of toEvict) {
+    // Summarize before archiving
+    const summary = summarizeEntry(entry, sumConfig.max_summary_length);
+
+    if (!dryRun) {
+      archiveEntry(summary, channel, cwd);
+    }
+
+    evicted.push({
+      id: entry.id || entry._channel,
+      relevance: entry.relevance,
+      _state: STATE_ARCHIVED
+    });
+  }
+
+  return { kept, evicted, budget, targetCount };
+}
+
+/**
+ * Get memory stats for a channel including budget utilization.
+ *
+ * @param {string} channel - Channel name
+ * @param {object} [opts] - { cwd, policy }
+ * @returns {{ channel, entryCount, budget, utilizationPct, overBudget, archiveCount }}
+ */
+function getChannelMemoryStats(channel, opts = {}) {
+  const cwd = opts.cwd || process.cwd();
+  const channelPath = path.join(cwd, '.claude/pilot/memory/channels', `${channel}.json`);
+
+  let entryCount = 0;
+  if (fs.existsSync(channelPath)) {
+    try {
+      const envelope = JSON.parse(fs.readFileSync(channelPath, 'utf8'));
+      const data = envelope.data;
+      if (Array.isArray(data)) {
+        entryCount = data.length;
+      } else if (data && typeof data === 'object') {
+        const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
+        entryCount = arrayKey ? data[arrayKey].length : 1;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  const budget = getChannelBudget(channel, opts.policy);
+  const budgetCheck = checkBudget(channel, entryCount, opts.policy);
+
+  // Count archived entries
+  let archiveCount = 0;
+  const archivePath = path.join(cwd, ARCHIVE_DIR, channel, 'entries.jsonl');
+  if (fs.existsSync(archivePath)) {
+    try {
+      const content = fs.readFileSync(archivePath, 'utf8').trim();
+      archiveCount = content ? content.split('\n').length : 0;
+    } catch (e) { /* ignore */ }
+  }
+
+  return {
+    channel,
+    entryCount,
+    budget,
+    utilizationPct: budget > 0 ? Math.round((entryCount / budget) * 100) : 0,
+    overBudget: budgetCheck.overBudget,
+    archiveCount
+  };
+}
+
+/**
+ * Get memory stats for all channels.
+ *
+ * @param {object} [opts] - { cwd, policy }
+ * @returns {{ channels: Array, totalEntries, totalBudget, totalArchived }}
+ */
+function getAllMemoryStats(opts = {}) {
+  const cwd = opts.cwd || process.cwd();
+  const channelsDir = path.join(cwd, '.claude/pilot/memory/channels');
+
+  if (!fs.existsSync(channelsDir)) {
+    return { channels: [], totalEntries: 0, totalBudget: 0, totalArchived: 0 };
+  }
+
+  try {
+    const files = fs.readdirSync(channelsDir).filter(f => f.endsWith('.json'));
+    const channels = files.map(f => {
+      const channel = f.replace('.json', '');
+      return getChannelMemoryStats(channel, opts);
+    });
+
+    return {
+      channels,
+      totalEntries: channels.reduce((sum, c) => sum + c.entryCount, 0),
+      totalBudget: channels.reduce((sum, c) => sum + c.budget, 0),
+      totalArchived: channels.reduce((sum, c) => sum + c.archiveCount, 0)
+    };
+  } catch (e) {
+    return { channels: [], totalEntries: 0, totalBudget: 0, totalArchived: 0 };
+  }
+}
+
+// =============================================================================
 // EXPORTS
 // =============================================================================
 
@@ -595,6 +813,15 @@ module.exports = {
   archiveEntry,
   consolidate,
   readArchive,
+
+  // Budget & eviction
+  loadBudgetConfig,
+  loadEvictionConfig,
+  getChannelBudget,
+  checkBudget,
+  evict,
+  getChannelMemoryStats,
+  getAllMemoryStats,
 
   // Constants
   RECENCY_HALF_LIFE_MS,
