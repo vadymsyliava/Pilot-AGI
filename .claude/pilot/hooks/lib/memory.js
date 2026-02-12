@@ -674,6 +674,77 @@ function getMemoryStats(agentType) {
 }
 
 // =============================================================================
+// TIERED MEMORY LOADING (Phase 5.7)
+// =============================================================================
+
+/**
+ * Get relevant memory entries for a task context, scored and filtered by relevance.
+ * Only returns entries above the configured relevance threshold.
+ * Entries are tiered: full (score >= 0.7), summary (0.3-0.7), skip (< 0.3).
+ *
+ * @param {object} taskContext - Current task context { tags: [], files: [], id, title }
+ * @param {number} [limit] - Maximum entries to return (default from policy)
+ * @param {object} [opts] - { cwd, policy }
+ * @returns {Array} Relevant memory entries sorted by score descending
+ */
+function getRelevantMemory(taskContext, limit, opts = {}) {
+  let memoryRelevance;
+  try {
+    memoryRelevance = require('./memory-relevance');
+  } catch (e) {
+    return [];
+  }
+
+  let policy;
+  try {
+    const { loadPolicy } = require('./policy');
+    policy = opts.policy || loadPolicy();
+  } catch (e) {
+    policy = {};
+  }
+
+  const loadingConfig = (policy.memory && policy.memory.loading) || {};
+  const threshold = loadingConfig.relevance_threshold || 0.3;
+  const maxPerChannel = loadingConfig.max_entries_per_load || 20;
+  const maxTotal = loadingConfig.max_total_per_load || 50;
+  const tierThresholds = loadingConfig.tier_thresholds || { full: 0.7, summary: 0.3 };
+
+  const effectiveLimit = limit || maxTotal;
+  const cwd = opts.cwd || process.cwd();
+
+  // Score all channels
+  const allScored = memoryRelevance.scoreAllChannels(taskContext, {
+    cwd,
+    policy,
+    limit: 0 // get all, we filter below
+  });
+
+  // Filter by threshold and apply tiering
+  const filtered = allScored
+    .filter(entry => entry.relevance >= threshold)
+    .map(entry => {
+      if (entry.relevance >= tierThresholds.full) {
+        return { ...entry, _tier: 'full' };
+      } else if (entry.relevance >= tierThresholds.summary) {
+        // For summary tier, use condensed form if available
+        if (entry._state === 'summary' || entry.summary) {
+          return { ...entry, _tier: 'summary' };
+        }
+        // Auto-summarize for context efficiency
+        return {
+          ...entry,
+          _tier: 'summary',
+          _autoSummarized: true
+        };
+      }
+      return { ...entry, _tier: 'skip' };
+    })
+    .filter(entry => entry._tier !== 'skip');
+
+  return filtered.slice(0, effectiveLimit);
+}
+
+// =============================================================================
 // EXPORTS
 // =============================================================================
 
@@ -704,6 +775,8 @@ module.exports = {
   pruneAgentMemory,
   getMemoryStats,
   DEFAULT_TTL_MS,
+  // Tiered loading (Phase 5.7)
+  getRelevantMemory,
   // Index
   loadIndex,
   // Utilities
