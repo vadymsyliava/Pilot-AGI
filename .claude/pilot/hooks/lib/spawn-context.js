@@ -94,6 +94,7 @@ function buildContextCapsule(task, options = {}) {
     related_decisions: [],
     related_agents: [],
     artifacts: [],
+    relevant_memory: [],
     agent_type: agentType || null
   };
 
@@ -116,6 +117,9 @@ function buildContextCapsule(task, options = {}) {
 
   // 6. Gather available artifact inputs from dependencies (Phase 4.7)
   capsule.artifacts = _gatherArtifacts(task.id, projectRoot);
+
+  // 7. Gather relevant memory entries (Phase 5.7 — tiered loading)
+  capsule.relevant_memory = _gatherRelevantMemory(task, projectRoot);
 
   return capsule;
 }
@@ -260,6 +264,31 @@ function _gatherRelatedAgents(taskId) {
   }
 }
 
+/**
+ * Gather relevant memory entries for this task using tiered loading.
+ *
+ * @param {object} task - Task object
+ * @param {string} [projectRoot]
+ * @returns {Array} Relevant memory entries with tier annotations
+ */
+function _gatherRelevantMemory(task, projectRoot) {
+  const mem = getMemory();
+  if (!mem || !mem.getRelevantMemory) return [];
+
+  try {
+    const taskContext = {
+      tags: task.labels || [],
+      files: [],
+      id: task.id,
+      title: task.title || ''
+    };
+
+    return mem.getRelevantMemory(taskContext, 10, { cwd: projectRoot });
+  } catch (e) {
+    return [];
+  }
+}
+
 // ============================================================================
 // PROMPT GENERATION
 // ============================================================================
@@ -346,6 +375,24 @@ function buildSpawnPrompt(capsule) {
       lines.push('```');
       lines.push('');
     }
+  }
+
+  // Relevant memory (Phase 5.7 — tiered loading)
+  if (capsule.relevant_memory && capsule.relevant_memory.length > 0) {
+    lines.push('## Relevant Memory');
+    lines.push('Entries from shared memory scored as relevant to this task:');
+    lines.push('');
+    for (const entry of capsule.relevant_memory) {
+      const channel = entry._channel || 'unknown';
+      const score = typeof entry.relevance === 'number' ? entry.relevance.toFixed(2) : '?';
+      const tier = entry._tier || 'full';
+      // Use summary for summary-tier entries, full content for full-tier
+      const content = tier === 'summary' && entry.summary
+        ? entry.summary
+        : (entry.reason || entry.description || entry.summary || JSON.stringify(entry).slice(0, 200));
+      lines.push(`- [${channel}] (${score}) ${content}`);
+    }
+    lines.push('');
   }
 
   // Instructions
@@ -454,5 +501,6 @@ module.exports = {
   _loadExistingPlan,
   _gatherDecisions,
   _gatherRelatedAgents,
-  _gatherArtifacts
+  _gatherArtifacts,
+  _gatherRelevantMemory
 };
