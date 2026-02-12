@@ -499,9 +499,103 @@ Wave 3: 5.8 (5.5+5.7), 5.10 (5.4)
 
 ---
 
+## Milestone 6: Physical Terminal Control & Remote Human Interface
+
+**Goal**: Give PM daemon physical control over macOS terminals via AppleScript (foundation) and iTerm2 Python API (premium). Add Telegram bot for remote human interaction. PM opens/closes tabs, types into agents, reads output, auto-approves prompts, scales agent pool, and reports to human via Telegram. The human only needs one PM terminal — or just their phone.
+**Status**: Not started
+**Target**: v5.0.0
+**Spec**: `work/specs/iterm2-orchestration-telegram.md`
+
+### The Architecture Shift
+- AppleScript (`osascript`) becomes PM's "hands" — physical terminal control
+- iTerm2 Python API as premium provider (stable UUIDs, triggers, event hooks)
+- Telegram bot as remote human interface (intent-based, not command passthrough)
+- Fallback chain: iTerm2 → AppleScript → existing headless (`claude -p`)
+- Zero breaking changes to existing infrastructure
+
+### Stream A: Terminal Orchestration
+
+#### Phase 6.1: AppleScript Bridge Foundation
+- `applescript-bridge.js` — open/close/send/read/list/detect for Terminal.app
+- Tab identification via custom titles (`pilot-<role>-<taskId>`)
+- ANSI code stripping, state detection regex
+- Race condition handling (wait for idle before input)
+- Works with Terminal.app out of the box — zero installs
+
+#### Phase 6.2: iTerm2 Premium Provider
+- `iterm2-bridge.py` using iTerm2 Python API
+- Stable session UUIDs (no title-matching fragility)
+- Trigger-based auto-approve (zero latency, no polling)
+- Event hooks for instant crash detection, badges for visual ID
+- Auto-detection: iTerm2 running → Python API, else → AppleScript
+
+#### Phase 6.3: Terminal Controller (Unified Interface)
+- `terminal-controller.js` abstracting both providers
+- Provider auto-detection on startup
+- Registry: tabId → { role, taskId, state }
+- Sync loop: reconcile registry with real terminal tabs
+- High-level: scaleAgents, autoApprove, checkpointRespawn
+
+#### Phase 6.4: PM Daemon Terminal Integration
+- `_terminalScanLoop()` in pm-daemon.js (alongside existing loops)
+- Terminal-based spawning alongside existing headless mode
+- Ground truth reconciliation (real tabs vs state files)
+- Permission auto-approve per policy, stall detection
+- Dynamic scaling based on queue depth
+
+### Stream B: Remote Human Interface
+
+#### Phase 6.5: Telegram Bridge
+- Telegram bot (BotFather token + chat ID)
+- `telegram-bridge.js` as launchd daemon
+- Inbound: message → intent parse → PM inbox (never raw shell)
+- Outbound: PM outbox → Telegram
+- Security: chat ID allowlist, rate limiting, audit log, kill switch
+
+#### Phase 6.6: Telegram Approval & Conversations
+- Escalation → Telegram with inline approve/reject buttons
+- Timeout escalation if no response in N minutes
+- Morning report + sprint progress delivery
+- NL queries: "what's the status?" → PM answers
+- Idea capture: "add dark mode" → PM creates bd task
+
+### Stream C: Integration
+
+#### Phase 6.7: End-to-End Integration & Testing
+- Full flow: Telegram → PM → terminals → agents → Telegram report
+- Failover testing: iTerm2 → AppleScript → headless
+- Security testing: unauthorized blocked, rate limits enforced
+- Overnight: Telegram at 8pm → morning report at 8am
+- Chaos testing: kill random tabs → PM detects and recovers
+
+### Dependencies
+```
+Wave 1: 6.1 (AppleScript bridge — zero deps)
+Wave 2: 6.2 (needs 6.1), 6.5 (Telegram — standalone)
+Wave 3: 6.3 (needs 6.1+6.2), 6.6 (needs 6.5)
+Wave 4: 6.4 (needs 6.3)
+Wave 5: 6.7 (needs all)
+```
+
+### Success Criteria
+- [ ] PM opens/closes terminal tabs via AppleScript — zero manual tab management
+- [ ] AppleScript works with Terminal.app out of the box (no extra installs)
+- [ ] iTerm2 auto-detected and used when available (stable UUIDs, triggers)
+- [ ] PM real tab count matches internal state (ground truth)
+- [ ] Permission prompts auto-approved within 5s per policy
+- [ ] Stalled agents detected and restarted within 2 minutes
+- [ ] Agent pool scales 1→8 on queue depth, back to 1 on idle
+- [ ] Telegram message → PM processes within 10s
+- [ ] Escalation → Telegram with approve/reject buttons
+- [ ] Overnight: Telegram at 8pm → morning report at 8am, zero intervention
+- [ ] Full sprint (20 tasks) with PM managing all terminals autonomously
+- [ ] Fallback chain: iTerm2 → AppleScript → headless on failure
+
+---
+
 ## Future Milestones
-- Milestone 6: Cloud Sync — remote agent coordination, team-based workflows, CI/CD integration
-- Milestone 7: Marketplace — shareable agent configs, design systems, governance policies
+- Milestone 7: Cloud Sync — remote agent coordination, team-based workflows, CI/CD integration
+- Milestone 8: Marketplace — shareable agent configs, design systems, governance policies
 
 ---
 
