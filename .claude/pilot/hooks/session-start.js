@@ -699,6 +699,68 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
+  // 8c2. PM Hub Connection (Phase 5.0)
+  // -------------------------------------------------------------------------
+
+  try {
+    const { AgentConnector } = require('./lib/agent-connector');
+
+    // Resolve agent role from session state
+    let agentRole = 'general';
+    let agentCaps = [];
+    try {
+      const sessFile = path.join(process.cwd(), '.claude/pilot/state/sessions', `${sessionId}.json`);
+      if (fs.existsSync(sessFile)) {
+        const sessData = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+        agentRole = sessData.role || 'general';
+        agentCaps = session.getAgentCapabilities(agentRole) || [];
+      }
+    } catch (e) { /* use defaults */ }
+
+    const connector = new AgentConnector(sessionId, {
+      projectRoot: process.cwd(),
+      role: agentRole,
+      capabilities: agentCaps,
+      autoReconnect: true
+    });
+
+    // connect() tries HTTP register (sync) + starts WS upgrade (async)
+    const connectResult = connector.connect();
+
+    if (connectResult.connected) {
+      context.pm_connected = true;
+      context.pm_hub_mode = connectResult.mode; // 'http' or 'websocket'
+      context.pm_hub_port = connectResult.port;
+      messages.push('PM Hub: connected (' + connectResult.mode + ', port ' + connectResult.port + ')');
+    } else if (connectResult.fallback === 'file_bus') {
+      context.pm_connected = false;
+      context.pm_fallback = 'file_bus';
+      // WS may still be connecting in background — silent fallback
+    }
+
+    // Store connector reference for other hooks (heartbeat, post-tool-use)
+    // Write connector state to a temp file for cross-hook access
+    try {
+      const connectorState = {
+        session_id: sessionId,
+        port: connector.port,
+        pm_connected: connectResult.connected,
+        mode: connectResult.mode || 'file_bus',
+        pid: process.pid,
+        started_at: new Date().toISOString()
+      };
+      const stateDir = path.join(process.cwd(), '.claude/pilot/state/connectors');
+      if (!fs.existsSync(stateDir)) fs.mkdirSync(stateDir, { recursive: true });
+      const tmpPath = path.join(stateDir, sessionId + '.json.tmp');
+      const finalPath = path.join(stateDir, sessionId + '.json');
+      fs.writeFileSync(tmpPath, JSON.stringify(connectorState, null, 2));
+      fs.renameSync(tmpPath, finalPath);
+    } catch (e) { /* best effort */ }
+  } catch (e) {
+    // Agent connector not available, skip (file bus fallback)
+  }
+
+  // -------------------------------------------------------------------------
   // 8d. Per-Agent Persistent Memory (Phase 3.7)
   // -------------------------------------------------------------------------
 

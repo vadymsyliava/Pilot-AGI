@@ -168,6 +168,17 @@ function spawnAgent(task, options = {}) {
     }
   } catch (e) { /* best effort */ }
 
+  // Phase 5.0: Pass PM Hub port to spawned agents
+  try {
+    const hubFile = path.join(projectRoot, '.claude/pilot/state/orchestrator/pm-hub.json');
+    if (fs.existsSync(hubFile)) {
+      const hubData = JSON.parse(fs.readFileSync(hubFile, 'utf8'));
+      if (hubData.port) {
+        env.PILOT_PM_PORT = String(hubData.port);
+      }
+    }
+  } catch (e) { /* best effort */ }
+
   if (worktreeInfo && worktreeInfo.path) {
     env.PILOT_WORKTREE_PATH = worktreeInfo.path;
     env.PILOT_WORKTREE_BRANCH = worktreeInfo.branch || '';
