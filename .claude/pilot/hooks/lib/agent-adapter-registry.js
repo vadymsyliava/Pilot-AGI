@@ -13,16 +13,18 @@
 
 'use strict';
 
+const { AgentAdapter } = require('./agent-adapter');
+
 // ============================================================================
 // AGENT ADAPTER REGISTRY
 // ============================================================================
 
 class AgentAdapterRegistry {
   constructor() {
-    /** @type {Map<string, import('./agent-adapter').AgentAdapter>} */
+    /** @type {Map<string, AgentAdapter>} */
     this.adapters = new Map();
 
-    /** @type {Map<string, { available: boolean, version?: string, path?: string, models?: Array }>} */
+    /** @type {Map<string, { available: boolean, version?: string, path?: string, models?: Array, error?: string }>} */
     this.detected = new Map();
 
     /** @type {boolean} */
@@ -31,11 +33,15 @@ class AgentAdapterRegistry {
 
   /**
    * Register an adapter instance.
-   * @param {import('./agent-adapter').AgentAdapter} adapter
+   * @param {AgentAdapter} adapter
+   * @throws if adapter is not an AgentAdapter instance or name is already registered
    */
   register(adapter) {
-    if (!adapter || !adapter.name) {
-      throw new Error('Adapter must have a name property');
+    if (!(adapter instanceof AgentAdapter)) {
+      throw new Error('Adapter must be an instance of AgentAdapter');
+    }
+    if (this.adapters.has(adapter.name)) {
+      throw new Error(`Adapter '${adapter.name}' is already registered`);
     }
     this.adapters.set(adapter.name, adapter);
   }
@@ -43,6 +49,7 @@ class AgentAdapterRegistry {
   /**
    * Detect all registered agent CLIs on the system.
    * Runs detect() + listModels() on each adapter in parallel.
+   * Failed detect() calls are stored as { available: false, error: message }.
    * @returns {Promise<Map<string, { available: boolean, version?: string, path?: string, models?: Array }>>}
    */
   async detectAll() {
@@ -50,8 +57,8 @@ class AgentAdapterRegistry {
     const results = await Promise.allSettled(
       entries.map(async ([name, adapter]) => {
         const detection = await adapter.detect();
-        let models = [];
-        if (detection.available) {
+        let models = detection.models || [];
+        if (detection.available && (!models || models.length === 0)) {
           try {
             models = await adapter.listModels();
           } catch {
@@ -89,10 +96,27 @@ class AgentAdapterRegistry {
 
   /**
    * Get all registered adapters (regardless of availability).
-   * @returns {import('./agent-adapter').AgentAdapter[]}
+   * @returns {AgentAdapter[]}
    */
   getAll() {
     return [...this.adapters.values()];
+  }
+
+  /**
+   * Get all registered adapter names.
+   * @returns {string[]}
+   */
+  getNames() {
+    return [...this.adapters.keys()];
+  }
+
+  /**
+   * Remove all registered adapters and detection results.
+   */
+  clear() {
+    this.adapters.clear();
+    this.detected.clear();
+    this._hasDetected = false;
   }
 
   /**
