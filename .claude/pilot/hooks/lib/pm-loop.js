@@ -52,6 +52,7 @@ const ANALYTICS_SCAN_INTERVAL_MS = 300000; // 5min between analytics aggregation
 const PROGRESS_SCAN_INTERVAL_MS = 60000;  // 60s between progress/artifact scans (Phase 4.7)
 const OVERNIGHT_SCAN_INTERVAL_MS = 60000; // 60s between overnight run checks (Phase 4.8)
 const APPROVAL_SCAN_INTERVAL_MS = 120000; // 2min between approval confidence scans (Phase 5.1)
+const TELEGRAM_SCAN_INTERVAL_MS = 10000;  // 10s between telegram inbox scans (Phase 6.6)
 const PRESSURE_NUDGE_THRESHOLD_PCT = 70;  // PM nudges agents above this if no auto-checkpoint
 const MAX_ACTIONS_PER_CYCLE = 10;         // Prevent runaway action storms
 const ACTION_LOG_PATH = '.claude/pilot/state/orchestrator/action-log.jsonl';
@@ -77,7 +78,9 @@ class PmLoop {
     this.lastProgressScan = 0;
     this.lastOvernightScan = 0;
     this.lastApprovalScan = 0;
+    this.lastTelegramScan = 0;
     this.lastNotificationDigestScan = 0;
+    this._telegramConversations = null; // Lazy-initialized in _telegramScan
     this.actionQueue = [];  // Used by pm-queue.js for persistence
     this.opts = {
       healthScanIntervalMs: opts.healthScanIntervalMs || HEALTH_SCAN_INTERVAL_MS,
@@ -90,6 +93,7 @@ class PmLoop {
       progressScanIntervalMs: opts.progressScanIntervalMs || PROGRESS_SCAN_INTERVAL_MS,
       overnightScanIntervalMs: opts.overnightScanIntervalMs || OVERNIGHT_SCAN_INTERVAL_MS,
       approvalScanIntervalMs: opts.approvalScanIntervalMs || APPROVAL_SCAN_INTERVAL_MS,
+      telegramScanIntervalMs: opts.telegramScanIntervalMs || TELEGRAM_SCAN_INTERVAL_MS,
       maxActionsPerCycle: opts.maxActionsPerCycle || MAX_ACTIONS_PER_CYCLE,
       dryRun: opts.dryRun || false,
       ...opts
@@ -237,6 +241,13 @@ class PmLoop {
       this.lastNotificationDigestScan = now;
       const digestResults = this._notificationDigestScan();
       results.push(...digestResults);
+    }
+
+    // Telegram inbox scan (Phase 6.6) — process Telegram intents
+    if (now - this.lastTelegramScan >= this.opts.telegramScanIntervalMs) {
+      this.lastTelegramScan = now;
+      const telegramResults = this._telegramScan();
+      results.push(...telegramResults);
     }
 
     return results;
@@ -1559,8 +1570,63 @@ class PmLoop {
       last_task_scan: this.lastTaskScan ? new Date(this.lastTaskScan).toISOString() : null,
       last_drift_scan: this.lastDriftScan ? new Date(this.lastDriftScan).toISOString() : null,
       last_pressure_scan: this.lastPressureScan ? new Date(this.lastPressureScan).toISOString() : null,
-      last_cost_scan: this.lastCostScan ? new Date(this.lastCostScan).toISOString() : null
+      last_cost_scan: this.lastCostScan ? new Date(this.lastCostScan).toISOString() : null,
+      last_telegram_scan: this.lastTelegramScan ? new Date(this.lastTelegramScan).toISOString() : null
     };
+  }
+
+  // ==========================================================================
+  // TELEGRAM SCAN (Phase 6.6)
+  // ==========================================================================
+
+  /**
+   * Telegram inbox scan: read pending intents from Telegram bridge inbox,
+   * dispatch to handlers, write responses to outbox.
+   *
+   * Lazy-initializes TelegramConversations on first call (only if telegram
+   * is enabled in policy).
+   */
+  _telegramScan() {
+    const results = [];
+
+    try {
+      // Check if telegram is enabled in policy
+      const { loadPolicy } = require('./policy');
+      const policy = loadPolicy(this.projectRoot);
+      if (!policy.telegram || !policy.telegram.enabled) return results;
+
+      // Lazy-initialize
+      if (!this._telegramConversations) {
+        const { TelegramConversations } = require('./telegram-conversations');
+        this._telegramConversations = new TelegramConversations(this.projectRoot, {
+          policy: policy.telegram,
+          pmSessionId: this.pmSessionId,
+        });
+      }
+
+      // Process pending messages
+      const telegramResults = this._telegramConversations.processPendingMessages();
+      for (const r of telegramResults) {
+        this.logAction('telegram_intent', {
+          action: r.action,
+          chatId: r.chatId,
+          result: r.result || r.taskId,
+        });
+        results.push(r);
+      }
+    } catch (e) {
+      this.logAction('telegram_scan_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  /**
+   * Get the TelegramConversations instance (for external registration).
+   * @returns {TelegramConversations|null}
+   */
+  get telegramConversations() {
+    return this._telegramConversations;
   }
 }
 
