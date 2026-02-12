@@ -49,6 +49,11 @@ async function testAsync(name, fn) {
   }
 }
 
+// Clear ALL caches related to agent adapter modules
+for (const key of Object.keys(require.cache)) {
+  if (key.includes('agent-adapter')) delete require.cache[key];
+}
+
 // Shared references — all tests use the same class instances
 const { AgentAdapter } = require('../agent-adapter');
 const { AgentAdapterRegistry, getRegistry, resetRegistry } = require('../agent-adapter-registry');
@@ -239,27 +244,32 @@ test('register accepts valid adapter', () => {
   assert.strictEqual(registry.get('mock'), adapter);
 });
 
-test('register rejects objects without name', () => {
+test('register rejects non-AgentAdapter objects', () => {
   const registry = new AgentAdapterRegistry();
-  assert.throws(() => registry.register(null), /must have a name/);
-  assert.throws(() => registry.register({}), /must have a name/);
+  assert.throws(() => registry.register(null), /must be an instance of AgentAdapter/);
+  assert.throws(() => registry.register({ name: 'fake' }), /must be an instance of AgentAdapter/);
 });
 
-test('register overwrites on duplicate name', () => {
+test('register rejects duplicate names', () => {
   const registry = new AgentAdapterRegistry();
-  const a1 = createMockAdapter({ name: 'dup', displayName: 'First' });
-  const a2 = createMockAdapter({ name: 'dup', displayName: 'Second' });
-  registry.register(a1);
-  registry.register(a2);
-  assert.strictEqual(registry.get('dup').displayName, 'Second');
+  registry.register(createMockAdapter({ name: 'dup' }));
+  assert.throws(() => registry.register(createMockAdapter({ name: 'dup' })), /already registered/);
 });
 
-test('getAll returns all registered adapters', () => {
+test('getNames returns all registered adapter names', () => {
   const registry = new AgentAdapterRegistry();
   registry.register(createMockAdapter({ name: 'a' }));
   registry.register(createMockAdapter({ name: 'b' }));
-  const all = registry.getAll();
-  assert.strictEqual(all.length, 2);
+  const names = registry.getNames();
+  assert.deepStrictEqual(names.sort(), ['a', 'b']);
+});
+
+test('clear removes all adapters and detection results', () => {
+  const registry = new AgentAdapterRegistry();
+  registry.register(createMockAdapter({ name: 'x' }));
+  registry.clear();
+  assert.strictEqual(registry.getNames().length, 0);
+  assert.strictEqual(registry.get('x'), undefined);
 });
 
 test('get returns undefined for unregistered name', () => {
