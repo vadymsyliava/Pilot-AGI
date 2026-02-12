@@ -1,0 +1,15 @@
+{
+  "task_id": "Pilot AGI-veo",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 53,
+  "sessions": {
+    "S-mlhr5n8s-29d5": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 53
+    }
+  },
+  "created_at": "2026-02-11T08:14:00.596Z",
+  "updated_at": "2026-02-11T08:23:22.376Z"
+}

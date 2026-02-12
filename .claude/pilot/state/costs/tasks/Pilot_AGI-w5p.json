@@ -1,0 +1,15 @@
+{
+  "task_id": "Pilot AGI-w5p",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 87,
+  "sessions": {
+    "S-mlir43o6-f7bc": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 87
+    }
+  },
+  "created_at": "2026-02-12T03:06:57.641Z",
+  "updated_at": "2026-02-12T04:28:02.941Z"
+}

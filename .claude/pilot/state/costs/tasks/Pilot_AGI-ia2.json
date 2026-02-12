@@ -1,0 +1,20 @@
+{
+  "task_id": "Pilot AGI-ia2",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 77,
+  "sessions": {
+    "S-mlhtgsdh-3f97": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 67
+    },
+    "S-mlhr5n8s-29d5": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 10
+    }
+  },
+  "created_at": "2026-02-11T09:29:14.884Z",
+  "updated_at": "2026-02-11T09:44:52.561Z"
+}

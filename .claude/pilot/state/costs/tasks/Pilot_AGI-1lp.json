@@ -1,0 +1,15 @@
+{
+  "task_id": "Pilot AGI-1lp",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 19,
+  "sessions": {
+    "S-mlhhox9s-2885": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 19
+    }
+  },
+  "created_at": "2026-02-11T05:23:23.365Z",
+  "updated_at": "2026-02-11T05:25:10.495Z"
+}
