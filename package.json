@@ -1,6 +1,6 @@
 {
   "name": "pilot-agi",
-  "version": "0.0.4",
+  "version": "0.1.0",
   "description": "AI-powered development framework for Claude Code - Ship faster with structured workflows",
   "main": "bin/install.js",
   "bin": {
@@ -37,13 +37,20 @@
   },
   "files": [
     "bin/",
-    ".claude/",
-    "work/",
-    "runs/",
+    "migrations/",
+    ".claude/skills/",
+    ".claude/pilot/hooks/",
+    "!.claude/pilot/hooks/lib/__tests__/",
+    ".claude/pilot/templates/",
+    ".claude/pilot/policy.yaml",
+    ".claude/pilot/agents/",
     "CLAUDE.md",
     "VERSION",
     "CHANGELOG.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
     "@commitlint/cli": "^19.0.0",
     "@commitlint/config-conventional": "^19.0.0",

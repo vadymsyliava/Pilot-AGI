@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- PM Daemon LaunchAgent for Pilot AGI -->
+    <!-- Install: cp this file ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.pilot-agi.pm-daemon.plist -->
+    <!-- Remove: launchctl unload ~/Library/LaunchAgents/com.pilot-agi.pm-daemon.plist -->
+
+    <key>Label</key>
+    <string>com.pilot-agi.pm-daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Update this path to your node binary -->
+        <string>/usr/local/bin/node</string>
+        <string>.claude/pilot/hooks/lib/pm-daemon.js</string>
+        <string>--watch</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <!-- UPDATE: Set this to your project root -->
+    <string>/Users/YOU/your-project</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>.claude/pilot/logs/pm-daemon-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>.claude/pilot/logs/pm-daemon-stderr.log</string>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NODE_ENV</key>
+        <string>production</string>
+        <key>PM_DAEMON_MAX_AGENTS</key>
+        <string>6</string>
+    </dict>
+</dict>
+</plist>

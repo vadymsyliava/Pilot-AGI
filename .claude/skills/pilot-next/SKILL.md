@@ -22,11 +22,23 @@ You are selecting the next task to work on. Be PROACTIVE - never tell the user t
 bd list --limit 1 2>/dev/null
 ```
 
-## Step 2: Get ready tasks
+## Step 2: Get available tasks (session-aware, deterministic)
+
+Use the `next-task.js` CLI which does all filtering in code (no manual cross-referencing):
 
 ```bash
-bd ready --json 2>/dev/null
+node .claude/pilot/hooks/cli/next-task.js 2>/dev/null
 ```
+
+This returns JSON with:
+- `session_id` — this session's ID (resolved by PID, not mtime)
+- `my_claimed_task` — task already claimed by THIS session (if any)
+- `available` — tasks NOT claimed by any other agent (use these)
+- `total_ready` — total tasks bd considers ready
+- `claimed_by_others` — how many are taken by other agents
+
+If `my_claimed_task` is set, this session already has work — offer to resume it.
+If `available` is empty and `claimed_by_others > 0`, tell the user "All ready tasks are claimed by other agents" and offer to wait or show claimed status. **CRITICAL**: Do NOT attempt to investigate, release, or take over another agent's claimed task. You must respect their claim.
 
 ## Step 3: Decision Tree
 
@@ -124,8 +136,16 @@ DESCRIPTION
 ────────────────────────────────────────────────────────────────
 ```
 
-### Step 4.1: Offer ACTIONS (not commands!)
+### Step 4.1: Offer ACTIONS (mode-dependent)
 
+**Check autonomy mode first**: Load `.claude/pilot/policy.yaml` and check `autonomy` section.
+
+#### If `autonomy.mode` is `"full"`:
+- **Skip AskUserQuestion** — automatically choose "Start implementation"
+- Proceed directly to Step 5 (claim task, plan, auto-approve, execute)
+- Display: `⚡ AUTONOMOUS MODE — Auto-starting task {bd-xxxx}`
+
+#### If `autonomy.mode` is `"manual"` (or not set):
 Use AskUserQuestion:
 
 **Question**: "What would you like to do?"
@@ -144,10 +164,25 @@ Use AskUserQuestion:
 
 When user selects "Start implementation":
 
-### 5.1: Change status to in_progress
+### 5.1: Atomic claim — bd status + session lease + broadcast
+
+Change bd status AND claim in session state in one step.
+This prevents other Claude Code sessions from working on the same task.
+
 ```bash
-bd update {id} --status in_progress
+bd update {id} --status in_progress && node .claude/pilot/hooks/cli/claim-task.js {id}
 ```
+
+The CLI helper does three things atomically:
+1. Calls `session.claimTask()` — sets lease, locks session state
+2. Broadcasts `task_claimed` event to all agents via message bus
+3. Returns JSON with claim details (session_id, lease_expires_at)
+
+**If claim fails** (already claimed by another session), show:
+```
+⚠ Task {id} is already claimed by session {other-session-id}
+```
+Then offer to pick a different task or wait.
 
 ### 5.2: Create session capsule
 ```bash
@@ -196,8 +231,25 @@ VERIFICATION
 ────────────────────────────────────────────────────────────────
 ```
 
-### 5.4: Ask for approval
+### 5.4: Ask for approval (mode-dependent)
 
+**Check autonomy mode first**: Load `.claude/pilot/policy.yaml` and check `autonomy` section.
+
+#### If `autonomy.mode` is `"full"`:
+- **Skip AskUserQuestion entirely** — do NOT ask the human
+- Auto-approve the plan immediately:
+  1. Write approval file to `.claude/pilot/state/approved-plans/{taskId}.json` with `auto_approved: true`
+  2. Update `.claude/pilot/state/autonomous.json` with `running: true`, `currentTask: {taskId}`
+  3. Display:
+     ```
+     ⚡ AUTONOMOUS MODE — Plan auto-approved
+     ⚡ Executing all steps continuously...
+     ```
+  4. Begin executing ALL steps automatically (invoke /pilot-exec autonomous loop)
+  5. After all steps: auto-commit each, auto-close, auto-chain to next task
+  6. Agent enters continuous loop: plan -> exec all -> commit each -> close -> next
+
+#### If `autonomy.mode` is `"manual"` (or not set):
 Use AskUserQuestion:
 
 **Question**: "Approve this plan?"
@@ -234,6 +286,9 @@ Suggest topics based on task, then:
 3. **Be proactive** - Ask "Do this?" not "Run this command"
 4. **Seamless flow** - One choice leads to the next action automatically
 5. **User controls pace** - But you do the work
+6. **NEVER release, modify, or override another agent's claimed task** - If a task is claimed by another session, you MUST NOT: release their claim, write to their session file, mark their session as abandoned, or call release-task.js with their session ID. Only the PM orchestrator can release another agent's task.
+7. **NEVER judge another session as "abandoned" or "stale"** - That is the PM's job. If all tasks are claimed, offer to wait or ask the user — do not investigate other sessions to take over their work.
+8. **Respect claim-task.js rejections** - If claim-task.js says the task is already claimed, accept it. Do not attempt workarounds.
 
 ## Status Flow
 
@@ -242,3 +297,25 @@ open (To-Do) → [user picks "Start Implementation"] → in_progress → [work d
 ```
 
 The status change happens at the moment of commitment, not at display time.
+
+## Multi-Session Coordination
+
+### Pre-selection filtering (Step 2)
+
+`next-task.js` does all filtering deterministically in code:
+1. Resolves the calling session via PID matching (`resolveCurrentSession()`)
+2. Calls `bd ready --json` to get all candidate tasks
+3. Calls `getClaimedTaskIds(currentSessionId)` to find tasks claimed by OTHER sessions
+4. Returns only unclaimed tasks in the `available` array
+
+This eliminates both the race condition AND the LLM cross-referencing failure.
+
+### Atomic claiming (Step 5)
+
+When claiming a task via `claim-task.js`, the following happens atomically:
+1. `resolveCurrentSession()` identifies the correct session by PID (not mtime)
+2. `session.claimTask()` — writes claimed_task + lease to session state file
+3. `messaging.sendBroadcast()` — sends `task_claimed` event to all agents
+4. `session.logEvent()` — writes `task_claimed` to event stream
+
+To release a task: `node .claude/pilot/hooks/cli/release-task.js`

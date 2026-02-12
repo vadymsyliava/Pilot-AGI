@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["decisions"],
+  "properties": {
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "ts"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "task_assigned",
+              "task_reassigned",
+              "agent_blocked",
+              "agent_unblocked",
+              "merge_approved",
+              "merge_rejected",
+              "stale_agent_detected",
+              "policy_override"
+            ]
+          },
+          "ts": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "feedback": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

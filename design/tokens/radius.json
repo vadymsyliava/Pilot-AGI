@@ -1,0 +1,13 @@
+{
+  "$description": "Border radius tokens — corner rounding",
+  "radius": {
+    "none": { "$value": "0",        "$type": "dimension" },
+    "sm":   { "$value": "0.125rem", "$type": "dimension", "$description": "2px" },
+    "md":   { "$value": "0.375rem", "$type": "dimension", "$description": "6px" },
+    "lg":   { "$value": "0.5rem",   "$type": "dimension", "$description": "8px — shadcn/ui default" },
+    "xl":   { "$value": "0.75rem",  "$type": "dimension", "$description": "12px" },
+    "2xl":  { "$value": "1rem",     "$type": "dimension", "$description": "16px" },
+    "3xl":  { "$value": "1.5rem",   "$type": "dimension", "$description": "24px" },
+    "full": { "$value": "9999px",   "$type": "dimension", "$description": "Fully rounded (pills, circles)" }
+  }
+}

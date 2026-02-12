@@ -1,0 +1,16 @@
+{
+  "$description": "Animation tokens — durations and easing curves",
+  "duration": {
+    "instant": { "$value": "0ms",   "$type": "duration", "$description": "No animation" },
+    "fast":    { "$value": "150ms", "$type": "duration", "$description": "Micro-interactions (hover, focus)" },
+    "normal":  { "$value": "300ms", "$type": "duration", "$description": "State transitions" },
+    "slow":    { "$value": "500ms", "$type": "duration", "$description": "Complex animations" }
+  },
+  "easing": {
+    "linear":    { "$value": [0.0, 0.0, 1.0, 1.0],   "$type": "cubicBezier", "$description": "Constant speed" },
+    "ease":      { "$value": [0.25, 0.1, 0.25, 1.0],  "$type": "cubicBezier", "$description": "General purpose" },
+    "easeIn":    { "$value": [0.42, 0.0, 1.0, 1.0],   "$type": "cubicBezier", "$description": "Accelerate (exit)" },
+    "easeOut":   { "$value": [0.0, 0.0, 0.58, 1.0],   "$type": "cubicBezier", "$description": "Decelerate (enter)" },
+    "easeInOut": { "$value": [0.42, 0.0, 0.58, 1.0],  "$type": "cubicBezier", "$description": "Symmetric (move)" }
+  }
+}

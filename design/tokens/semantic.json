@@ -1,0 +1,180 @@
+{
+  "$description": "Semantic tokens — purpose-based references to primitives (Tier 2). These are what components consume.",
+  "color": {
+    "semantic": {
+      "brand": {
+        "primary":   { "$value": "{color.primitive.blue.600}", "$type": "color", "$description": "Primary brand color" },
+        "secondary": { "$value": "{color.primitive.blue.400}", "$type": "color", "$description": "Secondary brand color" },
+        "accent":    { "$value": "{color.primitive.blue.500}", "$type": "color", "$description": "Accent for highlights" }
+      },
+      "background": {
+        "default": { "$value": "{color.primitive.white}",    "$type": "color", "$description": "Page background" },
+        "subtle":  { "$value": "{color.primitive.gray.50}",  "$type": "color", "$description": "Subtle background (cards, sections)" },
+        "muted":   { "$value": "{color.primitive.gray.100}", "$type": "color", "$description": "Muted background (hover, disabled)" },
+        "inverse": { "$value": "{color.primitive.gray.900}", "$type": "color", "$description": "Inverse background (dark panels)" }
+      },
+      "foreground": {
+        "default": { "$value": "{color.primitive.gray.950}", "$type": "color", "$description": "Primary text" },
+        "muted":   { "$value": "{color.primitive.gray.500}", "$type": "color", "$description": "Secondary/muted text" },
+        "subtle":  { "$value": "{color.primitive.gray.400}", "$type": "color", "$description": "Placeholder text" },
+        "inverse": { "$value": "{color.primitive.white}",    "$type": "color", "$description": "Text on dark backgrounds" }
+      },
+      "border": {
+        "default": { "$value": "{color.primitive.gray.200}", "$type": "color", "$description": "Default border" },
+        "muted":   { "$value": "{color.primitive.gray.100}", "$type": "color", "$description": "Subtle border" },
+        "focus":   { "$value": "{color.primitive.blue.600}", "$type": "color", "$description": "Focus ring color" }
+      },
+      "state": {
+        "success":            { "$value": "{color.primitive.green.500}",  "$type": "color" },
+        "success-foreground": { "$value": "{color.primitive.green.700}",  "$type": "color" },
+        "success-background": { "$value": "{color.primitive.green.50}",   "$type": "color" },
+        "warning":            { "$value": "{color.primitive.amber.500}",  "$type": "color" },
+        "warning-foreground": { "$value": "{color.primitive.amber.700}",  "$type": "color" },
+        "warning-background": { "$value": "{color.primitive.amber.50}",   "$type": "color" },
+        "error":              { "$value": "{color.primitive.red.500}",    "$type": "color" },
+        "error-foreground":   { "$value": "{color.primitive.red.700}",    "$type": "color" },
+        "error-background":   { "$value": "{color.primitive.red.50}",     "$type": "color" },
+        "info":               { "$value": "{color.primitive.blue.500}",   "$type": "color" },
+        "info-foreground":    { "$value": "{color.primitive.blue.700}",   "$type": "color" },
+        "info-background":    { "$value": "{color.primitive.blue.50}",    "$type": "color" }
+      },
+      "ring": {
+        "default": { "$value": "{color.primitive.blue.600}", "$type": "color", "$description": "Focus ring" }
+      }
+    },
+    "dark": {
+      "brand": {
+        "primary":   { "$value": "{color.primitive.blue.400}", "$type": "color" },
+        "secondary": { "$value": "{color.primitive.blue.300}", "$type": "color" },
+        "accent":    { "$value": "{color.primitive.blue.500}", "$type": "color" }
+      },
+      "background": {
+        "default": { "$value": "{color.primitive.gray.950}", "$type": "color" },
+        "subtle":  { "$value": "{color.primitive.gray.900}", "$type": "color" },
+        "muted":   { "$value": "{color.primitive.gray.800}", "$type": "color" },
+        "inverse": { "$value": "{color.primitive.white}",    "$type": "color" }
+      },
+      "foreground": {
+        "default": { "$value": "{color.primitive.gray.50}",  "$type": "color" },
+        "muted":   { "$value": "{color.primitive.gray.400}", "$type": "color" },
+        "subtle":  { "$value": "{color.primitive.gray.500}", "$type": "color" },
+        "inverse": { "$value": "{color.primitive.gray.950}", "$type": "color" }
+      },
+      "border": {
+        "default": { "$value": "{color.primitive.gray.800}", "$type": "color" },
+        "muted":   { "$value": "{color.primitive.gray.700}", "$type": "color" },
+        "focus":   { "$value": "{color.primitive.blue.400}", "$type": "color" }
+      },
+      "state": {
+        "success":            { "$value": "{color.primitive.green.500}",  "$type": "color" },
+        "success-foreground": { "$value": "{color.primitive.green.100}",  "$type": "color" },
+        "success-background": { "$value": "{color.primitive.green.700}",  "$type": "color" },
+        "warning":            { "$value": "{color.primitive.amber.500}",  "$type": "color" },
+        "warning-foreground": { "$value": "{color.primitive.amber.100}",  "$type": "color" },
+        "warning-background": { "$value": "{color.primitive.amber.700}",  "$type": "color" },
+        "error":              { "$value": "{color.primitive.red.500}",    "$type": "color" },
+        "error-foreground":   { "$value": "{color.primitive.red.100}",    "$type": "color" },
+        "error-background":   { "$value": "{color.primitive.red.700}",    "$type": "color" },
+        "info":               { "$value": "{color.primitive.blue.500}",   "$type": "color" },
+        "info-foreground":    { "$value": "{color.primitive.blue.100}",   "$type": "color" },
+        "info-background":    { "$value": "{color.primitive.blue.700}",   "$type": "color" }
+      },
+      "ring": {
+        "default": { "$value": "{color.primitive.blue.400}", "$type": "color" }
+      }
+    }
+  },
+  "typography": {
+    "heading": {
+      "h1": {
+        "$type": "typography",
+        "$value": {
+          "fontFamily": "{font.family.sans}",
+          "fontSize": "{font.size.4xl}",
+          "fontWeight": "{font.weight.bold}",
+          "lineHeight": "{font.lineHeight.tight}",
+          "letterSpacing": "{font.letterSpacing.tight}"
+        }
+      },
+      "h2": {
+        "$type": "typography",
+        "$value": {
+          "fontFamily": "{font.family.sans}",
+          "fontSize": "{font.size.3xl}",
+          "fontWeight": "{font.weight.semibold}",
+          "lineHeight": "{font.lineHeight.tight}",
+          "letterSpacing": "{font.letterSpacing.tight}"
+        }
+      },
+      "h3": {
+        "$type": "typography",
+        "$value": {
+          "fontFamily": "{font.family.sans}",
+          "fontSize": "{font.size.2xl}",
+          "fontWeight": "{font.weight.semibold}",
+          "lineHeight": "{font.lineHeight.snug}"
+        }
+      },
+      "h4": {
+        "$type": "typography",
+        "$value": {
+          "fontFamily": "{font.family.sans}",
+          "fontSize": "{font.size.xl}",
+          "fontWeight": "{font.weight.semibold}",
+          "lineHeight": "{font.lineHeight.snug}"
+        }
+      }
+    },
+    "body": {
+      "default": {
+        "$type": "typography",
+        "$value": {
+          "fontFamily": "{font.family.sans}",
+          "fontSize": "{font.size.base}",
+          "fontWeight": "{font.weight.normal}",
+          "lineHeight": "{font.lineHeight.normal}"
+        }
+      },
+      "small": {
+        "$type": "typography",
+        "$value": {
+          "fontFamily": "{font.family.sans}",
+          "fontSize": "{font.size.sm}",
+          "fontWeight": "{font.weight.normal}",
+          "lineHeight": "{font.lineHeight.normal}"
+        }
+      },
+      "large": {
+        "$type": "typography",
+        "$value": {
+          "fontFamily": "{font.family.sans}",
+          "fontSize": "{font.size.lg}",
+          "fontWeight": "{font.weight.normal}",
+          "lineHeight": "{font.lineHeight.relaxed}"
+        }
+      }
+    },
+    "code": {
+      "default": {
+        "$type": "typography",
+        "$value": {
+          "fontFamily": "{font.family.mono}",
+          "fontSize": "{font.size.sm}",
+          "fontWeight": "{font.weight.normal}",
+          "lineHeight": "{font.lineHeight.relaxed}"
+        }
+      }
+    },
+    "label": {
+      "default": {
+        "$type": "typography",
+        "$value": {
+          "fontFamily": "{font.family.sans}",
+          "fontSize": "{font.size.sm}",
+          "fontWeight": "{font.weight.medium}",
+          "lineHeight": "{font.lineHeight.none}"
+        }
+      }
+    }
+  }
+}

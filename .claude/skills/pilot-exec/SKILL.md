@@ -1,12 +1,24 @@
 ---
 name: pilot-exec
-description: Execute ONE micro-step from the approved plan. Makes changes, runs verification, updates session log. Use repeatedly until plan is complete.
+description: Execute micro-steps from the approved plan. In autonomous mode, executes ALL remaining steps continuously. Otherwise executes one step at a time.
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
 # Execute Micro-Step
 
-You are executing ONE micro-step from the approved plan.
+## Autonomous Mode Check
+
+Before executing, load `.claude/pilot/policy.yaml` and check the `autonomy` section.
+
+If `autonomy.mode` is `"full"` AND `autonomy.auto_advance_steps` is `true`:
+- Execute ALL remaining steps in sequence (not just one)
+- After each step: verify -> commit (via `/pilot-commit` inline) -> continue to next step
+- Only stop if verification fails AND `autonomy.stop_on_error` is `true`
+- Update session capsule after each step
+- After the LAST step completes successfully, automatically close the task (invoke `/pilot-close` logic inline)
+- Do NOT prompt the user between steps — keep going until done or blocked
+
+If `autonomy.mode` is `"manual"` (or not set): execute ONE step as before.
 
 ## Step 1: Load current state
 
@@ -83,6 +95,7 @@ Append to `runs/YYYY-MM-DD.md`:
 
 ## Step 6: Report and prompt next action
 
+### Manual mode:
 ```
 ────────────────────────────────────────────────────────────────
 ✓ Step {N}/{TOTAL} complete
@@ -98,9 +111,31 @@ Next:
 ────────────────────────────────────────────────────────────────
 ```
 
+### Autonomous mode:
+After each step, display a brief progress line and continue immediately:
+```
+✓ Step {N}/{TOTAL}: {step name} — committed {hash}
+```
+
+After ALL steps complete:
+```
+════════════════════════════════════════════════════════════════
+✓ ALL STEPS COMPLETE ({TOTAL}/{TOTAL})
+
+Task:    {bd-xxxx}
+Commits: {N}
+
+Proceeding to close task...
+════════════════════════════════════════════════════════════════
+```
+
+Then invoke `/pilot-close` logic inline (validate DoD, close bd issue, auto-chain to next task).
+
 ## Important Rules
-- Execute ONLY ONE step at a time
-- ALWAYS run verification before marking complete
+- In manual mode: execute ONLY ONE step at a time
+- In autonomous mode: execute ALL steps continuously, commit after each
+- ALWAYS run verification before marking a step complete
 - Update session capsule after every step (crash recovery)
 - Don't deviate from the plan without re-approval
 - Keep changes small and atomic
+- If verification fails in autonomous mode: stop, log the error, report to user

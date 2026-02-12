@@ -1,0 +1,11 @@
+{
+  "key": "preferences",
+  "agentType": "design",
+  "updatedAt": "2026-02-11T01:00:00.000Z",
+  "data": {
+    "token_format": "dtcg",
+    "strictness": "standard",
+    "audit_on_review": true,
+    "required_categories": ["colors", "spacing", "typography", "shadows", "radii", "breakpoints", "zIndex", "animation"]
+  }
+}

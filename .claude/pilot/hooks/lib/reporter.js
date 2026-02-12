@@ -127,4 +127,55 @@ function formatMetricsJSON(results, total_duration_ms = null) {
   };
 }
 
-module.exports = { format, formatConsole, formatMetricsJSON };
+/**
+ * Format an overnight report as a console-friendly table.
+ * Delegates to overnight-mode.js for the actual report generation,
+ * but provides an alternative compact format for terminal display.
+ *
+ * @param {object} report - Report object from overnightMode.generateReport()
+ * @returns {string} - Console-formatted string
+ */
+function formatOvernightConsole(report) {
+  if (!report) return 'No report data.';
+
+  const lines = [];
+  const s = report.summary || {};
+  const dur = report.duration_ms ? formatDurationCompact(report.duration_ms) : 'N/A';
+
+  lines.push('');
+  lines.push('  OVERNIGHT RUN REPORT');
+  lines.push('  ' + '─'.repeat(56));
+  lines.push(`  Run:        ${report.run_id}`);
+  lines.push(`  Duration:   ${dur}`);
+  lines.push(`  Tasks:      ${s.completed || 0}/${s.total_tasks || 0} completed (${s.success_rate || 0}%)`);
+  lines.push(`  Failed:     ${s.failed || 0}`);
+  lines.push(`  Errors:     ${report.total_errors || 0}`);
+  lines.push(`  Tokens:     ${(report.cost?.total_tokens || 0).toLocaleString()}`);
+  lines.push('  ' + '─'.repeat(56));
+
+  if (report.tasks && report.tasks.length > 0) {
+    lines.push('');
+    lines.push('  TASK                        STATUS       ERRORS');
+    lines.push('  ' + '─'.repeat(56));
+    for (const t of report.tasks) {
+      const id = (t.task_id || '').padEnd(28);
+      const status = (t.status || 'unknown').padEnd(12);
+      const errs = String(t.errors || 0);
+      const badge = t.error_budget_exceeded ? ' !' : '';
+      lines.push(`  ${id} ${status} ${errs}${badge}`);
+    }
+  }
+
+  lines.push('');
+  return lines.join('\n');
+}
+
+function formatDurationCompact(ms) {
+  if (!ms || ms <= 0) return '0m';
+  const hours = Math.floor(ms / 3600000);
+  const minutes = Math.floor((ms % 3600000) / 60000);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+module.exports = { format, formatConsole, formatMetricsJSON, formatOvernightConsole };
