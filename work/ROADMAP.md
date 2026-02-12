@@ -297,9 +297,211 @@ Wave 4: 3.4, 3.12, 3.13
 
 ---
 
+## Milestone 4: Process Control & Immortal Agents (COMPLETE)
+
+**Goal**: Transform agents from ephemeral Claude sessions into managed processes. PM Daemon (pure Node.js, no context limit) spawns, monitors, checkpoints, and respawns Claude processes automatically. Sessions are disposable; progress lives in git and checkpoints. The system runs overnight without human intervention.
+**Status**: Complete (all 8 phases closed, Feb 2026)
+**Target**: v3.0.0
+
+### The Architecture Shift
+- PM Daemon becomes a standalone Node.js process — not a Claude session
+- Agents are spawned Claude processes (`claude -p`), not terminals you open manually
+- Context pressure (60%) → checkpoint → exit → PM respawns with context → continues
+- PID-based liveness checks replace heartbeat-only detection
+- File-based contracts replace the message bus for cross-agent coordination
+
+### Phases
+
+#### Phase 4.1: Session Lifecycle Overhaul
+- Process exit hooks mark sessions as ended
+- PID liveness verification (`kill -0`) before trusting session status
+- Zombie reaper: periodic sweep for dead-PID sessions
+- Session archival for old ended sessions
+
+#### Phase 4.2: Process Spawner v2
+- Context-aware spawn: inject checkpoint + plan + research into prompt
+- Worktree-per-agent: auto-create before spawn, cleanup on exit
+- Structured task context files read by agent on start
+- Resume-aware: "continue from step N" vs "start fresh"
+
+#### Phase 4.3: Checkpoint-Respawn Loop
+- Exit-on-checkpoint: 60% pressure → save state → exit cleanly
+- PM detects exit → reads checkpoint → spawns fresh process
+- Continuity protocol: plan, completed steps, test results carried forward
+- Max respawn limit (default 10) to prevent infinite loops
+
+#### Phase 4.4: PM Daemon as Pure Node.js
+- `pm-daemon.js --watch` is the only PM — no Claude session needed
+- Mechanical decisions (spawn, health, cleanup) in pure Node.js
+- Judgment decisions (merge review, decomposition) via short `claude -p` calls
+- CLI dashboard: `--status`, `--ps`, `--tail`, `--kill`
+
+#### Phase 4.5: Terminal Management
+- Per-agent log files with tail streaming
+- Process table with PID, task, duration, context %
+- Graceful kill command for individual agents
+- Optional tmux pane integration
+
+#### Phase 4.6: Reliable Task Handoff
+- Pre-exit protocol: stash, checkpoint, update bd
+- Post-exit validation: verify last commit matches plan step
+- Dirty worktree recovery strategies
+- Test gate on resume
+
+#### Phase 4.7: Multi-Agent Coordination v2
+- File-based output contracts between agents
+- Dependency-aware spawning (don't start B until A's artifacts exist)
+- Shared artifact registry per task
+- PM-mediated blocking resolution
+
+#### Phase 4.8: Overnight Mode
+- `pm-daemon.js --plan "build X"` → auto-decompose → queue → execute
+- Full lifecycle: decompose → research → spawn → work → checkpoint → respawn → complete
+- Error budget with configurable failure tolerance
+- Morning report: tasks completed, failures, time, cost
+
+### Dependencies
+```
+Wave 1: 4.1, 4.4, 4.5  (independent)
+Wave 2: 4.2 (4.1+4.4), 4.6 (4.1)
+Wave 3: 4.3 (4.2+4.6), 4.7 (4.2+4.6)
+Wave 4: 4.8 (all above)
+```
+
+### What Was Delivered
+- Session lifecycle with PID-based liveness and proactive zombie reaping
+- Process spawner v2 with context capsules (checkpoint + plan + research injection)
+- Checkpoint-respawn loop with max respawn limits and escalation
+- PM Daemon as pure Node.js with CLI dashboard (--watch, --ps, --tail, --kill, --status)
+- Terminal management with per-agent logs and graceful kill
+- Reliable task handoff with pre-exit protocol and dirty worktree recovery
+- Multi-agent coordination v2 with artifact registry and dependency-aware spawning
+- Overnight mode with auto-decompose, error budgets, drain, and morning reports
+- 55+ tests across overnight mode alone; comprehensive test suites for all phases
+
+### Success Criteria (validated 2026-02-11)
+- [x] PM Daemon runs as pure Node.js — no Claude session, no context limit
+- [x] PID-based liveness — zero zombie sessions after 24h of operation
+- [x] Checkpoint-respawn cycle works 10+ times without losing progress
+- [x] `pm-daemon.js --ps` shows real-time process table
+- [x] Task with 20 steps completes across 4+ context windows seamlessly
+- [x] Overnight mode: queue 10 tasks at 8pm → 7+ completed by 8am
+- [x] Total cost per overnight run tracked and reported
+
+---
+
+## Milestone 5: Autonomous Intelligence — "Self-Improving, Self-Scaling, Zero-Touch"
+
+**Goal**: Elevate Pilot AGI from a coordinated multi-agent system to a self-improving autonomous intelligence. Agents learn from history, approve their own plans for routine work, resolve merge conflicts semantically, generate tests on the fly, scale dynamically, and prevent drift before it happens. Humans only intervene for genuinely novel decisions.
+**Status**: Not started
+**Target**: v4.0.0
+
+### Foundation: Agent-Connect Communication Model
+
+#### Phase 5.0: Agent-Connect Communication Model
+- Invert PM-agent communication: agents connect TO PM via WebSocket
+- PM Hub Server (`pm-hub.js`): HTTP + WS on localhost:3847, embedded in PM daemon
+- Agent Connector (`agent-connector.js`): session-start hook connects to PM hub
+- Manual terminals connect the same way as spawned agents (first-class)
+- Real-time bidirectional messaging (<100ms vs 30s file polling)
+- Instant crash detection via WS close event
+- File bus retained as persistence/fallback layer (zero regression)
+
+### Stream A: Autonomous Decision-Making
+
+#### Phase 5.1: Adaptive Plan Approval (Confidence-Tiered)
+- Confidence scorer: task scope, risk level, code area familiarity, historical outcomes
+- Three tiers: auto-approve (>0.85), notify-approve (0.60-0.85), require-approve (<0.60)
+- Historical learning: track plan outcomes to refine confidence thresholds
+- Risk classifier: data loss potential, user-facing, security-sensitive, infra-touching
+- Policy integration in `policy.yaml` under `approval.confidence_thresholds`
+
+#### Phase 5.2: Semantic Merge Conflict Resolution
+- AST-aware conflict parser (JS/TS/Python/Go/Rust)
+- Intent extraction from commit messages + plan steps
+- Resolution strategies: additive, rename, overlapping edit, contradictory (escalate)
+- Test validation: run tests after resolution, escalate on failure
+- Pluggable language parsers via registry
+
+#### Phase 5.3: Autonomous Test Generation
+- Coverage-aware: analyze what's untested after each code change
+- Strategy per change type: new function → unit test, bug fix → regression test, refactor → snapshot test
+- Framework auto-detection (Vitest, Jest, Mocha, pytest, Go test)
+- Quality gate: generated tests must pass and cover changed lines
+- Integrated into `/pilot-exec` as sub-step after code changes
+
+### Stream B: Self-Improving Intelligence
+
+#### Phase 5.4: Dynamic Agent Pool Scaling
+- Autoscaler: PM monitors queue depth, active agents, budget remaining
+- Scale up: queue depth > 2x agents, high-priority with no idle agent, deadline approaching
+- Scale down: no pending tasks (5min cooldown), budget threshold, resource pressure
+- Configurable bounds: `pool.min` (1), `pool.max` (12), resource-aware (CPU/memory)
+
+#### Phase 5.5: Self-Improving Task Decomposition
+- Outcome tracking: predicted vs actual subtask count, complexity, stuck/reworked tasks
+- Pattern library: successful decomposition templates indexed by task type
+- Feedback loop: check library before decomposing, learn from outcomes
+- Adaptive sizing and dependency learning from code analysis vs PM predictions
+
+#### Phase 5.6: Predictive Drift Prevention
+- Pre-action check: compare intended action against plan step before tool execution
+- Embedding-based similarity scoring for divergence detection
+- Guardrails injection: course-correction prompt before divergent tool executes
+- Proactive context refresh for high-drift-risk steps
+
+### Stream C: Knowledge & Communication
+
+#### Phase 5.7: Memory Consolidation & Relevance Scoring
+- Relevance scorer: recency, usage frequency, task similarity, explicit links
+- Summarization pipeline: full → summary → archived (by age and relevance)
+- Tiered loading: agents only load entries above relevance threshold
+- Memory budget per channel with LRU eviction
+
+#### Phase 5.8: Cross-Project Learning
+- Global knowledge base at `~/.pilot-agi/knowledge/`
+- Stores anonymized: decomposition templates, failure modes, tech decisions, cost benchmarks
+- Privacy controls: opt-in per project in `policy.yaml`
+- Export/import shareable knowledge packs (JSON)
+
+#### Phase 5.9: Real-Time Notification & Mobile Approval
+- Channels: Slack webhook, Discord webhook, Email (SMTP), system notification
+- Approval flow: escalation → notification → one-click approve/reject → timeout escalation
+- Morning report delivery to configured channel
+- Priority-based routing: critical → immediate; info → batch digest
+
+#### Phase 5.10: Cloud Execution Bridge
+- Pluggable execution providers: local (default), SSH remote, Docker, cloud (future)
+- Remote PM Daemon: run on server, spawn agents locally or remotely
+- State sync via git push/pull for checkpoints and repos
+- Log streaming across network (SSE/WebSocket)
+
+### Dependencies
+```
+Wave 0 (Foundation): 5.0 Agent-Connect Communication Model
+Wave 1 (build on 5.0): 5.1, 5.3, 5.7, 5.9
+Wave 2: 5.2 (5.3), 5.4 (5.0+5.1), 5.5 (5.7), 5.6 (5.0+5.7)
+Wave 3: 5.8 (5.5+5.7), 5.10 (5.4)
+```
+
+### Success Criteria
+- [ ] Agents connect to PM via WebSocket; <100ms message latency; manual terminals fully integrated
+- [ ] Routine tasks auto-approved and completed without human input
+- [ ] 70%+ of merge conflicts resolved automatically with passing tests
+- [ ] Every code change gets auto-generated tests; coverage never decreases
+- [ ] Agent pool scales from 1 to 12 based on queue depth and budget
+- [ ] Decomposition quality improves measurably over 10+ tasks
+- [ ] Drift caught before tool execution in 80%+ of cases
+- [ ] Memory channels stay under configured budget; stale entries pruned
+- [ ] Patterns from project A available and useful in project B
+- [ ] Human receives Slack/Discord notification within 30s of escalation
+- [ ] Agents run on remote server; overnight mode works with laptop closed
+
+---
+
 ## Future Milestones
-- Milestone 4: Cloud Sync — remote agent coordination, team-based workflows, CI/CD integration
-- Milestone 5: Marketplace — shareable agent configs, design systems, governance policies
+- Milestone 6: Cloud Sync — remote agent coordination, team-based workflows, CI/CD integration
+- Milestone 7: Marketplace — shareable agent configs, design systems, governance policies
 
 ---
 
