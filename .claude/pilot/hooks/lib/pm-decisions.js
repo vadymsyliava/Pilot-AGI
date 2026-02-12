@@ -315,6 +315,72 @@ Rules:
 }
 
 // ============================================================================
+// PLAN CONFIDENCE ASSESSMENT (Phase 5.1)
+// ============================================================================
+
+/**
+ * AI-assisted plan confidence assessment.
+ * Used for medium-confidence plans (notify_approve tier) to get a second
+ * opinion before proceeding, or to score plans that need judgment.
+ *
+ * @param {string} taskId - The task ID
+ * @param {object} plan - Plan with steps, files, summary
+ * @param {object} opts - { projectRoot, taskTitle, taskDescription }
+ * @returns {{ confidence: number, risk_level: string, concerns: string[], recommendation: string, decision_type: string }}
+ */
+function assessPlanConfidence(taskId, plan, opts = {}) {
+  const truncatedPlan = JSON.stringify(plan).substring(0, MAX_CONTEXT_CHARS);
+  const context = opts.taskDescription
+    ? `Task: ${taskId} — ${opts.taskTitle || ''}\nDescription: ${opts.taskDescription.substring(0, MAX_CONTEXT_CHARS)}`
+    : `Task: ${taskId}`;
+
+  const prompt = `You are assessing the risk and confidence of a software implementation plan. Respond with ONLY valid JSON.
+
+${context}
+
+Plan:
+\`\`\`json
+${truncatedPlan}
+\`\`\`
+
+Respond with this exact JSON format:
+{
+  "confidence": 0.75,
+  "risk_level": "low|medium|high",
+  "concerns": ["concern 1", "concern 2"],
+  "recommendation": "approve|review|reject"
+}
+
+Rules:
+- confidence: 0.0-1.0 where 1.0 = completely safe routine change
+- risk_level: "low" = tests/docs/config, "medium" = logic/features, "high" = auth/data/infra
+- concerns: list specific risks (empty array if none)
+- recommendation: "approve" = safe to auto-approve, "review" = human should glance, "reject" = human must review`;
+
+  const result = callClaude(prompt, { projectRoot: opts.projectRoot });
+
+  if (!result.success) {
+    // Fallback: return conservative assessment
+    return {
+      confidence: 0.5,
+      risk_level: 'medium',
+      concerns: [`AI assessment failed: ${result.error}`],
+      recommendation: 'review',
+      decision_type: 'judgment'
+    };
+  }
+
+  const r = result.result;
+  return {
+    confidence: typeof r.confidence === 'number' ? Math.max(0, Math.min(1, r.confidence)) : 0.5,
+    risk_level: ['low', 'medium', 'high'].includes(r.risk_level) ? r.risk_level : 'medium',
+    concerns: Array.isArray(r.concerns) ? r.concerns : [],
+    recommendation: ['approve', 'review', 'reject'].includes(r.recommendation) ? r.recommendation : 'review',
+    decision_type: 'judgment'
+  };
+}
+
+// ============================================================================
 // DECISION ROUTING
 // ============================================================================
 
@@ -349,6 +415,7 @@ module.exports = {
   decomposeTask,
   resolveConflict,
   assessComplexity,
+  assessPlanConfidence,
 
   // Constants (for testing)
   CLAUDE_TIMEOUT_MS,

@@ -521,6 +521,12 @@ function assignTask(taskId, targetSessionId, pmSessionId, opts = {}) {
     taskData.research_context = opts.research_context;
   }
 
+  // Phase 5.1: Include approval confidence if available
+  if (opts.approval_confidence !== undefined) {
+    taskData.approval_confidence = opts.approval_confidence;
+    taskData.approval_tier = opts.approval_tier || null;
+  }
+
   // Send task delegation message
   const msgResult = messaging.sendTaskDelegate(
     pmSessionId,
@@ -1281,6 +1287,51 @@ function scheduleBatch(readyTasks, pmSessionId, projectRoot) {
 }
 
 // ============================================================================
+// PLAN CONFIDENCE SCORING (Phase 5.1)
+// ============================================================================
+
+/**
+ * Score a plan for a task and record the result.
+ * Used by PM loop before task assignment to determine approval tier.
+ *
+ * @param {object} task - Task object with id, title, description, labels
+ * @param {object} plan - Plan object with steps, files
+ * @returns {{ score: number, tier: string, factors: object, risk_tags: string[], reasoning: string }}
+ */
+function scorePlanConfidence(task, plan) {
+  try {
+    const scorer = require('./confidence-scorer');
+    return scorer.scoreAndRecord(plan, task);
+  } catch (e) {
+    // Fallback: return neutral score
+    return {
+      score: 0.5,
+      tier: 'notify_approve',
+      factors: { scope: 0.5, familiarity: 0.5, historical_success: 0.5, risk: 0.5 },
+      risk_tags: [],
+      reasoning: `Scoring unavailable: ${e.message}`
+    };
+  }
+}
+
+/**
+ * Record the outcome of a task execution for historical learning.
+ *
+ * @param {string} taskId - Task ID
+ * @param {boolean} success - Did the task complete successfully?
+ * @param {object} details - { files, labels, steps_completed, total_steps, rework_count, failure_reason }
+ */
+function recordPlanOutcome(taskId, success, details = {}) {
+  try {
+    const scorer = require('./confidence-scorer');
+    return scorer.recordOutcome(taskId, success, details);
+  } catch (e) {
+    // Best effort
+    return null;
+  }
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
@@ -1333,6 +1384,10 @@ module.exports = {
 
   // Intelligent scheduler (Phase 3.4)
   scheduleBatch,
+
+  // Plan confidence (Phase 5.1)
+  scorePlanConfidence,
+  recordPlanOutcome,
 
   // Constants
   PM_DECISIONS_CHANNEL,
