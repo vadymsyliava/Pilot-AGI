@@ -415,6 +415,9 @@ class AgentConnector extends EventEmitter {
 
               this.emit('connected', { mode: 'websocket', port: this.port });
 
+              // Reconcile: deliver any messages from file bus during disconnect
+              this._reconcileFileBusMessages();
+
               // Check if there's remaining data after HTTP headers
               const headerEnd = handshakeBuffer.indexOf('\r\n\r\n') + 4;
               const remaining = data.subarray(data.toString('ascii').indexOf('\r\n\r\n') + 4);
@@ -539,6 +542,49 @@ class AgentConnector extends EventEmitter {
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = null;
     }
+  }
+
+  // ==========================================================================
+  // FILE BUS RECONCILIATION
+  // ==========================================================================
+
+  /**
+   * On WS reconnect, check file bus for PM messages that arrived during disconnect.
+   * Delivers them to message handlers so agent doesn't miss anything.
+   */
+  _reconcileFileBusMessages() {
+    const messaging = getMessaging();
+    if (!messaging) return;
+
+    try {
+      // Ensure cursor starts at 0 if none exists, to catch messages from disconnect period
+      const cursor0 = messaging.loadCursor(this.sessionId);
+      if (!cursor0) {
+        messaging.writeCursor(this.sessionId, {
+          session_id: this.sessionId,
+          last_seq: -1,
+          byte_offset: 0,
+          processed_ids: []
+        });
+      }
+
+      const { messages, cursor } = messaging.readMessages(this.sessionId, {
+        types: ['pm_response', 'notify', 'broadcast', 'request', 'task_delegate']
+      });
+
+      if (messages.length === 0) return;
+
+      // Deliver file bus messages to handlers
+      for (const msg of messages) {
+        this.emit('message', msg);
+        for (const handler of this._messageHandlers) {
+          try { handler(msg); } catch (e) { /* handler error */ }
+        }
+      }
+
+      // Acknowledge so we don't re-deliver
+      messaging.acknowledgeMessages(this.sessionId, cursor, messages.map(m => m.id));
+    } catch (e) { /* best effort */ }
   }
 
   // ==========================================================================
