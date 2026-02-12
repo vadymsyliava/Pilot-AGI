@@ -867,3 +867,52 @@ test_generation:
     - deleted_file
     - test_change
     - docs_change
+
+# =============================================================================
+# TELEGRAM BRIDGE (Phase 6.5)
+# Remote human interface via Telegram bot
+# =============================================================================
+telegram:
+  # Master switch — opt-in only
+  enabled: false
+
+  # Numeric Telegram chat IDs authorized to interact with the bot.
+  # Get yours: message @userinfobot on Telegram
+  # SECURITY: Empty list = reject all (secure default, not open dev mode)
+  allowed_chat_ids: []
+
+  # Bot token stored in env var PILOT_TELEGRAM_TOKEN (never in this file)
+
+  # Rate limiting per authorized user
+  rate_limit:
+    per_minute: 10
+    per_hour: 100
+
+  # Which PM events trigger proactive Telegram notifications
+  notifications:
+    escalations: true
+    task_complete: true
+    errors: true
+    morning_report: true
+    morning_report_time: "08:00"
+    sprint_complete: true
+    budget_alert: true
+    agent_stall: true
+
+  # Escalation approval via Telegram inline buttons
+  approval:
+    enabled: true
+    timeout_minutes: 60
+
+  # Actions requiring double-confirmation via inline keyboard
+  confirmation_required:
+    - pause_all
+    - cancel_sprint
+    - kill_agent
+    - change_priority
+
+  # Audit every Telegram interaction
+  audit_log: true
+
+  # Emergency kill switch phrase (case-insensitive)
+  kill_switch_phrase: "LOCKDOWN"
