@@ -1425,12 +1425,15 @@ class PmDaemon {
 
   /**
    * Spawn an agent in a physical terminal tab.
-   * Uses process-spawner to build the command, then opens a terminal tab.
+   * Phase 6.10: Supports multi-adapter spawning (Claude, Aider, OpenCode, Ollama, Codex).
    *
    * @param {object} task - Task object { id, title, description, labels }
+   * @param {object} [assignment] - Model assignment from scheduler
+   * @param {string} [assignment.modelId] - Model ID (e.g., 'gpt-4.5')
+   * @param {string} [assignment.adapterId] - Adapter name (e.g., 'aider')
    * @returns {Promise<{success: boolean, tabId?: string}>}
    */
-  async _spawnAgentViaTerminal(task) {
+  async _spawnAgentViaTerminal(task, assignment) {
     const agentType = this._resolveAgentType(task);
 
     // Build command string from process spawner context
@@ -1444,13 +1447,48 @@ class PmDaemon {
       ? prompt.slice(0, 16000) + '\n\n[Context truncated]'
       : prompt;
 
-    // Build claude command
-    const args = ['--agent'];
-    if (this.opts.budgetPerAgentUsd) {
-      args.push('--max-budget-usd', String(this.opts.budgetPerAgentUsd));
+    // Phase 6.10: Adapter-aware command building
+    let command;
+    let adapterName = 'claude';
+    let isClaudeNative = true;
+    const modelId = assignment?.modelId || null;
+
+    if (assignment && (assignment.modelId || assignment.adapterId)) {
+      try {
+        const { TerminalLayout } = require('../../../../lib/terminal-layout');
+        const layout = new TerminalLayout({
+          adapterRegistry: this._adapterRegistry || null,
+          projectRoot: this.projectRoot,
+          logger: this.log
+        });
+
+        const result = layout.buildSpawnCommand({
+          modelId: assignment.modelId,
+          adapterName: assignment.adapterId,
+          prompt: truncatedPrompt,
+          cwd: this.projectRoot,
+          maxTokens: this.opts.budgetPerAgentUsd
+            ? Math.round(this.opts.budgetPerAgentUsd * 100000)
+            : undefined
+        });
+
+        command = result.command;
+        adapterName = result.adapterName;
+        isClaudeNative = result.isClaudeNative;
+      } catch (e) {
+        this.log.warn('TerminalLayout unavailable, falling back to claude', { error: e.message });
+      }
     }
-    const escapedPrompt = truncatedPrompt.replace(/'/g, "'\\''");
-    const command = `claude ${args.join(' ')} -p '${escapedPrompt}'`;
+
+    // Fallback: Build default claude command
+    if (!command) {
+      const args = ['--agent'];
+      if (this.opts.budgetPerAgentUsd) {
+        args.push('--max-budget-usd', String(this.opts.budgetPerAgentUsd));
+      }
+      const escapedPrompt = truncatedPrompt.replace(/'/g, "'\\''");
+      command = `claude ${args.join(' ')} -p '${escapedPrompt}'`;
+    }
 
     // Set up environment
     const env = {
@@ -1459,10 +1497,26 @@ class PmDaemon {
       PILOT_AGENT_TYPE: agentType || 'general',
     };
 
+    if (modelId) env.PILOT_MODEL = modelId;
+    if (adapterName !== 'claude') env.PILOT_ADAPTER = adapterName;
+
     // Get respawn count if applicable
     const respawnCount = respawnTracker.getRespawnCount(task.id, this.projectRoot);
     if (respawnCount > 0) {
       env.PILOT_RESPAWN_COUNT = String(respawnCount);
+    }
+
+    // Phase 6.10: Format tab title with model name
+    let tabTitle = `pilot-${task.id}`;
+    if (modelId) {
+      try {
+        const { TerminalLayout } = require('../../../../lib/terminal-layout');
+        const layout = new TerminalLayout({
+          adapterRegistry: this._adapterRegistry || null,
+          projectRoot: this.projectRoot
+        });
+        tabTitle = layout.formatTabTitle(modelId, task.id, task.title);
+      } catch (e) { /* use default title */ }
     }
 
     try {
@@ -1470,7 +1524,7 @@ class PmDaemon {
         command,
         taskId: task.id,
         role: agentType || 'agent',
-        title: `pilot-${task.id}`,
+        title: tabTitle,
         cwd: this.projectRoot,
         env
       });
@@ -1481,6 +1535,8 @@ class PmDaemon {
         taskId: task.id,
         taskTitle: task.title,
         agentType: agentType || 'general',
+        adapterName,
+        modelId: modelId || null,
         spawnedAt: new Date().toISOString(),
         process: null,
         isTerminal: true,
@@ -1495,10 +1551,34 @@ class PmDaemon {
       this.lastSpawnTime = Date.now();
       this.state.agents_spawned++;
 
+      // Phase 6.10: Start enforcement for non-Claude agents
+      if (!isClaudeNative) {
+        try {
+          const { TerminalLayout } = require('../../../../lib/terminal-layout');
+          const layout = new TerminalLayout({
+            adapterRegistry: this._adapterRegistry || null,
+            projectRoot: this.projectRoot,
+            logger: this.log
+          });
+          layout.startEnforcement({
+            taskId: task.id,
+            sessionId: syntheticPid,
+            adapterName,
+            cwd: this.projectRoot
+          });
+        } catch (e) {
+          this.log.warn('Failed to start enforcement for non-Claude agent', {
+            adapter: adapterName, error: e.message
+          });
+        }
+      }
+
       this.log.info('Agent spawned in terminal tab', {
         tabId: tabEntry.tabId,
         task_id: task.id,
-        agent_type: agentType || 'general'
+        agent_type: agentType || 'general',
+        adapter: adapterName,
+        model: modelId || 'default'
       });
 
       return { success: true, tabId: tabEntry.tabId };
