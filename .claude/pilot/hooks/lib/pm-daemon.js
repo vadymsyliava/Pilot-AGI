@@ -1481,13 +1481,19 @@ class PmDaemon {
     }
 
     // Fallback: Build default claude command
+    // Write prompt to file to avoid escaping issues with AppleScript + shell
     if (!command) {
+      const promptDir = path.join(this.projectRoot, '.claude/pilot/state/spawn-context');
+      if (!fs.existsSync(promptDir)) fs.mkdirSync(promptDir, { recursive: true });
+      const promptFile = path.join(promptDir, `${task.id}.prompt`);
+      fs.writeFileSync(promptFile, truncatedPrompt, 'utf8');
+
       const args = ['--agent'];
       if (this.opts.budgetPerAgentUsd) {
         args.push('--max-budget-usd', String(this.opts.budgetPerAgentUsd));
       }
-      const escapedPrompt = truncatedPrompt.replace(/'/g, "'\\''");
-      command = `claude ${args.join(' ')} -p '${escapedPrompt}'`;
+      const escapedPath = promptFile.replace(/'/g, "'\\''");
+      command = `claude ${args.join(' ')} -p "$(cat '${escapedPath}')"`;
     }
 
     // Set up environment
