@@ -325,6 +325,247 @@ function scoreAllChannels(taskContext, opts = {}) {
 }
 
 // =============================================================================
+// SUMMARIZATION PIPELINE — Phase 5.7 (f6e.2)
+// =============================================================================
+
+// Entry states
+const STATE_FULL = 'full';
+const STATE_SUMMARY = 'summary';
+const STATE_ARCHIVED = 'archived';
+
+const ARCHIVE_DIR = '.claude/pilot/memory/archive';
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Load summarization config from policy.
+ *
+ * @param {object} [policy] - Pre-loaded policy object
+ * @returns {object} Summarization config
+ */
+function loadSummarizationConfig(policy) {
+  if (!policy) {
+    try {
+      const { loadPolicy } = require('./policy');
+      policy = loadPolicy();
+    } catch (e) {
+      // fall through to defaults
+    }
+  }
+
+  const defaults = {
+    full_fidelity_threshold: 0.6,
+    summary_after_days: 7,
+    archive_after_days: 30,
+    max_summary_length: 500,
+    min_entries_for_consolidation: 20
+  };
+
+  const configured = policy && policy.memory && policy.memory.summarization;
+  if (!configured) return defaults;
+
+  return {
+    full_fidelity_threshold: typeof configured.full_fidelity_threshold === 'number'
+      ? configured.full_fidelity_threshold : defaults.full_fidelity_threshold,
+    summary_after_days: typeof configured.summary_after_days === 'number'
+      ? configured.summary_after_days : defaults.summary_after_days,
+    archive_after_days: typeof configured.archive_after_days === 'number'
+      ? configured.archive_after_days : defaults.archive_after_days,
+    max_summary_length: typeof configured.max_summary_length === 'number'
+      ? configured.max_summary_length : defaults.max_summary_length,
+    min_entries_for_consolidation: typeof configured.min_entries_for_consolidation === 'number'
+      ? configured.min_entries_for_consolidation : defaults.min_entries_for_consolidation
+  };
+}
+
+/**
+ * Determine the lifecycle state an entry should transition to.
+ *
+ * @param {object} entry - Memory entry (must have relevance score and lastAccessed)
+ * @param {object} config - Summarization config
+ * @param {number} [now] - Current time ms
+ * @returns {string|null} Target state ('summary', 'archived') or null (no change)
+ */
+function getTargetState(entry, config, now) {
+  now = now || Date.now();
+  const currentState = entry._state || STATE_FULL;
+  const lastAccessed = entry.lastAccessed || entry.updatedAt || entry.ts;
+  if (!lastAccessed) return null;
+
+  const accessTime = new Date(lastAccessed).getTime();
+  if (isNaN(accessTime)) return null;
+
+  const ageDays = (now - accessTime) / MS_PER_DAY;
+  const belowThreshold = typeof entry.relevance === 'number'
+    && entry.relevance < config.full_fidelity_threshold;
+
+  if (currentState === STATE_FULL && belowThreshold && ageDays >= config.summary_after_days) {
+    return STATE_SUMMARY;
+  }
+
+  if (currentState === STATE_SUMMARY && belowThreshold && ageDays >= config.archive_after_days) {
+    return STATE_ARCHIVED;
+  }
+
+  return null;
+}
+
+/**
+ * Summarize an entry using truncation + key extraction.
+ * No LLM — deterministic extraction.
+ *
+ * @param {object} entry - Full memory entry
+ * @param {number} maxLength - Maximum summary character length
+ * @returns {object} Summarized entry
+ */
+function summarizeEntry(entry, maxLength) {
+  maxLength = maxLength || 500;
+
+  // Extract key fields to preserve
+  const keyFields = {};
+  const preserveKeys = ['id', '_channel', 'tags', 'files', 'type', 'action',
+    'decision', 'error_type', 'task_id', 'accessCount', 'linkCount'];
+
+  for (const key of preserveKeys) {
+    if (entry[key] !== undefined) {
+      keyFields[key] = entry[key];
+    }
+  }
+
+  // Build summary text from significant string fields
+  const textParts = [];
+  const textKeys = ['reason', 'description', 'summary', 'context', 'resolution', 'content'];
+  for (const key of textKeys) {
+    if (typeof entry[key] === 'string' && entry[key].length > 0) {
+      textParts.push(entry[key]);
+    }
+  }
+
+  let summaryText = textParts.join(' | ');
+  if (summaryText.length > maxLength) {
+    summaryText = summaryText.slice(0, maxLength - 3) + '...';
+  }
+
+  return {
+    ...keyFields,
+    _state: STATE_SUMMARY,
+    _summarizedAt: new Date().toISOString(),
+    _originalKeys: Object.keys(entry).filter(k => !k.startsWith('_')),
+    summary: summaryText,
+    lastAccessed: entry.lastAccessed || entry.updatedAt || entry.ts,
+    updatedAt: entry.updatedAt || entry.ts
+  };
+}
+
+/**
+ * Archive an entry — move it to the archive directory.
+ *
+ * @param {object} entry - Entry to archive (should be in 'summary' state)
+ * @param {string} channel - Source channel name
+ * @param {string} [cwd] - Working directory
+ * @returns {object} Archived entry metadata
+ */
+function archiveEntry(entry, channel, cwd) {
+  cwd = cwd || process.cwd();
+  const archiveDir = path.join(cwd, ARCHIVE_DIR, channel);
+
+  if (!fs.existsSync(archiveDir)) {
+    fs.mkdirSync(archiveDir, { recursive: true });
+  }
+
+  const archivedEntry = {
+    ...entry,
+    _state: STATE_ARCHIVED,
+    _archivedAt: new Date().toISOString(),
+    _sourceChannel: channel
+  };
+
+  // Append to channel archive file (JSONL)
+  const archivePath = path.join(archiveDir, 'entries.jsonl');
+  fs.appendFileSync(archivePath, JSON.stringify(archivedEntry) + '\n');
+
+  return {
+    id: entry.id || entry._channel,
+    channel,
+    archivedAt: archivedEntry._archivedAt,
+    archivePath
+  };
+}
+
+/**
+ * Run consolidation pass on a list of scored entries.
+ * Transitions entries through full → summary → archived based on config rules.
+ *
+ * @param {Array} scoredEntries - Entries with .relevance scores
+ * @param {string} channel - Channel name (for archiving)
+ * @param {object} [opts] - { policy, now, cwd, dryRun }
+ * @returns {{ kept: Array, summarized: Array, archived: Array }}
+ */
+function consolidate(scoredEntries, channel, opts = {}) {
+  const config = loadSummarizationConfig(opts.policy);
+  const now = opts.now || Date.now();
+  const cwd = opts.cwd || process.cwd();
+  const dryRun = opts.dryRun || false;
+
+  if (scoredEntries.length < config.min_entries_for_consolidation) {
+    return { kept: scoredEntries, summarized: [], archived: [] };
+  }
+
+  const kept = [];
+  const summarized = [];
+  const archived = [];
+
+  for (const entry of scoredEntries) {
+    const target = getTargetState(entry, config, now);
+
+    if (target === STATE_ARCHIVED) {
+      if (!dryRun) {
+        archiveEntry(entry, channel, cwd);
+      }
+      archived.push(entry);
+    } else if (target === STATE_SUMMARY) {
+      const summary = summarizeEntry(entry, config.max_summary_length);
+      summarized.push(summary);
+      kept.push(summary);
+    } else {
+      kept.push(entry);
+    }
+  }
+
+  return { kept, summarized, archived };
+}
+
+/**
+ * Read archived entries for a channel.
+ *
+ * @param {string} channel - Channel name
+ * @param {object} [opts] - { cwd, limit }
+ * @returns {Array} Archived entries
+ */
+function readArchive(channel, opts = {}) {
+  const cwd = opts.cwd || process.cwd();
+  const archivePath = path.join(cwd, ARCHIVE_DIR, channel, 'entries.jsonl');
+
+  if (!fs.existsSync(archivePath)) return [];
+
+  try {
+    const content = fs.readFileSync(archivePath, 'utf8').trim();
+    if (!content) return [];
+
+    let entries = content.split('\n').map(line => {
+      try { return JSON.parse(line); } catch (e) { return null; }
+    }).filter(Boolean);
+
+    if (opts.limit && opts.limit > 0) {
+      entries = entries.slice(-opts.limit);
+    }
+
+    return entries;
+  } catch (e) {
+    return [];
+  }
+}
+
+// =============================================================================
 // EXPORTS
 // =============================================================================
 
@@ -347,6 +588,19 @@ module.exports = {
   scoreChannel,
   scoreAllChannels,
 
+  // Summarization pipeline
+  loadSummarizationConfig,
+  getTargetState,
+  summarizeEntry,
+  archiveEntry,
+  consolidate,
+  readArchive,
+
   // Constants
-  RECENCY_HALF_LIFE_MS
+  RECENCY_HALF_LIFE_MS,
+  STATE_FULL,
+  STATE_SUMMARY,
+  STATE_ARCHIVED,
+  ARCHIVE_DIR,
+  MS_PER_DAY
 };
