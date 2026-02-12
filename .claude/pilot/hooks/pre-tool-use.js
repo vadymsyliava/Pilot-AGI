@@ -121,6 +121,7 @@ function toRelativePath(filePath) {
 /**
  * Auto-approve a plan in full autonomy mode.
  * Creates the approval file so subsequent edits proceed without blocking.
+ * Enhanced with confidence scoring (Phase 5.1) when available.
  */
 function autoApprovePlan(taskId) {
   if (!taskId) return;
@@ -133,12 +134,30 @@ function autoApprovePlan(taskId) {
       fs.mkdirSync(approvalDir, { recursive: true });
     }
 
+    // Try to load existing confidence score (set by pilot-plan skill)
+    let confidenceData = {};
+    try {
+      const scorer = require('./lib/confidence-scorer');
+      const existingScore = scorer.loadScore(taskId);
+      if (existingScore) {
+        confidenceData = {
+          confidence_score: existingScore.score,
+          confidence_tier: existingScore.tier,
+          confidence_factors: existingScore.factors,
+          risk_tags: existingScore.risk_tags
+        };
+      }
+    } catch (e) {
+      // confidence-scorer not available — proceed without
+    }
+
     const approval = {
       task_id: taskId,
       approved: true,
       approved_at: new Date().toISOString(),
       auto_approved: true,
-      reason: 'autonomy.mode=full, auto_approve_plans=true'
+      reason: 'autonomy.mode=full, auto_approve_plans=true',
+      ...confidenceData
     };
 
     fs.writeFileSync(approvalFile, JSON.stringify(approval, null, 2));
@@ -150,7 +169,9 @@ function autoApprovePlan(taskId) {
         ts: new Date().toISOString(),
         event: 'plan_auto_approved',
         task_id: taskId,
-        reason: 'autonomy_mode_full'
+        reason: 'autonomy_mode_full',
+        confidence_score: confidenceData.confidence_score || null,
+        confidence_tier: confidenceData.confidence_tier || null
       });
       fs.appendFileSync(eventStream, event + '\n');
     }
@@ -225,8 +246,22 @@ function checkEnforcement(filePath, policy) {
         // Check exception
         if (!matchesPattern(relativePath, policy.exceptions?.no_plan_required)) {
           if (!isPlanApproved(activeTask.id)) {
-            // In full autonomy mode, auto-approve plans instead of blocking
+            // Check confidence tier if scored (Phase 5.1)
+            let confidenceTier = null;
+            try {
+              const scorer = require('./lib/confidence-scorer');
+              const existingScore = scorer.loadScore(activeTask.id);
+              if (existingScore) confidenceTier = existingScore.tier;
+            } catch (e) { /* scorer not available */ }
+
+            // In full autonomy mode, auto-approve unless confidence tier is 'require_approve'
             if (policy.autonomy?.mode === 'full' && policy.autonomy?.auto_approve_plans) {
+              if (confidenceTier === 'require_approve') {
+                return {
+                  allowed: false,
+                  reason: `Plan requires human approval (confidence tier: require).\n\nTask: [${activeTask.id}] ${activeTask.title}\nFile: ${relativePath}\n\nRun /pilot-approve to manually approve.`
+                };
+              }
               autoApprovePlan(activeTask.id);
             } else {
               return {
