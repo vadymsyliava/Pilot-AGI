@@ -1,8 +1,10 @@
 # M6: Physical Terminal Control & Remote Human Interface
 
 **Task**: Pilot AGI-sny
-**Status**: Design Spec
+**Status**: Design Spec (Final)
 **Milestone**: 6
+**Target**: v5.0.0
+**Depends on**: M5 (Autonomous Intelligence) — specifically Phase 5.0 (Agent-Connect) and Phase 5.9 (Notifications)
 
 ## Problem Statement
 
@@ -66,6 +68,47 @@ PROPOSED:
 5. **Ground truth from terminals** — Real tab count from AppleScript/iTerm2 is authoritative, not state files.
 6. **Graceful degradation** — If terminal control fails, fall back to existing `claude -p` headless mode.
 7. **Security by default** — Telegram bot only accepts messages from configured user ID; no raw shell passthrough.
+
+## Prerequisites & Platform Requirements
+
+1. **macOS only** — AppleScript and iTerm2 are macOS-exclusive. Linux/Windows users fall back to existing headless mode (`claude -p`).
+2. **Accessibility permissions** — AppleScript keystroke simulation via System Events requires granting Accessibility access: System Settings > Privacy & Security > Accessibility. Without this, `sendToTab()` will fail silently.
+3. **Automation permissions** — macOS will prompt to allow the calling process (Node.js / Terminal) to control other apps. Must be approved once per calling app.
+4. **iTerm2 Python API (optional)** — Requires: (a) iTerm2 installed, (b) "Enable Python API" checkbox in Preferences > General > Magic, (c) `pip3 install iterm2` (Python 3.6+). First external connection triggers a consent dialog in iTerm2.
+5. **Telegram bot (optional)** — Requires: (a) Bot token from @BotFather, (b) Your numeric chat ID configured in policy.yaml. Long polling mode — no public server or domain needed.
+
+## Non-Goals (Out of Scope for M6)
+
+- **Linux/Windows terminal control** — M6 targets macOS only. Cross-platform terminal automation is a future milestone.
+- **Live terminal streaming via Telegram** — Telegram is for commands and status, not interactive terminal sessions. Message latency (100ms-2s) and 4096-char message limits make streaming impractical.
+- **Raw shell passthrough from Telegram** — All Telegram input is parsed as intent, never forwarded as raw commands. Security invariant.
+- **Replacing headless mode** — Terminal control is additive. `claude -p` headless spawning remains the fallback for CI, SSH, and non-macOS environments.
+- **Multi-user Telegram access** — M6 supports a single operator (one chat ID allowlist). Team-based Telegram control is future work.
+- **Non-macOS terminal emulators** — No Alacritty, Kitty, or Windows Terminal support. AppleScript only speaks to apps with AppleScript dictionaries.
+
+## Technical Notes
+
+### AppleScript Limitations
+- **No command completion detection** — `do script` returns immediately. PM must poll `contents` or check process list to know when a command finishes.
+- **Contents is a raw dump** — Returns ALL scrollback text as a single string. No line-by-line access, no cursor position. Must diff strings to detect new output.
+- **Frontmost requirement** — System Events keystroke simulation requires the target app to be activated (frontmost). This briefly steals focus from the user.
+- **No native new-tab command** — Terminal.app's dictionary lacks a new-tab verb. Workaround: simulate Cmd+T via System Events.
+- **No split pane support** — Terminal.app doesn't expose pane splitting through AppleScript.
+
+### iTerm2 Python API Advantages
+- **Structured screen access** — `ScreenContents` provides line-by-line access with attributes, not raw text.
+- **Real-time streaming** — `ScreenStreamer` provides push-based output monitoring (no polling).
+- **Stable session UUIDs** — No fragile title matching; sessions identified by persistent UUID.
+- **Trigger system** — Regex → action mappings enable zero-latency auto-approve without PM polling.
+- **Split panes** — Full programmatic pane splitting for multi-agent layouts.
+- **Python-only** — No official Node.js binding. Node.js must shell out to a Python bridge script.
+
+### Telegram Constraints
+- **Message size limit** — 4096 characters per message. Longer output must be split or sent as files (up to 50MB).
+- **Callback data limit** — Inline keyboard button data limited to 64 bytes.
+- **Rate limits** — ~1 message/second per chat, 20 messages/minute per group. HTTP 429 with `retry_after` on exceed.
+- **Cloud dependency** — All messages route through Telegram servers. If Telegram is down, bot is unreachable.
+- **Security** — Anyone can message the bot by username. Chat ID allowlist is mandatory.
 
 ## Components
 
@@ -481,16 +524,17 @@ telegram:
 
 ## Phases
 
-### Phase 6.1: AppleScript Bridge Foundation
+### Phase 6.1: AppleScript Bridge Foundation (~5 tasks)
 - `applescript-bridge.js` — open/close/send/read/list/detect for Terminal.app
 - Tab identification via custom titles (`pilot-<role>-<taskId>`)
 - ANSI code stripping for clean output reading
 - State detection regex (permission prompt, idle, working, stalled)
 - Race condition handling (wait for idle before sending input)
-- Unit tests for all operations
+- Accessibility permission detection and user guidance
+- Unit tests for all operations (mocked osascript)
 - **Standalone module — no PM integration yet**
 
-### Phase 6.2: iTerm2 Premium Provider
+### Phase 6.2: iTerm2 Premium Provider (~4 tasks)
 - `iterm2-bridge.py` using iTerm2 Python API
 - Stable session UUIDs (no title-matching fragility)
 - Trigger-based auto-approve (zero latency, no polling)
@@ -498,14 +542,14 @@ telegram:
 - Badge support for visual agent identification
 - Auto-detection: iTerm2 running → Python API, else → AppleScript
 
-### Phase 6.3: Terminal Controller (Unified Interface)
+### Phase 6.3: Terminal Controller (Unified Interface) (~4 tasks)
 - `terminal-controller.js` abstracting both providers
 - Provider auto-detection on startup
 - Registry: tabId → { role, taskId, state }
 - Sync loop: reconcile registry with real terminal tabs
 - High-level ops: scaleAgents, autoApprove, checkpointRespawn
 
-### Phase 6.4: PM Daemon Terminal Integration
+### Phase 6.4: PM Daemon Terminal Integration (~5 tasks)
 - `_terminalScanLoop()` in pm-daemon.js
 - Terminal-based spawning alongside existing headless mode
 - Ground truth reconciliation (real tabs vs state files)
@@ -513,7 +557,7 @@ telegram:
 - Stall detection → restart or escalate
 - Dynamic scaling based on queue depth
 
-### Phase 6.5: Telegram Bridge
+### Phase 6.5: Telegram Bridge (~5 tasks)
 - Telegram bot (BotFather token + chat ID)
 - `telegram-bridge.js` as launchd daemon
 - Inbound: message → intent parse → PM inbox
@@ -521,14 +565,14 @@ telegram:
 - Security: chat ID allowlist, rate limiting, audit log
 - Kill switch: "LOCKDOWN"
 
-### Phase 6.6: Telegram Approval & Conversations
+### Phase 6.6: Telegram Approval & Conversations (~4 tasks)
 - Escalation → Telegram with inline approve/reject buttons
 - Timeout escalation if no response in N minutes
 - Morning report + sprint progress delivery
 - NL queries: "what's the status?" → PM answers
 - Idea capture: "add dark mode" → PM creates bd task
 
-### Phase 6.7: End-to-End Integration & Testing
+### Phase 6.7: End-to-End Integration & Testing (~5 tasks)
 - Full flow: Telegram → PM → terminals → agents → Telegram report
 - Failover: iTerm2 → AppleScript → headless
 - Security: unauthorized blocked, rate limits enforced

@@ -588,6 +588,7 @@ Wave 5: 6.7 (needs all)
 - [ ] Telegram message → PM processes within 10s
 - [ ] Escalation → Telegram with approve/reject buttons
 - [ ] Overnight: Telegram at 8pm → morning report at 8am, zero intervention
+- [ ] Unauthorized Telegram user blocked + audit logged
 - [ ] Full sprint (20 tasks) with PM managing all terminals autonomously
 - [ ] Fallback chain: iTerm2 → AppleScript → headless on failure
 
