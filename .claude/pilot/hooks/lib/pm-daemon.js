@@ -1682,8 +1682,9 @@ Options:
 
   const once = args.includes('--once');
   const dryRun = args.includes('--dry-run');
+  const rootIdx = args.indexOf('--root');
   const projectRoot = args.find(a => a.startsWith('--root='))?.split('=')[1]
-    || args[args.indexOf('--root') + 1]
+    || (rootIdx >= 0 ? args[rootIdx + 1] : null)
     || process.cwd();
 
   // --status: show full daemon state (replaces /pilot-pm session need)
