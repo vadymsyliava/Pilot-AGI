@@ -65,6 +65,7 @@ class PmLoop {
     this.lastProgressScan = 0;
     this.lastOvernightScan = 0;
     this.lastApprovalScan = 0;
+    this.lastNotificationDigestScan = 0;
     this.actionQueue = [];  // Used by pm-queue.js for persistence
     this.opts = {
       healthScanIntervalMs: opts.healthScanIntervalMs || HEALTH_SCAN_INTERVAL_MS,
@@ -215,6 +216,13 @@ class PmLoop {
       this.lastApprovalScan = now;
       const approvalResults = this._approvalScan();
       results.push(...approvalResults);
+    }
+
+    // Notification digest flush (Phase 5.9) — batch info-level notifications
+    if (now - this.lastNotificationDigestScan >= 60000) { // check every 60s
+      this.lastNotificationDigestScan = now;
+      const digestResults = this._notificationDigestScan();
+      results.push(...digestResults);
     }
 
     return results;
@@ -1182,6 +1190,29 @@ class PmLoop {
       this.logAction('analytics_scan_error', { error: e.message });
     }
 
+    return results;
+  }
+
+  /**
+   * Notification digest scan (Phase 5.9)
+   * Flushes batched info-level notifications when interval elapses.
+   */
+  _notificationDigestScan() {
+    const results = [];
+    try {
+      const { getRouter } = require('./notification-router');
+      const router = getRouter(this.projectRoot);
+      if (router.shouldFlushDigest()) {
+        router.flushDigest().then(({ sent }) => {
+          if (sent > 0) {
+            this.logAction('notification_digest_flushed', { sent });
+          }
+        }).catch(() => { /* best effort */ });
+        results.push({ action: 'notification_digest_flush', result: { triggered: true } });
+      }
+    } catch {
+      // notification-router not available — no-op
+    }
     return results;
   }
 
