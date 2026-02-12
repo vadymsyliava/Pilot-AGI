@@ -846,3 +846,24 @@ exceptions:
     - "*.pem"
     - "*.key"
     - "credentials.*"
+
+# =============================================================================
+# TEST GENERATION (Phase 5.3)
+# Auto-generate tests after code changes during /pilot-exec
+# =============================================================================
+test_generation:
+  # Enable/disable autonomous test generation
+  enabled: false
+
+  # Run coverage gate after generating tests
+  coverage_gate: false
+
+  # Minimum coverage percentage for changed lines (0-100)
+  min_coverage: 0
+
+  # Change types to skip (no tests generated)
+  skip_types:
+    - config_change
+    - deleted_file
+    - test_change
+    - docs_change
