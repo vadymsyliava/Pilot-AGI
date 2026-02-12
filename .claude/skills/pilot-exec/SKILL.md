@@ -79,6 +79,28 @@ Options:
 3. Stop and reassess plan
 ```
 
+## Step 4b: Auto-generate tests (if enabled)
+
+After verification passes and the step modified source code files, check if auto-test generation is enabled:
+
+```bash
+node -e "
+const { loadConfig, runPipeline } = require('./.claude/pilot/hooks/lib/test-gen-integration');
+const config = loadConfig();
+if (!config.enabled) { console.log(JSON.stringify({ skipped: true, reason: 'disabled' })); process.exit(0); }
+const result = runPipeline({ staged: true });
+console.log(JSON.stringify(result));
+"
+```
+
+If `test_generation.enabled` is `true` in policy.yaml:
+- The pipeline analyzes staged changes, detects test framework, generates tests via claude -p
+- Generated test files are written to the test directory and should be included in the commit
+- If `test_generation.coverage_gate` is `true`, generated tests are run and coverage is checked
+
+If the pipeline produces test files, include them in the step's commit.
+If the coverage gate fails, report the failure but don't block the step.
+
 ## Step 5: Update session capsule
 
 Append to `runs/YYYY-MM-DD.md`:
