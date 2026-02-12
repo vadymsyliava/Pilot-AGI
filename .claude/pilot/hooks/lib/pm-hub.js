@@ -32,12 +32,20 @@ const EventEmitter = require('events');
 // ============================================================================
 
 let _session = null;
+let _messaging = null;
 
 function getSession() {
   if (!_session) {
     try { _session = require('./session'); } catch (e) { _session = null; }
   }
   return _session;
+}
+
+function getMessaging() {
+  if (!_messaging) {
+    try { _messaging = require('./messaging'); } catch (e) { _messaging = null; }
+  }
+  return _messaging;
 }
 
 // ============================================================================
@@ -51,6 +59,12 @@ const RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
 const RATE_LIMIT_MAX = 120; // max requests per window per IP
 const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MAX_PENDING_MESSAGES = 100; // per agent
+
+// Audit: event types that get written to file bus as audit trail
+const AUDIT_EVENT_TYPES = [
+  'task_claimed', 'task_complete', 'agent_registered',
+  'agent_disconnected', 'agent_reaped', 'ask_pm'
+];
 
 // ============================================================================
 // WEBSOCKET FRAME HELPERS (zero-dependency, RFC 6455)
@@ -295,6 +309,9 @@ class PmHub extends EventEmitter {
         this.listening = true;
         this._writePortFile();
 
+        // Reconcile any events from file bus that happened while hub was down
+        try { this._reconcileFromFileBus(); } catch (e) { /* best effort */ }
+
         // Periodic cleanup: stale agents + rate limiter
         this._cleanupInterval = setInterval(() => {
           this._reapStaleAgents();
@@ -478,6 +495,7 @@ class PmHub extends EventEmitter {
 
         this.wsConnections.set(sid, socket);
         this.emit('agent_registered', sid, msg);
+        this._auditToFileBus('agent_registered', { sessionId: sid, role: msg.role, via: 'ws' });
 
         // Send welcome
         this._wsSend(socket, {
@@ -512,6 +530,7 @@ class PmHub extends EventEmitter {
         if (!sid) return currentSessionId;
 
         this.emit('task_complete', sid, msg.taskId, msg.result || {});
+        this._auditToFileBus('task_complete', { sessionId: sid, taskId: msg.taskId });
 
         const agent = this.agents.get(sid);
         if (agent) agent.taskId = null;
@@ -575,6 +594,7 @@ class PmHub extends EventEmitter {
   _wsDisconnect(sessionId) {
     this.wsConnections.delete(sessionId);
     this.emit('agent_disconnected', sessionId);
+    this._auditToFileBus('agent_disconnected', { sessionId });
   }
 
   // ==========================================================================
@@ -773,6 +793,7 @@ class PmHub extends EventEmitter {
       });
 
       this.emit('agent_registered', body.sessionId, body);
+      this._auditToFileBus('agent_registered', { sessionId: body.sessionId, role: body.role, via: 'http' });
 
       res.writeHead(200);
       res.end(JSON.stringify({
@@ -893,6 +914,7 @@ class PmHub extends EventEmitter {
         if (agent) agent.taskId = taskId;
 
         this.emit('task_claimed', body.sessionId, taskId);
+        this._auditToFileBus('task_claimed', { sessionId: body.sessionId, taskId });
 
         // Broadcast to other agents
         this.broadcast({
@@ -918,6 +940,7 @@ class PmHub extends EventEmitter {
       }
 
       this.emit('task_complete', body.sessionId, taskId, body.result || {});
+      this._auditToFileBus('task_complete', { sessionId: body.sessionId, taskId });
 
       const agent = this.agents.get(body.sessionId);
       if (agent) agent.taskId = null;
@@ -972,8 +995,105 @@ class PmHub extends EventEmitter {
           this.wsConnections.delete(sessionId);
         }
         this.emit('agent_reaped', sessionId);
+        this._auditToFileBus('agent_reaped', { sessionId });
       }
     }
+  }
+
+  // ==========================================================================
+  // FILE BUS AUDIT TRAIL
+  // ==========================================================================
+
+  /**
+   * Write important events to bus.jsonl as audit trail, regardless of WS.
+   * Ensures events are persisted even if PM Hub crashes or restarts.
+   *
+   * @param {string} eventType — event type (task_claimed, task_complete, etc.)
+   * @param {object} data — event data
+   */
+  _auditToFileBus(eventType, data) {
+    const messaging = getMessaging();
+    if (!messaging) return;
+
+    try {
+      messaging.sendMessage({
+        type: 'notify',
+        from: 'pm-hub',
+        to: '*',
+        topic: `hub.${eventType}`,
+        priority: 'fyi',
+        payload: { action: `hub.${eventType}`, data }
+      });
+    } catch (e) { /* best effort — don't break hub operation */ }
+  }
+
+  /**
+   * Reconcile events from file bus that happened while PM Hub was down.
+   * Called once during start() after server is listening.
+   *
+   * Reads bus.jsonl for ask_pm messages that arrived while hub was offline,
+   * and any task_complete/task_claimed events from agents using file bus fallback.
+   *
+   * @returns {{ reconciled: number }}
+   */
+  _reconcileFromFileBus() {
+    const messaging = getMessaging();
+    if (!messaging) return { reconciled: 0 };
+
+    let reconciled = 0;
+
+    try {
+      // Use session ID 'pm' since agents address messages to='pm'
+      const PM_SESSION = 'pm';
+
+      // On first start, initialize cursor at byte_offset=0 to read all pending messages
+      const cursor0 = messaging.loadCursor(PM_SESSION);
+      if (!cursor0) {
+        messaging.writeCursor(PM_SESSION, {
+          session_id: PM_SESSION,
+          last_seq: -1,
+          byte_offset: 0,
+          processed_ids: []
+        });
+      }
+
+      // Read as 'pm' session — only unprocessed messages for PM
+      const { messages, cursor } = messaging.readMessages(PM_SESSION, {
+        types: ['ask_pm', 'notify', 'request'],
+        role: 'pm'
+      });
+
+      for (const msg of messages) {
+        // Handle ask_pm messages that came via file bus
+        if (msg.type === 'ask_pm' && msg.payload && msg.payload.question && this.brain) {
+          const question = msg.payload.question;
+          const ctx = msg.payload.context || {};
+          try {
+            const result = this.brain.ask(msg.from, question, ctx);
+            // Send response back via file bus (agent may not be on WS)
+            messaging.sendPmResponse(msg.id, msg.from, result);
+            reconciled++;
+          } catch (e) { /* skip failed brain calls */ }
+        }
+
+        // Handle task_complete notifications from file bus
+        if (msg.topic === 'task.completed' && msg.payload && msg.payload.data) {
+          const taskId = msg.payload.data.task_id;
+          const completedBy = msg.payload.data.completed_by;
+          if (taskId && completedBy) {
+            this.emit('task_complete', completedBy, taskId, msg.payload.data.result || {});
+            reconciled++;
+          }
+        }
+      }
+
+      // Acknowledge processed messages
+      if (messages.length > 0) {
+        messaging.acknowledgeMessages(PM_SESSION, cursor, messages.map(m => m.id));
+      }
+    } catch (e) { /* best effort */ }
+
+    return { reconciled };
   }
 
   _writePortFile() {
@@ -1007,6 +1127,7 @@ module.exports = {
   HEARTBEAT_STALE_MS,
   RATE_LIMIT_WINDOW_MS,
   RATE_LIMIT_MAX,
+  AUDIT_EVENT_TYPES,
   // Exported for testing
   wsEncodeText,
   wsParseFrames,
