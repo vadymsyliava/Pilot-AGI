@@ -45,7 +45,25 @@ ls work/plans/{bd-id}*.md 2>/dev/null || echo "no plan"
 
 If no plan exists, suggest creating one first but DON'T block - user may have a mental plan or plan was communicated verbally.
 
-## Step 3: Create approval state
+## Step 3: Load confidence score (if available)
+
+```bash
+node -e "
+try {
+  const scorer = require('./.claude/pilot/hooks/lib/confidence-scorer');
+  const score = scorer.loadScore('{task-id}');
+  if (score) console.log(JSON.stringify(score));
+  else console.log('null');
+} catch(e) { console.log('null'); }
+"
+```
+
+If a score exists, display it:
+```
+Confidence: {score} ({tier}) — {reasoning}
+```
+
+## Step 4: Create approval state
 
 Create directory if needed:
 ```bash
@@ -59,11 +77,15 @@ Create approval file at `.claude/pilot/state/approved-plans/{task-id}.json`:
   "task_id": "{bd-xxxx}",
   "approved": true,
   "approved_at": "{ISO timestamp}",
-  "plan_file": "{path to plan file if exists, null otherwise}"
+  "plan_file": "{path to plan file if exists, null otherwise}",
+  "confidence_score": "{score or null}",
+  "confidence_tier": "{tier or null}",
+  "risk_tags": ["{tags or empty}"],
+  "approval_method": "manual"
 }
 ```
 
-## Step 4: Update session capsule
+## Step 5: Update session capsule
 
 Append to `runs/YYYY-MM-DD.md`:
 
@@ -74,7 +96,7 @@ Append to `runs/YYYY-MM-DD.md`:
 - Ready for: /pilot-exec
 ```
 
-## Step 5: Report
+## Step 6: Report
 
 ```
 ╔══════════════════════════════════════════════════════════════╗
