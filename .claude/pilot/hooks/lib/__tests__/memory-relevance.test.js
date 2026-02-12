@@ -1,28 +1,30 @@
 /**
- * Tests for Memory Relevance Scorer — Phase 5.7
+ * Tests for Memory Relevance Scorer & Consolidation — Phase 5.7
  *
  * Test groups:
- *  1. scoreRecency
- *  2. scoreFrequency
- *  3. scoreSimilarity
- *  4. scoreLinks
- *  5. scoreEntry (composite)
- *  6. scoreEntries (batch)
- *  7. loadWeights (from policy)
- *  8. scoreChannel
- *  9. scoreAllChannels
- * 10. Summarization config
- * 11. getTargetState (lifecycle transitions)
- * 12. summarizeEntry
- * 13. archiveEntry
- * 14. consolidate
- * 15. readArchive
- * 16. Budget config
- * 17. checkBudget
- * 18. evict
- * 19. getChannelMemoryStats
- * 20. getAllMemoryStats
- * 21. Tiered loading (getRelevantMemory)
+ *   1. loadWeights — defaults, from policy, partial policy, missing policy
+ *   2. scoreRecency — just updated, 7 days, 14 days, null/invalid input
+ *   3. scoreFrequency — zero, max, log scaling, null inputs
+ *   4. scoreSimilarity — tag/file overlap, both, no overlap, empty, case insensitive
+ *   5. scoreLinks — zero, max, above max capped, null
+ *   6. scoreEntry — composite, weights, fallback to updatedAt
+ *   7. scoreEntries — batch, sorting, limit
+ *   8. scoreChannel — reads file, missing channel, object data
+ *   9. scoreAllChannels — multiple channels, sorting, limit
+ *  10. loadSummarizationConfig — defaults, from policy
+ *  11. getTargetState — full→summary, summary→archived, above threshold, no timestamp
+ *  12. summarizeEntry — key fields, truncation, _state
+ *  13. archiveEntry — creates dir, writes JSONL, appends
+ *  14. consolidate — full pipeline, below min, dryRun
+ *  15. readArchive — reads JSONL, missing file, limit
+ *  16. loadBudgetConfig — defaults, from policy
+ *  17. loadEvictionConfig — defaults, from policy
+ *  18. getChannelBudget — default, overridden
+ *  19. checkBudget — under, trigger, over
+ *  20. evict — keeps top, archives evicted, dryRun
+ *  21. getChannelMemoryStats — entry count, utilization, archive count
+ *  22. getAllMemoryStats — multiple channels, totals
+ *  23. getRelevantMemory — tiered loading from memory.js
  *
  * Run: node .claude/pilot/hooks/lib/__tests__/memory-relevance.test.js
  */
@@ -39,7 +41,7 @@ const assert = require('assert');
 let testDir;
 let originalCwd;
 
-function setup(policyOverrides = '') {
+function setup(policyExtra = '') {
   testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-relevance-test-'));
   fs.mkdirSync(path.join(testDir, '.claude/pilot/memory/channels'), { recursive: true });
   fs.mkdirSync(path.join(testDir, '.claude/pilot/memory/archive'), { recursive: true });
@@ -54,8 +56,8 @@ memory:
   budgets:
     default: 100
     overrides:
-      design-tokens: 200
-      working-context: 50
+      decisions: 50
+      patterns: 150
   summarization:
     full_fidelity_threshold: 0.6
     summary_after_days: 7
@@ -73,7 +75,7 @@ memory:
     strategy: lru
     trigger_pct: 90
     target_pct: 75
-${policyOverrides}
+${policyExtra}
 `;
   fs.mkdirSync(path.join(testDir, '.claude/pilot'), { recursive: true });
   fs.writeFileSync(path.join(testDir, '.claude/pilot/policy.yaml'), policyContent);
@@ -87,943 +89,1459 @@ function teardown() {
   fs.rmSync(testDir, { recursive: true, force: true });
 }
 
-function freshModule(modPath) {
-  // Clear require cache for the module and its dependencies
-  const resolved = require.resolve(modPath);
-  const keysToDelete = Object.keys(require.cache).filter(k =>
-    k.includes('memory-relevance') || k.includes('policy') || k.includes('memory.js')
-  );
-  keysToDelete.forEach(k => delete require.cache[k]);
-  return require(resolved);
+function freshModule(modName) {
+  const modPaths = [
+    '../memory-relevance',
+    '../memory',
+    '../policy',
+    '../session',
+    '../messaging'
+  ];
+  for (const modPath of modPaths) {
+    try {
+      const resolved = require.resolve(modPath);
+      delete require.cache[resolved];
+    } catch (e) { /* not loaded */ }
+  }
+  if (modName === 'memory') return require('../memory');
+  return require('../memory-relevance');
 }
 
-function writeChannel(name, data) {
-  const channelPath = path.join(testDir, '.claude/pilot/memory/channels', `${name}.json`);
-  fs.writeFileSync(channelPath, JSON.stringify({
-    channel: name,
+/**
+ * Write a channel JSON file in the expected envelope format.
+ */
+function writeChannel(channel, entries, publishedAt) {
+  publishedAt = publishedAt || '2026-01-15T00:00:00.000Z';
+  const envelope = {
+    channel,
     version: 1,
     publishedBy: 'test',
-    publishedAt: new Date().toISOString(),
-    data
-  }));
+    publishedAt,
+    data: entries
+  };
+  const channelPath = path.join(testDir, '.claude/pilot/memory/channels', `${channel}.json`);
+  fs.writeFileSync(channelPath, JSON.stringify(envelope));
 }
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
+/**
+ * Write a channel JSON file with object data (non-array).
+ */
+function writeChannelObject(channel, dataObj, publishedAt) {
+  publishedAt = publishedAt || '2026-01-15T00:00:00.000Z';
+  const envelope = {
+    channel,
+    version: 1,
+    publishedBy: 'test',
+    publishedAt,
+    data: dataObj
+  };
+  const channelPath = path.join(testDir, '.claude/pilot/memory/channels', `${channel}.json`);
+  fs.writeFileSync(channelPath, JSON.stringify(envelope));
+}
+
+// Fixed timestamps for deterministic tests
+const NOW = new Date('2026-02-01T12:00:00.000Z').getTime();
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+const SEVEN_DAYS_MS = 7 * ONE_DAY_MS;
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
 let passed = 0;
 let failed = 0;
 
 function test(name, fn) {
+  if (!test._customSetup) {
+    setup();
+  }
   try {
     fn();
     passed++;
-    process.stdout.write('.');
+    console.log(`  PASS: ${name}`);
   } catch (e) {
     failed++;
-    console.error(`\n  FAIL: ${name}`);
+    console.error(`  FAIL: ${name}`);
     console.error(`    ${e.message}`);
+  } finally {
+    teardown();
+    test._customSetup = false;
   }
 }
 
-// ============================================================================
-// 1. scoreRecency
-// ============================================================================
+function testWithPolicy(name, policyExtra, fn) {
+  setup(policyExtra);
+  test._customSetup = true;
+  test(name, fn);
+}
 
-console.log('\n=== 1. scoreRecency ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
-  const now = Date.now();
-
-  test('returns ~1.0 for just-now entry', () => {
-    const score = mr.scoreRecency(new Date(now).toISOString(), now);
-    assert(score > 0.99, `Expected ~1.0 got ${score}`);
-  });
-
-  test('returns ~0.5 for 7-day-old entry (half-life)', () => {
-    const score = mr.scoreRecency(new Date(now - 7 * MS_PER_DAY).toISOString(), now);
-    assert(Math.abs(score - 0.5) < 0.01, `Expected ~0.5 got ${score}`);
-  });
-
-  test('returns ~0.25 for 14-day-old entry', () => {
-    const score = mr.scoreRecency(new Date(now - 14 * MS_PER_DAY).toISOString(), now);
-    assert(Math.abs(score - 0.25) < 0.01, `Expected ~0.25 got ${score}`);
-  });
-
-  test('returns 0 for null input', () => {
-    assert.strictEqual(mr.scoreRecency(null, now), 0);
-  });
-
-  test('returns 0 for invalid date', () => {
-    assert.strictEqual(mr.scoreRecency('not-a-date', now), 0);
-  });
-
-  test('handles Date objects', () => {
-    const score = mr.scoreRecency(new Date(now), now);
-    assert(score > 0.99);
-  });
-
-  test('decreases monotonically with age', () => {
-    const s1 = mr.scoreRecency(new Date(now - 1 * MS_PER_DAY).toISOString(), now);
-    const s2 = mr.scoreRecency(new Date(now - 5 * MS_PER_DAY).toISOString(), now);
-    const s3 = mr.scoreRecency(new Date(now - 30 * MS_PER_DAY).toISOString(), now);
-    assert(s1 > s2 && s2 > s3, `Expected monotonic decrease: ${s1} > ${s2} > ${s3}`);
-  });
-} finally { teardown(); }
+console.log('\nMemory Relevance Tests\n');
 
 // ============================================================================
-// 2. scoreFrequency
+// 1. loadWeights
 // ============================================================================
 
-console.log('\n=== 2. scoreFrequency ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
+console.log('--- loadWeights ---');
 
-  test('returns 1.0 for max access count', () => {
-    assert.strictEqual(mr.scoreFrequency(10, 10), 1.0);
-  });
+test('loadWeights returns defaults when no memory section in policy', () => {
+  fs.writeFileSync(path.join(testDir, '.claude/pilot/policy.yaml'), 'approval:\n  auto: 0.85\n');
+  const mr = freshModule();
+  const w = mr.loadWeights();
+  assert.strictEqual(w.recency, 0.30);
+  assert.strictEqual(w.frequency, 0.25);
+  assert.strictEqual(w.similarity, 0.25);
+  assert.strictEqual(w.links, 0.20);
+});
 
-  test('returns 0 for zero access count', () => {
-    assert.strictEqual(mr.scoreFrequency(0, 10), 0);
-  });
+test('loadWeights reads from policy.yaml', () => {
+  const mr = freshModule();
+  const w = mr.loadWeights();
+  assert.strictEqual(w.recency, 0.30);
+  assert.strictEqual(w.frequency, 0.25);
+  assert.strictEqual(w.similarity, 0.25);
+  assert.strictEqual(w.links, 0.20);
+});
 
-  test('returns 0 for null access count', () => {
-    assert.strictEqual(mr.scoreFrequency(null, 10), 0);
-  });
-
-  test('returns 0 for zero max', () => {
-    assert.strictEqual(mr.scoreFrequency(5, 0), 0);
-  });
-
-  test('returns value between 0 and 1 for partial access', () => {
-    const score = mr.scoreFrequency(5, 10);
-    assert(score > 0 && score < 1, `Expected 0 < ${score} < 1`);
-  });
-
-  test('uses logarithmic scaling', () => {
-    const s1 = mr.scoreFrequency(1, 100);
-    const s10 = mr.scoreFrequency(10, 100);
-    const s50 = mr.scoreFrequency(50, 100);
-    // Log scaling means the gap narrows for higher values
-    const gap1 = s10 - s1;
-    const gap2 = s50 - s10;
-    assert(gap1 > gap2, 'Expected diminishing returns with log scaling');
-  });
-} finally { teardown(); }
-
-// ============================================================================
-// 3. scoreSimilarity
-// ============================================================================
-
-console.log('\n=== 3. scoreSimilarity ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
-
-  test('returns 1.0 for identical tags and files', () => {
-    const entry = { tags: ['a', 'b'], files: ['x.js'] };
-    const task = { tags: ['a', 'b'], files: ['x.js'] };
-    assert.strictEqual(mr.scoreSimilarity(entry, task), 1.0);
-  });
-
-  test('returns 0 for no overlap', () => {
-    const entry = { tags: ['a'], files: ['x.js'] };
-    const task = { tags: ['b'], files: ['y.js'] };
-    assert.strictEqual(mr.scoreSimilarity(entry, task), 0);
-  });
-
-  test('returns partial score for partial overlap', () => {
-    const entry = { tags: ['a', 'b', 'c'], files: [] };
-    const task = { tags: ['b', 'c', 'd'], files: [] };
-    const score = mr.scoreSimilarity(entry, task);
-    // Jaccard: intersection=2 / union=4 = 0.5
-    assert.strictEqual(score, 0.5);
-  });
-
-  test('handles empty tags', () => {
-    const score = mr.scoreSimilarity({ tags: [], files: [] }, { tags: [], files: [] });
-    assert.strictEqual(score, 0);
-  });
-
-  test('handles null inputs', () => {
-    assert.strictEqual(mr.scoreSimilarity(null, { tags: ['a'] }), 0);
-    assert.strictEqual(mr.scoreSimilarity({ tags: ['a'] }, null), 0);
-  });
-
-  test('is case-insensitive', () => {
-    const entry = { tags: ['Memory'], files: ['Hooks/Lib/memory.js'] };
-    const task = { tags: ['memory'], files: ['hooks/lib/memory.js'] };
-    assert.strictEqual(mr.scoreSimilarity(entry, task), 1.0);
-  });
-
-  test('weights tags and files equally when both exist', () => {
-    const entry = { tags: ['a'], files: ['x.js', 'y.js'] };
-    const task = { tags: ['a'], files: ['z.js'] };
-    // tags: 1/1 = 1.0, files: 0/3 = 0, average = 0.5
-    const score = mr.scoreSimilarity(entry, task);
-    assert.strictEqual(score, 0.5);
-  });
-} finally { teardown(); }
-
-// ============================================================================
-// 4. scoreLinks
-// ============================================================================
-
-console.log('\n=== 4. scoreLinks ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
-
-  test('returns 1.0 for max links', () => {
-    assert.strictEqual(mr.scoreLinks(5, 5), 1.0);
-  });
-
-  test('returns 0 for zero links', () => {
-    assert.strictEqual(mr.scoreLinks(0, 5), 0);
-  });
-
-  test('returns proportional score', () => {
-    assert.strictEqual(mr.scoreLinks(3, 6), 0.5);
-  });
-
-  test('caps at 1.0', () => {
-    assert(mr.scoreLinks(10, 5) <= 1.0);
-  });
-} finally { teardown(); }
-
-// ============================================================================
-// 5. scoreEntry (composite)
-// ============================================================================
-
-console.log('\n=== 5. scoreEntry ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
-  const now = Date.now();
-
-  test('returns score between 0 and 1', () => {
-    const result = mr.scoreEntry(
-      { lastAccessed: new Date(now).toISOString(), accessCount: 5, tags: ['test'], linkCount: 2 },
-      { taskContext: { tags: ['test'] }, maxAccessCount: 10, maxLinkCount: 5, now }
-    );
-    assert(result.score >= 0 && result.score <= 1, `Score ${result.score} out of range`);
-  });
-
-  test('includes breakdown', () => {
-    const result = mr.scoreEntry(
-      { lastAccessed: new Date(now).toISOString(), accessCount: 5 },
-      { taskContext: {}, maxAccessCount: 10, maxLinkCount: 5, now }
-    );
-    assert('recency' in result.breakdown);
-    assert('frequency' in result.breakdown);
-    assert('similarity' in result.breakdown);
-    assert('links' in result.breakdown);
-  });
-
-  test('returns higher score for recent+relevant entries', () => {
-    const recent = mr.scoreEntry(
-      { lastAccessed: new Date(now).toISOString(), accessCount: 10, tags: ['memory'], linkCount: 5 },
-      { taskContext: { tags: ['memory'] }, maxAccessCount: 10, maxLinkCount: 5, now }
-    );
-    const old = mr.scoreEntry(
-      { lastAccessed: new Date(now - 60 * MS_PER_DAY).toISOString(), accessCount: 0, tags: ['other'], linkCount: 0 },
-      { taskContext: { tags: ['memory'] }, maxAccessCount: 10, maxLinkCount: 5, now }
-    );
-    assert(recent.score > old.score, `Recent ${recent.score} should beat old ${old.score}`);
-  });
-
-  test('uses custom weights', () => {
-    const w = { recency: 1.0, frequency: 0, similarity: 0, links: 0 };
-    const result = mr.scoreEntry(
-      { lastAccessed: new Date(now).toISOString(), accessCount: 0 },
-      { taskContext: {}, maxAccessCount: 10, maxLinkCount: 5, now },
-      w
-    );
-    // With only recency weight, score should be ~1.0 for just-now entry
-    assert(result.score > 0.9, `Expected high score with recency-only weights, got ${result.score}`);
-  });
-} finally { teardown(); }
-
-// ============================================================================
-// 6. scoreEntries (batch)
-// ============================================================================
-
-console.log('\n=== 6. scoreEntries ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
-  const now = Date.now();
-
-  test('returns sorted by relevance descending', () => {
-    const entries = [
-      { id: 'low', lastAccessed: new Date(now - 30 * MS_PER_DAY).toISOString(), accessCount: 0 },
-      { id: 'high', lastAccessed: new Date(now).toISOString(), accessCount: 10, tags: ['x'], linkCount: 5 },
-      { id: 'mid', lastAccessed: new Date(now - 5 * MS_PER_DAY).toISOString(), accessCount: 3 }
-    ];
-    const scored = mr.scoreEntries(entries, { tags: ['x'] }, { now });
-    assert.strictEqual(scored[0].id, 'high');
-    assert(scored[0].relevance >= scored[1].relevance);
-    assert(scored[1].relevance >= scored[2].relevance);
-  });
-
-  test('respects limit', () => {
-    const entries = Array.from({ length: 10 }, (_, i) => ({
-      id: 'e' + i,
-      lastAccessed: new Date(now).toISOString()
-    }));
-    const scored = mr.scoreEntries(entries, {}, { now, limit: 3 });
-    assert.strictEqual(scored.length, 3);
-  });
-
-  test('returns empty for empty input', () => {
-    assert.deepStrictEqual(mr.scoreEntries([], {}, { now }), []);
-    assert.deepStrictEqual(mr.scoreEntries(null, {}, { now }), []);
-  });
-
-  test('augments entries with relevance and breakdown', () => {
-    const entries = [{ id: 'a', lastAccessed: new Date(now).toISOString() }];
-    const scored = mr.scoreEntries(entries, {}, { now });
-    assert(typeof scored[0].relevance === 'number');
-    assert(typeof scored[0].relevanceBreakdown === 'object');
-  });
-} finally { teardown(); }
-
-// ============================================================================
-// 7. loadWeights
-// ============================================================================
-
-console.log('\n=== 7. loadWeights ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
-
-  test('loads weights from policy', () => {
-    const w = mr.loadWeights();
-    assert.strictEqual(w.recency, 0.30);
-    assert.strictEqual(w.frequency, 0.25);
-    assert.strictEqual(w.similarity, 0.25);
-    assert.strictEqual(w.links, 0.20);
-  });
-
-  test('weights sum to 1.0', () => {
-    const w = mr.loadWeights();
-    const sum = w.recency + w.frequency + w.similarity + w.links;
-    assert.strictEqual(sum, 1.0);
-  });
-} finally { teardown(); }
-
-setup(`
-memory:
+testWithPolicy('loadWeights reads custom weights from policy', `
   relevance_weights:
-    recency: 0.50
-    frequency: 0.20
-    similarity: 0.20
-    links: 0.10
-`);
-try {
-  const mr = freshModule('../memory-relevance');
+    recency: 0.40
+    frequency: 0.10
+    similarity: 0.30
+    links: 0.20
+`, () => {
+  const mr = freshModule();
+  const w = mr.loadWeights();
+  assert.strictEqual(w.recency, 0.40);
+  assert.strictEqual(w.frequency, 0.10);
+  assert.strictEqual(w.similarity, 0.30);
+  assert.strictEqual(w.links, 0.20);
+});
 
-  test('loads custom weights', () => {
-    const w = mr.loadWeights();
-    assert.strictEqual(w.recency, 0.50);
-    assert.strictEqual(w.links, 0.10);
-  });
-} finally { teardown(); }
+test('loadWeights handles partial policy — fills defaults for missing keys', () => {
+  const mr = freshModule();
+  const w = mr.loadWeights({ memory: { relevance_weights: { recency: 0.50 } } });
+  assert.strictEqual(w.recency, 0.50);
+  assert.strictEqual(w.frequency, 0.25);
+  assert.strictEqual(w.similarity, 0.25);
+  assert.strictEqual(w.links, 0.20);
+});
 
-setup();
-try {
-  test('falls back to defaults with pre-loaded empty policy', () => {
-    const mr = freshModule('../memory-relevance');
-    const w = mr.loadWeights({});
-    assert.strictEqual(w.recency, mr.DEFAULT_WEIGHTS.recency);
-  });
-} finally { teardown(); }
+test('loadWeights returns defaults when policy file missing', () => {
+  fs.unlinkSync(path.join(testDir, '.claude/pilot/policy.yaml'));
+  const mr = freshModule();
+  const w = mr.loadWeights();
+  assert.strictEqual(w.recency, mr.DEFAULT_WEIGHTS.recency);
+  assert.strictEqual(w.frequency, mr.DEFAULT_WEIGHTS.frequency);
+  assert.strictEqual(w.similarity, mr.DEFAULT_WEIGHTS.similarity);
+  assert.strictEqual(w.links, mr.DEFAULT_WEIGHTS.links);
+});
+
+test('loadWeights returns defaults with pre-loaded empty policy', () => {
+  const mr = freshModule();
+  const w = mr.loadWeights({});
+  assert.strictEqual(w.recency, mr.DEFAULT_WEIGHTS.recency);
+  assert.strictEqual(w.links, mr.DEFAULT_WEIGHTS.links);
+});
+
+// ============================================================================
+// 2. scoreRecency
+// ============================================================================
+
+console.log('--- scoreRecency ---');
+
+test('scoreRecency: just updated returns ~1.0', () => {
+  const mr = freshModule();
+  const score = mr.scoreRecency(new Date(NOW).toISOString(), NOW);
+  assert.ok(Math.abs(score - 1.0) < 0.01, `expected ~1.0, got ${score}`);
+});
+
+test('scoreRecency: 7 days old returns ~0.5', () => {
+  const mr = freshModule();
+  const sevenDaysAgo = new Date(NOW - SEVEN_DAYS_MS).toISOString();
+  const score = mr.scoreRecency(sevenDaysAgo, NOW);
+  assert.ok(Math.abs(score - 0.5) < 0.01, `expected ~0.5, got ${score}`);
+});
+
+test('scoreRecency: 14 days old returns ~0.25', () => {
+  const mr = freshModule();
+  const fourteenDaysAgo = new Date(NOW - 14 * ONE_DAY_MS).toISOString();
+  const score = mr.scoreRecency(fourteenDaysAgo, NOW);
+  assert.ok(Math.abs(score - 0.25) < 0.01, `expected ~0.25, got ${score}`);
+});
+
+test('scoreRecency: null input returns 0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreRecency(null, NOW), 0);
+});
+
+test('scoreRecency: undefined input returns 0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreRecency(undefined, NOW), 0);
+});
+
+test('scoreRecency: invalid date string returns 0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreRecency('not-a-date', NOW), 0);
+});
+
+test('scoreRecency: accepts Date object', () => {
+  const mr = freshModule();
+  const score = mr.scoreRecency(new Date(NOW), NOW);
+  assert.ok(Math.abs(score - 1.0) < 0.01, `expected ~1.0, got ${score}`);
+});
+
+test('scoreRecency: very old entry returns near 0', () => {
+  const mr = freshModule();
+  const veryOld = new Date(NOW - 365 * ONE_DAY_MS).toISOString();
+  const score = mr.scoreRecency(veryOld, NOW);
+  assert.ok(score < 0.001, `expected near 0, got ${score}`);
+});
+
+test('scoreRecency: decreases monotonically with age', () => {
+  const mr = freshModule();
+  const s1 = mr.scoreRecency(new Date(NOW - 1 * ONE_DAY_MS).toISOString(), NOW);
+  const s2 = mr.scoreRecency(new Date(NOW - 5 * ONE_DAY_MS).toISOString(), NOW);
+  const s3 = mr.scoreRecency(new Date(NOW - 30 * ONE_DAY_MS).toISOString(), NOW);
+  assert.ok(s1 > s2 && s2 > s3, `Expected monotonic decrease: ${s1} > ${s2} > ${s3}`);
+});
+
+// ============================================================================
+// 3. scoreFrequency
+// ============================================================================
+
+console.log('--- scoreFrequency ---');
+
+test('scoreFrequency: zero access count returns 0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreFrequency(0, 10), 0);
+});
+
+test('scoreFrequency: equal to max returns 1.0', () => {
+  const mr = freshModule();
+  const score = mr.scoreFrequency(10, 10);
+  assert.ok(Math.abs(score - 1.0) < 0.001, `expected 1.0, got ${score}`);
+});
+
+test('scoreFrequency: log scaling — middle count gives compressed score', () => {
+  const mr = freshModule();
+  const score = mr.scoreFrequency(5, 10);
+  const expected = Math.log(6) / Math.log(11);
+  assert.ok(Math.abs(score - expected) < 0.001, `expected ~${expected}, got ${score}`);
+});
+
+test('scoreFrequency: null accessCount returns 0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreFrequency(null, 10), 0);
+});
+
+test('scoreFrequency: null maxAccessCount returns 0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreFrequency(5, null), 0);
+});
+
+test('scoreFrequency: negative count returns 0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreFrequency(-1, 10), 0);
+});
+
+test('scoreFrequency: zero maxAccessCount returns 0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreFrequency(5, 0), 0);
+});
+
+test('scoreFrequency: log scaling shows diminishing returns', () => {
+  const mr = freshModule();
+  const s1 = mr.scoreFrequency(1, 100);
+  const s10 = mr.scoreFrequency(10, 100);
+  const s50 = mr.scoreFrequency(50, 100);
+  const gap1 = s10 - s1;
+  const gap2 = s50 - s10;
+  assert.ok(gap1 > gap2, 'Expected diminishing returns with log scaling');
+});
+
+// ============================================================================
+// 4. scoreSimilarity
+// ============================================================================
+
+console.log('--- scoreSimilarity ---');
+
+test('scoreSimilarity: tag overlap (Jaccard)', () => {
+  const mr = freshModule();
+  const entry = { tags: ['auth', 'login', 'security'] };
+  const context = { tags: ['auth', 'security', 'oauth'] };
+  const score = mr.scoreSimilarity(entry, context);
+  // Intersection: auth, security (2). Union: auth, login, security, oauth (4). Jaccard = 2/4 = 0.5
+  assert.ok(Math.abs(score - 0.5) < 0.001, `expected 0.5, got ${score}`);
+});
+
+test('scoreSimilarity: file overlap (Jaccard)', () => {
+  const mr = freshModule();
+  const entry = { files: ['src/auth.js', 'src/login.js'] };
+  const context = { files: ['src/auth.js', 'src/register.js'] };
+  const score = mr.scoreSimilarity(entry, context);
+  // Intersection: auth.js (1). Union: auth.js, login.js, register.js (3). Jaccard = 1/3
+  assert.ok(Math.abs(score - 1 / 3) < 0.001, `expected ~0.333, got ${score}`);
+});
+
+test('scoreSimilarity: both tag and file overlap averaged', () => {
+  const mr = freshModule();
+  const entry = { tags: ['auth', 'login'], files: ['src/auth.js'] };
+  const context = { tags: ['auth'], files: ['src/auth.js'] };
+  // tagScore: intersection=1 (auth), union=2 (auth, login) = 0.5
+  // fileScore: intersection=1, union=1 = 1.0
+  // average: (0.5 + 1.0) / 2 = 0.75
+  const score = mr.scoreSimilarity(entry, context);
+  assert.ok(Math.abs(score - 0.75) < 0.001, `expected 0.75, got ${score}`);
+});
+
+test('scoreSimilarity: no overlap returns 0', () => {
+  const mr = freshModule();
+  const entry = { tags: ['frontend'], files: ['src/ui.js'] };
+  const context = { tags: ['backend'], files: ['src/api.js'] };
+  assert.strictEqual(mr.scoreSimilarity(entry, context), 0);
+});
+
+test('scoreSimilarity: empty inputs returns 0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreSimilarity({}, {}), 0);
+});
+
+test('scoreSimilarity: null entry returns 0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreSimilarity(null, { tags: ['a'] }), 0);
+});
+
+test('scoreSimilarity: null taskContext returns 0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreSimilarity({ tags: ['a'] }, null), 0);
+});
+
+test('scoreSimilarity: case insensitive matching', () => {
+  const mr = freshModule();
+  const entry = { tags: ['Auth', 'LOGIN'] };
+  const context = { tags: ['auth', 'login'] };
+  const score = mr.scoreSimilarity(entry, context);
+  assert.ok(Math.abs(score - 1.0) < 0.001, `expected 1.0, got ${score}`);
+});
+
+test('scoreSimilarity: tags only (no files) returns tag score alone', () => {
+  const mr = freshModule();
+  const entry = { tags: ['a', 'b'] };
+  const context = { tags: ['a'] };
+  // Jaccard: intersection=1, union=2 = 0.5
+  const score = mr.scoreSimilarity(entry, context);
+  assert.ok(Math.abs(score - 0.5) < 0.001, `expected 0.5, got ${score}`);
+});
+
+test('scoreSimilarity: files only (no tags) returns file score alone', () => {
+  const mr = freshModule();
+  const entry = { files: ['a.js', 'b.js'] };
+  const context = { files: ['a.js'] };
+  // Jaccard: intersection=1, union=2 = 0.5
+  const score = mr.scoreSimilarity(entry, context);
+  assert.ok(Math.abs(score - 0.5) < 0.001, `expected 0.5, got ${score}`);
+});
+
+// ============================================================================
+// 5. scoreLinks
+// ============================================================================
+
+console.log('--- scoreLinks ---');
+
+test('scoreLinks: zero linkCount returns 0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreLinks(0, 10), 0);
+});
+
+test('scoreLinks: equal to max returns 1.0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreLinks(10, 10), 1.0);
+});
+
+test('scoreLinks: above max capped at 1.0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreLinks(15, 10), 1.0);
+});
+
+test('scoreLinks: null linkCount returns 0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreLinks(null, 10), 0);
+});
+
+test('scoreLinks: null maxLinkCount returns 0', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreLinks(5, null), 0);
+});
+
+test('scoreLinks: half of max returns 0.5', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreLinks(5, 10), 0.5);
+});
+
+test('scoreLinks: proportional score for 3/6', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.scoreLinks(3, 6), 0.5);
+});
+
+// ============================================================================
+// 6. scoreEntry (composite)
+// ============================================================================
+
+console.log('--- scoreEntry ---');
+
+test('scoreEntry: composite score uses all factors', () => {
+  const mr = freshModule();
+  const entry = {
+    lastAccessed: new Date(NOW).toISOString(),
+    accessCount: 10,
+    linkCount: 5,
+    tags: ['auth'],
+    files: ['src/auth.js']
+  };
+  const context = {
+    taskContext: { tags: ['auth'], files: ['src/auth.js'] },
+    maxAccessCount: 10,
+    maxLinkCount: 10,
+    now: NOW
+  };
+  const weights = { recency: 0.25, frequency: 0.25, similarity: 0.25, links: 0.25 };
+  const result = mr.scoreEntry(entry, context, weights);
+  assert.ok(typeof result.score === 'number', 'should return numeric score');
+  assert.ok(result.score >= 0 && result.score <= 1, `score should be 0-1, got ${result.score}`);
+  assert.ok(result.breakdown, 'should have breakdown');
+  assert.ok(typeof result.breakdown.recency === 'number');
+  assert.ok(typeof result.breakdown.frequency === 'number');
+  assert.ok(typeof result.breakdown.similarity === 'number');
+  assert.ok(typeof result.breakdown.links === 'number');
+});
+
+test('scoreEntry: weight application yields ~1.0 for perfect entry', () => {
+  const mr = freshModule();
+  const entry = {
+    lastAccessed: new Date(NOW).toISOString(),
+    accessCount: 10,
+    linkCount: 10,
+    tags: ['auth'],
+    files: ['src/auth.js']
+  };
+  const context = {
+    taskContext: { tags: ['auth'], files: ['src/auth.js'] },
+    maxAccessCount: 10,
+    maxLinkCount: 10,
+    now: NOW
+  };
+  const weights = { recency: 0.25, frequency: 0.25, similarity: 0.25, links: 0.25 };
+  const result = mr.scoreEntry(entry, context, weights);
+  assert.ok(Math.abs(result.score - 1.0) < 0.01, `expected ~1.0, got ${result.score}`);
+});
+
+test('scoreEntry: falls back to updatedAt when lastAccessed missing', () => {
+  const mr = freshModule();
+  const entry = {
+    updatedAt: new Date(NOW).toISOString(),
+    accessCount: 0,
+    linkCount: 0
+  };
+  const context = { taskContext: {}, maxAccessCount: 1, maxLinkCount: 1, now: NOW };
+  const weights = { recency: 1.0, frequency: 0, similarity: 0, links: 0 };
+  const result = mr.scoreEntry(entry, context, weights);
+  assert.ok(result.breakdown.recency > 0.9, `expected high recency from updatedAt, got ${result.breakdown.recency}`);
+});
+
+test('scoreEntry: score clamped between 0 and 1', () => {
+  const mr = freshModule();
+  const entry = { lastAccessed: new Date(NOW).toISOString(), accessCount: 100, linkCount: 100 };
+  const context = { taskContext: {}, maxAccessCount: 1, maxLinkCount: 1, now: NOW };
+  const weights = { recency: 0.5, frequency: 0.5, similarity: 0, links: 0 };
+  const result = mr.scoreEntry(entry, context, weights);
+  assert.ok(result.score <= 1.0, `score should be clamped to 1.0, got ${result.score}`);
+  assert.ok(result.score >= 0.0, `score should be >= 0, got ${result.score}`);
+});
+
+test('scoreEntry: recent+relevant entry beats old+irrelevant entry', () => {
+  const mr = freshModule();
+  const ctx = { taskContext: { tags: ['memory'] }, maxAccessCount: 10, maxLinkCount: 5, now: NOW };
+  const recent = mr.scoreEntry(
+    { lastAccessed: new Date(NOW).toISOString(), accessCount: 10, tags: ['memory'], linkCount: 5 }, ctx
+  );
+  const old = mr.scoreEntry(
+    { lastAccessed: new Date(NOW - 60 * ONE_DAY_MS).toISOString(), accessCount: 0, tags: ['other'], linkCount: 0 }, ctx
+  );
+  assert.ok(recent.score > old.score, `Recent ${recent.score} should beat old ${old.score}`);
+});
+
+// ============================================================================
+// 7. scoreEntries (batch)
+// ============================================================================
+
+console.log('--- scoreEntries ---');
+
+test('scoreEntries: batch scoring returns scored entries', () => {
+  const mr = freshModule();
+  const entries = [
+    { id: 'a', lastAccessed: new Date(NOW).toISOString(), accessCount: 5 },
+    { id: 'b', lastAccessed: new Date(NOW - 7 * ONE_DAY_MS).toISOString(), accessCount: 2 },
+    { id: 'c', lastAccessed: new Date(NOW - 14 * ONE_DAY_MS).toISOString(), accessCount: 1 }
+  ];
+  const result = mr.scoreEntries(entries, {}, { now: NOW });
+  assert.strictEqual(result.length, 3);
+  assert.ok(result[0].relevance !== undefined, 'should have relevance');
+  assert.ok(result[0].relevanceBreakdown !== undefined, 'should have breakdown');
+});
+
+test('scoreEntries: sorted by relevance descending', () => {
+  const mr = freshModule();
+  const entries = [
+    { id: 'old', lastAccessed: new Date(NOW - 30 * ONE_DAY_MS).toISOString(), accessCount: 1 },
+    { id: 'new', lastAccessed: new Date(NOW).toISOString(), accessCount: 10 },
+    { id: 'mid', lastAccessed: new Date(NOW - 3 * ONE_DAY_MS).toISOString(), accessCount: 5 }
+  ];
+  const result = mr.scoreEntries(entries, {}, { now: NOW });
+  assert.strictEqual(result[0].id, 'new');
+  assert.ok(result[0].relevance >= result[1].relevance, 'first should have highest score');
+  assert.ok(result[1].relevance >= result[2].relevance, 'second should be >= third');
+});
+
+test('scoreEntries: limit application', () => {
+  const mr = freshModule();
+  const entries = Array.from({ length: 10 }, (_, i) => ({
+    id: `e${i}`,
+    lastAccessed: new Date(NOW - i * ONE_DAY_MS).toISOString(),
+    accessCount: 10 - i
+  }));
+  const result = mr.scoreEntries(entries, {}, { now: NOW, limit: 3 });
+  assert.strictEqual(result.length, 3);
+});
+
+test('scoreEntries: empty array returns empty', () => {
+  const mr = freshModule();
+  assert.deepStrictEqual(mr.scoreEntries([], {}), []);
+});
+
+test('scoreEntries: null entries returns empty', () => {
+  const mr = freshModule();
+  assert.deepStrictEqual(mr.scoreEntries(null, {}), []);
+});
+
+test('scoreEntries: preserves original entry properties', () => {
+  const mr = freshModule();
+  const entries = [
+    { id: 'p1', custom: 'data', lastAccessed: new Date(NOW).toISOString(), accessCount: 1 }
+  ];
+  const result = mr.scoreEntries(entries, {}, { now: NOW });
+  assert.strictEqual(result[0].id, 'p1');
+  assert.strictEqual(result[0].custom, 'data');
+});
 
 // ============================================================================
 // 8. scoreChannel
 // ============================================================================
 
-console.log('\n=== 8. scoreChannel ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
+console.log('--- scoreChannel ---');
 
-  writeChannel('test-chan', [
-    { id: 'a', tags: ['memory'], ts: new Date().toISOString(), accessCount: 5 },
-    { id: 'b', tags: ['other'], ts: new Date(Date.now() - 10 * MS_PER_DAY).toISOString(), accessCount: 1 }
+test('scoreChannel: reads channel file and scores entries', () => {
+  const mr = freshModule();
+  writeChannel('decisions', [
+    { id: 'd1', lastAccessed: new Date(NOW).toISOString(), accessCount: 5, tags: ['auth'] },
+    { id: 'd2', lastAccessed: new Date(NOW - 10 * ONE_DAY_MS).toISOString(), accessCount: 2, tags: ['db'] }
   ]);
+  const result = mr.scoreChannel('decisions', { tags: ['auth'] }, { cwd: testDir, now: NOW });
+  assert.strictEqual(result.length, 2);
+  assert.ok(result[0].relevance >= result[1].relevance, 'should be sorted by relevance');
+  assert.strictEqual(result[0]._channel, 'decisions');
+});
 
-  test('scores entries from a channel', () => {
-    const scored = mr.scoreChannel('test-chan', { tags: ['memory'] }, { cwd: testDir });
-    assert.strictEqual(scored.length, 2);
-    assert(scored[0].relevance >= scored[1].relevance);
-  });
+test('scoreChannel: handles missing channel file', () => {
+  const mr = freshModule();
+  const result = mr.scoreChannel('nonexistent', {}, { cwd: testDir });
+  assert.deepStrictEqual(result, []);
+});
 
-  test('returns empty for missing channel', () => {
-    const scored = mr.scoreChannel('nonexistent', {}, { cwd: testDir });
-    assert.strictEqual(scored.length, 0);
-  });
+test('scoreChannel: handles object data format', () => {
+  const mr = freshModule();
+  writeChannelObject('config', {
+    entries: [
+      { id: 'c1', tags: ['config'], accessCount: 3 },
+      { id: 'c2', tags: ['settings'], accessCount: 1 }
+    ]
+  }, '2026-01-20T00:00:00.000Z');
+  const result = mr.scoreChannel('config', {}, { cwd: testDir, now: NOW });
+  assert.strictEqual(result.length, 2);
+  assert.strictEqual(result[0]._channel, 'config');
+});
 
-  test('annotates entries with _channel', () => {
-    const scored = mr.scoreChannel('test-chan', {}, { cwd: testDir });
-    assert.strictEqual(scored[0]._channel, 'test-chan');
-  });
-} finally { teardown(); }
+test('scoreChannel: augments entries with envelope timestamp when missing', () => {
+  const mr = freshModule();
+  writeChannel('patterns', [
+    { id: 'p1', tags: ['pattern'] }
+  ], '2026-01-25T00:00:00.000Z');
+  const result = mr.scoreChannel('patterns', {}, { cwd: testDir, now: NOW });
+  assert.strictEqual(result.length, 1);
+  assert.strictEqual(result[0].lastAccessed, '2026-01-25T00:00:00.000Z');
+});
+
+test('scoreChannel: handles single object data (no array key)', () => {
+  const mr = freshModule();
+  writeChannelObject('singleton', { id: 's1', tags: ['solo'], accessCount: 1 });
+  const result = mr.scoreChannel('singleton', {}, { cwd: testDir, now: NOW });
+  assert.strictEqual(result.length, 1);
+});
+
+test('scoreChannel: malformed JSON returns empty', () => {
+  const mr = freshModule();
+  const channelPath = path.join(testDir, '.claude/pilot/memory/channels/bad.json');
+  fs.writeFileSync(channelPath, '{ invalid json }}}');
+  const result = mr.scoreChannel('bad', {}, { cwd: testDir });
+  assert.deepStrictEqual(result, []);
+});
 
 // ============================================================================
 // 9. scoreAllChannels
 // ============================================================================
 
-console.log('\n=== 9. scoreAllChannels ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
+console.log('--- scoreAllChannels ---');
 
-  writeChannel('chan-a', [{ id: 'a1', tags: ['memory'], ts: new Date().toISOString() }]);
-  writeChannel('chan-b', [{ id: 'b1', tags: ['other'], ts: new Date().toISOString() }]);
+test('scoreAllChannels: scores across multiple channels', () => {
+  const mr = freshModule();
+  writeChannel('ch-alpha', [
+    { id: 'a1', lastAccessed: new Date(NOW).toISOString(), accessCount: 10 }
+  ]);
+  writeChannel('ch-beta', [
+    { id: 'b1', lastAccessed: new Date(NOW - 5 * ONE_DAY_MS).toISOString(), accessCount: 3 }
+  ]);
+  const result = mr.scoreAllChannels({}, { cwd: testDir, now: NOW });
+  assert.strictEqual(result.length, 2);
+  assert.ok(result[0].relevance >= result[1].relevance, 'should be globally sorted');
+});
 
-  test('scores across all channels', () => {
-    const scored = mr.scoreAllChannels({ tags: ['memory'] }, { cwd: testDir });
-    assert.strictEqual(scored.length, 2);
-    // a1 should score higher (memory tag match)
-    assert.strictEqual(scored[0].id, 'a1');
-  });
+test('scoreAllChannels: sorting across channels by relevance', () => {
+  const mr = freshModule();
+  writeChannel('alpha', [
+    { id: 'a1', lastAccessed: new Date(NOW - 20 * ONE_DAY_MS).toISOString(), accessCount: 1 }
+  ]);
+  writeChannel('beta', [
+    { id: 'b1', lastAccessed: new Date(NOW).toISOString(), accessCount: 10 }
+  ]);
+  const result = mr.scoreAllChannels({}, { cwd: testDir, now: NOW });
+  assert.strictEqual(result[0].id, 'b1', 'beta entry should be first (more recent, higher access)');
+});
 
-  test('respects limit', () => {
-    const scored = mr.scoreAllChannels({}, { cwd: testDir, limit: 1 });
-    assert.strictEqual(scored.length, 1);
-  });
+test('scoreAllChannels: limit applied after merge', () => {
+  const mr = freshModule();
+  writeChannel('lim-a', Array.from({ length: 5 }, (_, i) => ({
+    id: `la${i}`, lastAccessed: new Date(NOW - i * ONE_DAY_MS).toISOString(), accessCount: 5 - i
+  })));
+  writeChannel('lim-b', Array.from({ length: 5 }, (_, i) => ({
+    id: `lb${i}`, lastAccessed: new Date(NOW - i * ONE_DAY_MS).toISOString(), accessCount: 5 - i
+  })));
+  const result = mr.scoreAllChannels({}, { cwd: testDir, now: NOW, limit: 3 });
+  assert.strictEqual(result.length, 3);
+});
 
-  test('returns empty for no channels', () => {
-    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'empty-'));
-    fs.mkdirSync(path.join(emptyDir, '.claude/pilot/memory/channels'), { recursive: true });
-    const scored = mr.scoreAllChannels({}, { cwd: emptyDir });
-    assert.strictEqual(scored.length, 0);
-    fs.rmSync(emptyDir, { recursive: true, force: true });
-  });
-} finally { teardown(); }
+test('scoreAllChannels: empty channels dir returns empty', () => {
+  const mr = freshModule();
+  const result = mr.scoreAllChannels({}, { cwd: testDir, now: NOW });
+  assert.deepStrictEqual(result, []);
+});
+
+test('scoreAllChannels: missing channels dir returns empty', () => {
+  const mr = freshModule();
+  const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'no-channels-'));
+  const result = mr.scoreAllChannels({}, { cwd: emptyDir });
+  assert.deepStrictEqual(result, []);
+  fs.rmSync(emptyDir, { recursive: true, force: true });
+});
 
 // ============================================================================
-// 10. Summarization config
+// 10. loadSummarizationConfig
 // ============================================================================
 
-console.log('\n=== 10. Summarization config ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
+console.log('--- loadSummarizationConfig ---');
 
-  test('loads summarization config from policy', () => {
-    const config = mr.loadSummarizationConfig();
-    assert.strictEqual(config.full_fidelity_threshold, 0.6);
-    assert.strictEqual(config.summary_after_days, 7);
-    assert.strictEqual(config.archive_after_days, 30);
-    assert.strictEqual(config.max_summary_length, 500);
-    assert.strictEqual(config.min_entries_for_consolidation, 20);
-  });
+test('loadSummarizationConfig: returns defaults from policy', () => {
+  const mr = freshModule();
+  const config = mr.loadSummarizationConfig();
+  assert.strictEqual(config.full_fidelity_threshold, 0.6);
+  assert.strictEqual(config.summary_after_days, 7);
+  assert.strictEqual(config.archive_after_days, 30);
+  assert.strictEqual(config.max_summary_length, 500);
+  assert.strictEqual(config.min_entries_for_consolidation, 20);
+});
 
-  test('falls back to defaults with no policy', () => {
-    const config = mr.loadSummarizationConfig({});
-    assert.strictEqual(config.full_fidelity_threshold, 0.6);
+test('loadSummarizationConfig: accepts pre-loaded policy object', () => {
+  const mr = freshModule();
+  const config = mr.loadSummarizationConfig({
+    memory: { summarization: { summary_after_days: 3 } }
   });
-} finally { teardown(); }
+  assert.strictEqual(config.summary_after_days, 3);
+  assert.strictEqual(config.full_fidelity_threshold, 0.6);
+});
+
+test('loadSummarizationConfig: falls back to defaults with no policy', () => {
+  const mr = freshModule();
+  const config = mr.loadSummarizationConfig({});
+  assert.strictEqual(config.full_fidelity_threshold, 0.6);
+  assert.strictEqual(config.summary_after_days, 7);
+});
 
 // ============================================================================
 // 11. getTargetState
 // ============================================================================
 
-console.log('\n=== 11. getTargetState ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
-  const config = mr.loadSummarizationConfig();
-  const now = Date.now();
+console.log('--- getTargetState ---');
 
-  test('full → summary when low relevance and old enough', () => {
-    const entry = { _state: 'full', relevance: 0.2, lastAccessed: new Date(now - 10 * MS_PER_DAY).toISOString() };
-    assert.strictEqual(mr.getTargetState(entry, config, now), 'summary');
-  });
+test('getTargetState: full to summary transition', () => {
+  const mr = freshModule();
+  const config = { full_fidelity_threshold: 0.6, summary_after_days: 7, archive_after_days: 30 };
+  const entry = {
+    _state: 'full',
+    relevance: 0.3,
+    lastAccessed: new Date(NOW - 10 * ONE_DAY_MS).toISOString()
+  };
+  assert.strictEqual(mr.getTargetState(entry, config, NOW), 'summary');
+});
 
-  test('full stays full when relevance is high', () => {
-    const entry = { _state: 'full', relevance: 0.8, lastAccessed: new Date(now - 10 * MS_PER_DAY).toISOString() };
-    assert.strictEqual(mr.getTargetState(entry, config, now), null);
-  });
+test('getTargetState: summary to archived transition', () => {
+  const mr = freshModule();
+  const config = { full_fidelity_threshold: 0.6, summary_after_days: 7, archive_after_days: 30 };
+  const entry = {
+    _state: 'summary',
+    relevance: 0.2,
+    lastAccessed: new Date(NOW - 35 * ONE_DAY_MS).toISOString()
+  };
+  assert.strictEqual(mr.getTargetState(entry, config, NOW), 'archived');
+});
 
-  test('full stays full when too recent', () => {
-    const entry = { _state: 'full', relevance: 0.2, lastAccessed: new Date(now - 3 * MS_PER_DAY).toISOString() };
-    assert.strictEqual(mr.getTargetState(entry, config, now), null);
-  });
+test('getTargetState: above threshold stays full', () => {
+  const mr = freshModule();
+  const config = { full_fidelity_threshold: 0.6, summary_after_days: 7, archive_after_days: 30 };
+  const entry = {
+    _state: 'full',
+    relevance: 0.8,
+    lastAccessed: new Date(NOW - 10 * ONE_DAY_MS).toISOString()
+  };
+  assert.strictEqual(mr.getTargetState(entry, config, NOW), null);
+});
 
-  test('summary → archived when low relevance and old enough', () => {
-    const entry = { _state: 'summary', relevance: 0.1, lastAccessed: new Date(now - 35 * MS_PER_DAY).toISOString() };
-    assert.strictEqual(mr.getTargetState(entry, config, now), 'archived');
-  });
+test('getTargetState: no timestamp returns null', () => {
+  const mr = freshModule();
+  const config = { full_fidelity_threshold: 0.6, summary_after_days: 7, archive_after_days: 30 };
+  const entry = { _state: 'full', relevance: 0.3 };
+  assert.strictEqual(mr.getTargetState(entry, config, NOW), null);
+});
 
-  test('summary stays summary when not old enough', () => {
-    const entry = { _state: 'summary', relevance: 0.1, lastAccessed: new Date(now - 15 * MS_PER_DAY).toISOString() };
-    assert.strictEqual(mr.getTargetState(entry, config, now), null);
-  });
+test('getTargetState: recent low-relevance entry stays full', () => {
+  const mr = freshModule();
+  const config = { full_fidelity_threshold: 0.6, summary_after_days: 7, archive_after_days: 30 };
+  const entry = {
+    _state: 'full',
+    relevance: 0.3,
+    lastAccessed: new Date(NOW - 2 * ONE_DAY_MS).toISOString()
+  };
+  assert.strictEqual(mr.getTargetState(entry, config, NOW), null);
+});
 
-  test('returns null for no lastAccessed', () => {
-    const entry = { _state: 'full', relevance: 0.2 };
-    assert.strictEqual(mr.getTargetState(entry, config, now), null);
-  });
+test('getTargetState: default state is full when _state missing', () => {
+  const mr = freshModule();
+  const config = { full_fidelity_threshold: 0.6, summary_after_days: 7, archive_after_days: 30 };
+  const entry = {
+    relevance: 0.2,
+    lastAccessed: new Date(NOW - 10 * ONE_DAY_MS).toISOString()
+  };
+  assert.strictEqual(mr.getTargetState(entry, config, NOW), 'summary');
+});
 
-  test('defaults to full state when _state missing', () => {
-    const entry = { relevance: 0.2, lastAccessed: new Date(now - 10 * MS_PER_DAY).toISOString() };
-    assert.strictEqual(mr.getTargetState(entry, config, now), 'summary');
-  });
-} finally { teardown(); }
+test('getTargetState: invalid date returns null', () => {
+  const mr = freshModule();
+  const config = { full_fidelity_threshold: 0.6, summary_after_days: 7, archive_after_days: 30 };
+  const entry = { _state: 'full', relevance: 0.2, lastAccessed: 'not-a-date' };
+  assert.strictEqual(mr.getTargetState(entry, config, NOW), null);
+});
+
+test('getTargetState: summary stays summary when not old enough for archive', () => {
+  const mr = freshModule();
+  const config = { full_fidelity_threshold: 0.6, summary_after_days: 7, archive_after_days: 30 };
+  const entry = {
+    _state: 'summary',
+    relevance: 0.1,
+    lastAccessed: new Date(NOW - 15 * ONE_DAY_MS).toISOString()
+  };
+  assert.strictEqual(mr.getTargetState(entry, config, NOW), null);
+});
 
 // ============================================================================
 // 12. summarizeEntry
 // ============================================================================
 
-console.log('\n=== 12. summarizeEntry ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
+console.log('--- summarizeEntry ---');
 
-  test('produces summary state', () => {
-    const entry = { id: 'e1', type: 'decision', reason: 'Use JWT', tags: ['auth'] };
-    const summary = mr.summarizeEntry(entry, 500);
-    assert.strictEqual(summary._state, 'summary');
-    assert(summary._summarizedAt);
-  });
+test('summarizeEntry: preserves key fields', () => {
+  const mr = freshModule();
+  const entry = {
+    id: 'e1',
+    _channel: 'decisions',
+    tags: ['auth'],
+    files: ['src/auth.js'],
+    type: 'decision',
+    action: 'approved',
+    task_id: 'task-1',
+    accessCount: 5,
+    linkCount: 3,
+    description: 'Made auth decision',
+    reason: 'Security improvement'
+  };
+  const result = mr.summarizeEntry(entry, 500);
+  assert.strictEqual(result.id, 'e1');
+  assert.strictEqual(result._channel, 'decisions');
+  assert.deepStrictEqual(result.tags, ['auth']);
+  assert.strictEqual(result.type, 'decision');
+  assert.strictEqual(result.accessCount, 5);
+  assert.strictEqual(result.linkCount, 3);
+});
 
-  test('preserves key fields', () => {
-    const entry = { id: 'e1', type: 'decision', tags: ['auth', 'api'], files: ['auth.js'], accessCount: 5 };
-    const summary = mr.summarizeEntry(entry, 500);
-    assert.strictEqual(summary.id, 'e1');
-    assert.deepStrictEqual(summary.tags, ['auth', 'api']);
-    assert.deepStrictEqual(summary.files, ['auth.js']);
-    assert.strictEqual(summary.accessCount, 5);
-  });
+test('summarizeEntry: truncates long text', () => {
+  const mr = freshModule();
+  const longText = 'A'.repeat(1000);
+  const entry = { id: 'e2', description: longText, lastAccessed: '2026-01-15T00:00:00.000Z' };
+  const result = mr.summarizeEntry(entry, 100);
+  assert.ok(result.summary.length <= 100, `summary should be <= 100 chars, got ${result.summary.length}`);
+  assert.ok(result.summary.endsWith('...'), 'truncated summary should end with ...');
+});
 
-  test('truncates long text to maxLength', () => {
-    const entry = { id: 'e1', description: 'a'.repeat(1000) };
-    const summary = mr.summarizeEntry(entry, 200);
-    assert(summary.summary.length <= 200, `Length ${summary.summary.length} > 200`);
-    assert(summary.summary.endsWith('...'));
-  });
+test('summarizeEntry: sets _state to summary', () => {
+  const mr = freshModule();
+  const entry = { id: 'e3', description: 'test', lastAccessed: '2026-01-15T00:00:00.000Z' };
+  const result = mr.summarizeEntry(entry, 500);
+  assert.strictEqual(result._state, 'summary');
+});
 
-  test('combines multiple text fields', () => {
-    const entry = { id: 'e1', reason: 'Because X', description: 'Details about Y' };
-    const summary = mr.summarizeEntry(entry, 500);
-    assert(summary.summary.includes('Because X'));
-    assert(summary.summary.includes('Details about Y'));
-  });
+test('summarizeEntry: includes _summarizedAt and _originalKeys', () => {
+  const mr = freshModule();
+  const entry = { id: 'e4', description: 'test', custom: 'value', lastAccessed: '2026-01-15T00:00:00.000Z' };
+  const result = mr.summarizeEntry(entry, 500);
+  assert.ok(result._summarizedAt, 'should have _summarizedAt');
+  assert.ok(Array.isArray(result._originalKeys), '_originalKeys should be array');
+  assert.ok(result._originalKeys.includes('id'));
+  assert.ok(result._originalKeys.includes('description'));
+  assert.ok(result._originalKeys.includes('custom'));
+});
 
-  test('records original keys', () => {
-    const entry = { id: 'e1', foo: 'bar', baz: 42 };
-    const summary = mr.summarizeEntry(entry, 500);
-    assert(summary._originalKeys.includes('id'));
-    assert(summary._originalKeys.includes('foo'));
-    assert(summary._originalKeys.includes('baz'));
-  });
-} finally { teardown(); }
+test('summarizeEntry: concatenates multiple text fields with separator', () => {
+  const mr = freshModule();
+  const entry = {
+    id: 'e5',
+    reason: 'Because reasons',
+    description: 'Something happened',
+    lastAccessed: '2026-01-15T00:00:00.000Z'
+  };
+  const result = mr.summarizeEntry(entry, 500);
+  assert.ok(result.summary.includes('Because reasons'), 'should include reason');
+  assert.ok(result.summary.includes('Something happened'), 'should include description');
+  assert.ok(result.summary.includes(' | '), 'should use | separator');
+});
+
+test('summarizeEntry: defaults maxLength to 500', () => {
+  const mr = freshModule();
+  const longText = 'B'.repeat(800);
+  const entry = { id: 'e6', description: longText, lastAccessed: '2026-01-15T00:00:00.000Z' };
+  const result = mr.summarizeEntry(entry);
+  assert.ok(result.summary.length <= 500, `should default to 500 max, got ${result.summary.length}`);
+});
 
 // ============================================================================
 // 13. archiveEntry
 // ============================================================================
 
-console.log('\n=== 13. archiveEntry ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
+console.log('--- archiveEntry ---');
 
-  test('creates archive file', () => {
-    const entry = { id: 'e1', _state: 'summary', summary: 'Test entry' };
-    const result = mr.archiveEntry(entry, 'test-chan', testDir);
-    assert(result.archivedAt);
-    assert.strictEqual(result.channel, 'test-chan');
-    assert(fs.existsSync(result.archivePath));
-  });
+test('archiveEntry: creates archive directory', () => {
+  const mr = freshModule();
+  const entry = { id: 'ae1', _state: 'summary', summary: 'test' };
+  mr.archiveEntry(entry, 'new-channel', testDir);
+  const archiveDir = path.join(testDir, '.claude/pilot/memory/archive/new-channel');
+  assert.ok(fs.existsSync(archiveDir), 'archive dir should exist');
+});
 
-  test('appends to existing archive', () => {
-    mr.archiveEntry({ id: 'e3', summary: 'First' }, 'append-chan', testDir);
-    mr.archiveEntry({ id: 'e4', summary: 'Second' }, 'append-chan', testDir);
-    const archivePath = path.join(testDir, '.claude/pilot/memory/archive/append-chan/entries.jsonl');
-    const lines = fs.readFileSync(archivePath, 'utf8').trim().split('\n');
-    assert.strictEqual(lines.length, 2);
-  });
+test('archiveEntry: writes JSONL with archived state', () => {
+  const mr = freshModule();
+  const entry = { id: 'ae2', _state: 'summary', summary: 'test entry' };
+  mr.archiveEntry(entry, 'arch-write', testDir);
+  const archivePath = path.join(testDir, '.claude/pilot/memory/archive/arch-write/entries.jsonl');
+  assert.ok(fs.existsSync(archivePath), 'entries.jsonl should exist');
+  const content = fs.readFileSync(archivePath, 'utf8').trim();
+  const parsed = JSON.parse(content);
+  assert.strictEqual(parsed.id, 'ae2');
+  assert.strictEqual(parsed._state, 'archived');
+  assert.ok(parsed._archivedAt, 'should have _archivedAt');
+  assert.strictEqual(parsed._sourceChannel, 'arch-write');
+});
 
-  test('marks entry as archived', () => {
-    const archivePath = path.join(testDir, '.claude/pilot/memory/archive/test-chan/entries.jsonl');
-    const lines = fs.readFileSync(archivePath, 'utf8').trim().split('\n');
-    const entry = JSON.parse(lines[0]);
-    assert.strictEqual(entry._state, 'archived');
-    assert(entry._archivedAt);
-  });
-} finally { teardown(); }
+test('archiveEntry: appends multiple entries', () => {
+  const mr = freshModule();
+  mr.archiveEntry({ id: 'ae3', summary: 'first' }, 'append-ch', testDir);
+  mr.archiveEntry({ id: 'ae4', summary: 'second' }, 'append-ch', testDir);
+  const archivePath = path.join(testDir, '.claude/pilot/memory/archive/append-ch/entries.jsonl');
+  const lines = fs.readFileSync(archivePath, 'utf8').trim().split('\n');
+  assert.strictEqual(lines.length, 2);
+  assert.strictEqual(JSON.parse(lines[0]).id, 'ae3');
+  assert.strictEqual(JSON.parse(lines[1]).id, 'ae4');
+});
+
+test('archiveEntry: returns metadata', () => {
+  const mr = freshModule();
+  const result = mr.archiveEntry({ id: 'ae5', summary: 'test' }, 'meta-ch', testDir);
+  assert.strictEqual(result.id, 'ae5');
+  assert.strictEqual(result.channel, 'meta-ch');
+  assert.ok(result.archivedAt, 'should have archivedAt');
+  assert.ok(result.archivePath, 'should have archivePath');
+});
 
 // ============================================================================
 // 14. consolidate
 // ============================================================================
 
-console.log('\n=== 14. consolidate ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
-  const now = Date.now();
+console.log('--- consolidate ---');
 
-  test('skips consolidation below min_entries_for_consolidation', () => {
-    const entries = [{ id: 'e1', _state: 'full', relevance: 0.1, lastAccessed: new Date(now - 10 * MS_PER_DAY).toISOString() }];
-    const result = mr.consolidate(entries, 'test', { now, dryRun: true });
-    assert.strictEqual(result.kept.length, 1);
-    assert.strictEqual(result.summarized.length, 0);
-    assert.strictEqual(result.archived.length, 0);
-  });
+test('consolidate: runs full pipeline on eligible entries', () => {
+  const mr = freshModule();
+  const entries = Array.from({ length: 25 }, (_, i) => ({
+    id: `ce${i}`,
+    _state: 'full',
+    relevance: i < 5 ? 0.9 : (i < 15 ? 0.4 : 0.1),
+    lastAccessed: new Date(NOW - (i < 5 ? 2 : (i < 15 ? 10 : 40)) * ONE_DAY_MS).toISOString(),
+    description: `Entry ${i} description`,
+    accessCount: 25 - i
+  }));
+  const result = mr.consolidate(entries, 'consolidate-ch', { now: NOW, cwd: testDir });
+  assert.ok(result.kept.length > 0, 'should keep some entries');
+  assert.ok(result.summarized.length > 0 || result.archived.length > 0, 'should process some entries');
+  assert.strictEqual(result.kept.length + result.archived.length, entries.length);
+});
 
-  test('summarizes low-relevance old entries', () => {
-    const entries = [];
-    for (let i = 0; i < 25; i++) {
-      // Entries 10-24 have low relevance and are 10 days old → should be summarized
-      entries.push({
-        id: 'e' + i,
-        _state: 'full',
-        relevance: i < 10 ? 0.9 : 0.2,
-        lastAccessed: new Date(now - (i < 10 ? 1 : 10) * MS_PER_DAY).toISOString(),
-        updatedAt: new Date(now - (i < 10 ? 1 : 10) * MS_PER_DAY).toISOString(),
-        description: 'Entry ' + i
-      });
-    }
-    const result = mr.consolidate(entries, 'test', { now, dryRun: true });
-    // 15 entries have relevance 0.2 and are 10 days old (> 7 day threshold)
-    assert(result.summarized.length > 0, `Expected some summarized entries, got ${result.summarized.length}`);
-    // Summarized entries are still in kept (as summaries), archived ones are removed
-    assert(result.summarized.length + result.archived.length > 0, 'Expected some transitions');
-  });
+test('consolidate: below min entries skips processing', () => {
+  const mr = freshModule();
+  const entries = Array.from({ length: 5 }, (_, i) => ({
+    id: `cs${i}`,
+    relevance: 0.1,
+    lastAccessed: new Date(NOW - 40 * ONE_DAY_MS).toISOString()
+  }));
+  const result = mr.consolidate(entries, 'skip-ch', { now: NOW, cwd: testDir });
+  assert.strictEqual(result.kept.length, 5, 'all entries should be kept');
+  assert.strictEqual(result.summarized.length, 0);
+  assert.strictEqual(result.archived.length, 0);
+});
 
-  test('archives old summary entries', () => {
-    const entries = [];
-    for (let i = 0; i < 25; i++) {
-      entries.push({
-        id: 'e' + i,
-        _state: i > 15 ? 'summary' : 'full',
-        relevance: 0.1,
-        lastAccessed: new Date(now - (i > 15 ? 35 : 3) * MS_PER_DAY).toISOString(),
-        description: 'Entry ' + i
-      });
-    }
-    const result = mr.consolidate(entries, 'test', { now, dryRun: true });
-    assert(result.archived.length > 0, 'Expected some archived entries');
-  });
+test('consolidate: dryRun mode does not write archives', () => {
+  const mr = freshModule();
+  const entries = Array.from({ length: 25 }, (_, i) => ({
+    id: `cd${i}`,
+    _state: 'summary',
+    relevance: 0.1,
+    lastAccessed: new Date(NOW - 40 * ONE_DAY_MS).toISOString(),
+    description: `Entry ${i}`
+  }));
+  const result = mr.consolidate(entries, 'dryrun-ch', { now: NOW, cwd: testDir, dryRun: true });
+  const archivePath = path.join(testDir, '.claude/pilot/memory/archive/dryrun-ch/entries.jsonl');
+  assert.ok(!fs.existsSync(archivePath), 'archive should not be written in dryRun mode');
+  assert.ok(result.archived.length > 0, 'should report archived entries in dry run');
+});
 
-  test('writes archives when not dry run', () => {
-    const entries = [];
-    for (let i = 0; i < 25; i++) {
-      entries.push({
-        id: 'e' + i,
-        _state: 'summary',
-        relevance: 0.1,
-        lastAccessed: new Date(now - 35 * MS_PER_DAY).toISOString(),
-        description: 'Entry ' + i
-      });
-    }
-    const result = mr.consolidate(entries, 'archtest', { now, cwd: testDir });
-    const archivePath = path.join(testDir, '.claude/pilot/memory/archive/archtest/entries.jsonl');
-    assert(fs.existsSync(archivePath), 'Archive file should exist');
-    assert(result.archived.length > 0);
-  });
-} finally { teardown(); }
+test('consolidate: high relevance entries are kept as-is', () => {
+  const mr = freshModule();
+  const entries = Array.from({ length: 25 }, (_, i) => ({
+    id: `ck${i}`,
+    _state: 'full',
+    relevance: 0.9,
+    lastAccessed: new Date(NOW - 2 * ONE_DAY_MS).toISOString(),
+    description: `Entry ${i}`
+  }));
+  const result = mr.consolidate(entries, 'keep-ch', { now: NOW, cwd: testDir });
+  assert.strictEqual(result.kept.length, 25);
+  assert.strictEqual(result.summarized.length, 0);
+  assert.strictEqual(result.archived.length, 0);
+});
+
+test('consolidate: archives old summary entries', () => {
+  const mr = freshModule();
+  const entries = Array.from({ length: 25 }, (_, i) => ({
+    id: `ca${i}`,
+    _state: 'summary',
+    relevance: 0.2,
+    lastAccessed: new Date(NOW - 35 * ONE_DAY_MS).toISOString(),
+    description: `Old summarized entry ${i}`
+  }));
+  const result = mr.consolidate(entries, 'arch-ch', { now: NOW, cwd: testDir });
+  assert.ok(result.archived.length > 0, 'should archive old summary entries');
+  const archivePath = path.join(testDir, '.claude/pilot/memory/archive/arch-ch/entries.jsonl');
+  assert.ok(fs.existsSync(archivePath), 'archive file should exist');
+});
 
 // ============================================================================
 // 15. readArchive
 // ============================================================================
 
-console.log('\n=== 15. readArchive ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
+console.log('--- readArchive ---');
 
-  // Write some archive entries
-  const archiveDir = path.join(testDir, '.claude/pilot/memory/archive/test-chan');
+test('readArchive: reads JSONL entries', () => {
+  const mr = freshModule();
+  mr.archiveEntry({ id: 'ra1', summary: 'first' }, 'read-arch', testDir);
+  mr.archiveEntry({ id: 'ra2', summary: 'second' }, 'read-arch', testDir);
+  const entries = mr.readArchive('read-arch', { cwd: testDir });
+  assert.strictEqual(entries.length, 2);
+  assert.strictEqual(entries[0].id, 'ra1');
+  assert.strictEqual(entries[1].id, 'ra2');
+});
+
+test('readArchive: handles missing file', () => {
+  const mr = freshModule();
+  const entries = mr.readArchive('nonexistent', { cwd: testDir });
+  assert.deepStrictEqual(entries, []);
+});
+
+test('readArchive: applies limit (returns last N entries)', () => {
+  const mr = freshModule();
+  for (let i = 0; i < 10; i++) {
+    mr.archiveEntry({ id: `rl${i}`, summary: `entry ${i}` }, 'limit-arch', testDir);
+  }
+  const entries = mr.readArchive('limit-arch', { cwd: testDir, limit: 3 });
+  assert.strictEqual(entries.length, 3);
+  assert.strictEqual(entries[0].id, 'rl7');
+  assert.strictEqual(entries[2].id, 'rl9');
+});
+
+test('readArchive: handles empty file', () => {
+  const mr = freshModule();
+  const archiveDir = path.join(testDir, '.claude/pilot/memory/archive/empty-arch');
+  fs.mkdirSync(archiveDir, { recursive: true });
+  fs.writeFileSync(path.join(archiveDir, 'entries.jsonl'), '');
+  const entries = mr.readArchive('empty-arch', { cwd: testDir });
+  assert.deepStrictEqual(entries, []);
+});
+
+test('readArchive: handles malformed JSONL lines gracefully', () => {
+  const mr = freshModule();
+  const archiveDir = path.join(testDir, '.claude/pilot/memory/archive/bad-jsonl');
   fs.mkdirSync(archiveDir, { recursive: true });
   fs.writeFileSync(path.join(archiveDir, 'entries.jsonl'),
-    '{"id":"a1","summary":"First"}\n{"id":"a2","summary":"Second"}\n{"id":"a3","summary":"Third"}\n'
+    '{"id":"ok1"}\n{bad json}\n{"id":"ok2"}\n');
+  const entries = mr.readArchive('bad-jsonl', { cwd: testDir });
+  assert.strictEqual(entries.length, 2, 'should skip bad lines');
+  assert.strictEqual(entries[0].id, 'ok1');
+  assert.strictEqual(entries[1].id, 'ok2');
+});
+
+// ============================================================================
+// 16. loadBudgetConfig
+// ============================================================================
+
+console.log('--- loadBudgetConfig ---');
+
+test('loadBudgetConfig: returns defaults from policy', () => {
+  const mr = freshModule();
+  const config = mr.loadBudgetConfig();
+  assert.strictEqual(config.default, 100);
+  assert.strictEqual(config.overrides.decisions, 50);
+  assert.strictEqual(config.overrides.patterns, 150);
+});
+
+test('loadBudgetConfig: accepts pre-loaded policy', () => {
+  const mr = freshModule();
+  const config = mr.loadBudgetConfig({ memory: { budgets: { default: 200 } } });
+  assert.strictEqual(config.default, 200);
+});
+
+test('loadBudgetConfig: falls back to defaults with empty policy', () => {
+  const mr = freshModule();
+  const config = mr.loadBudgetConfig({});
+  assert.strictEqual(config.default, 100);
+  assert.deepStrictEqual(config.overrides, {});
+});
+
+// ============================================================================
+// 17. loadEvictionConfig
+// ============================================================================
+
+console.log('--- loadEvictionConfig ---');
+
+test('loadEvictionConfig: returns defaults from policy', () => {
+  const mr = freshModule();
+  const config = mr.loadEvictionConfig();
+  assert.strictEqual(config.strategy, 'lru');
+  assert.strictEqual(config.trigger_pct, 90);
+  assert.strictEqual(config.target_pct, 75);
+});
+
+test('loadEvictionConfig: accepts pre-loaded policy', () => {
+  const mr = freshModule();
+  const config = mr.loadEvictionConfig({ memory: { eviction: { trigger_pct: 85 } } });
+  assert.strictEqual(config.trigger_pct, 85);
+  assert.strictEqual(config.strategy, 'lru');
+});
+
+test('loadEvictionConfig: falls back to defaults with empty policy', () => {
+  const mr = freshModule();
+  const config = mr.loadEvictionConfig({});
+  assert.strictEqual(config.strategy, 'lru');
+  assert.strictEqual(config.trigger_pct, 90);
+  assert.strictEqual(config.target_pct, 75);
+});
+
+// ============================================================================
+// 18. getChannelBudget
+// ============================================================================
+
+console.log('--- getChannelBudget ---');
+
+test('getChannelBudget: returns default budget for unknown channel', () => {
+  const mr = freshModule();
+  const budget = mr.getChannelBudget('unknown');
+  assert.strictEqual(budget, 100);
+});
+
+test('getChannelBudget: returns overridden budget', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.getChannelBudget('decisions'), 50);
+  assert.strictEqual(mr.getChannelBudget('patterns'), 150);
+});
+
+test('getChannelBudget: falls back to default when no override for channel', () => {
+  const mr = freshModule();
+  const policy = { memory: { budgets: { default: 200, overrides: { decisions: 50 } } } };
+  const budget = mr.getChannelBudget('other-channel', policy);
+  assert.strictEqual(budget, 200);
+});
+
+// ============================================================================
+// 19. checkBudget
+// ============================================================================
+
+console.log('--- checkBudget ---');
+
+test('checkBudget: under budget returns overBudget false', () => {
+  const mr = freshModule();
+  const result = mr.checkBudget('unknown', 10);
+  assert.strictEqual(result.overBudget, false);
+  assert.strictEqual(result.budget, 100);
+  assert.strictEqual(result.count, 10);
+});
+
+test('checkBudget: at trigger threshold returns overBudget true', () => {
+  const mr = freshModule();
+  // Default budget=100, trigger_pct=90, threshold=90
+  const result = mr.checkBudget('unknown', 90);
+  assert.strictEqual(result.overBudget, true);
+  assert.strictEqual(result.triggerThreshold, 90);
+});
+
+test('checkBudget: over budget returns overBudget true', () => {
+  const mr = freshModule();
+  const result = mr.checkBudget('unknown', 110);
+  assert.strictEqual(result.overBudget, true);
+});
+
+test('checkBudget: just below trigger threshold returns overBudget false', () => {
+  const mr = freshModule();
+  const result = mr.checkBudget('unknown', 89);
+  assert.strictEqual(result.overBudget, false);
+});
+
+test('checkBudget: uses channel-specific budget', () => {
+  const mr = freshModule();
+  // decisions budget = 50, trigger at 90% = 45
+  const result = mr.checkBudget('decisions', 45);
+  assert.strictEqual(result.overBudget, true);
+  assert.strictEqual(result.budget, 50);
+});
+
+// ============================================================================
+// 20. evict
+// ============================================================================
+
+console.log('--- evict ---');
+
+test('evict: keeps top entries by relevance', () => {
+  const mr = freshModule();
+  // Default budget=100, target_pct=75 -> target=75
+  const entries = Array.from({ length: 100 }, (_, i) => ({
+    id: `ev${i}`,
+    relevance: 1 - (i / 100),
+    description: `Entry ${i}`,
+    lastAccessed: new Date(NOW - i * ONE_DAY_MS).toISOString()
+  }));
+  const result = mr.evict(entries, 'unknown', { cwd: testDir, now: NOW });
+  assert.strictEqual(result.kept.length, 75);
+  assert.strictEqual(result.evicted.length, 25);
+  assert.strictEqual(result.budget, 100);
+  assert.strictEqual(result.targetCount, 75);
+});
+
+test('evict: archives evicted entries', () => {
+  const mr = freshModule();
+  const entries = Array.from({ length: 100 }, (_, i) => ({
+    id: `ea${i}`,
+    relevance: 1 - (i / 100),
+    description: `Entry ${i}`,
+    lastAccessed: new Date(NOW).toISOString()
+  }));
+  mr.evict(entries, 'evict-arch', { cwd: testDir, now: NOW });
+  const archivePath = path.join(testDir, '.claude/pilot/memory/archive/evict-arch/entries.jsonl');
+  assert.ok(fs.existsSync(archivePath), 'archive should be written');
+  const lines = fs.readFileSync(archivePath, 'utf8').trim().split('\n');
+  assert.strictEqual(lines.length, 25);
+});
+
+test('evict: dryRun mode does not write archives', () => {
+  const mr = freshModule();
+  const entries = Array.from({ length: 100 }, (_, i) => ({
+    id: `ed${i}`,
+    relevance: 1 - (i / 100),
+    description: `Entry ${i}`
+  }));
+  const result = mr.evict(entries, 'dry-evict', { cwd: testDir, dryRun: true });
+  const archivePath = path.join(testDir, '.claude/pilot/memory/archive/dry-evict/entries.jsonl');
+  assert.ok(!fs.existsSync(archivePath), 'archive should not be written in dryRun');
+  assert.strictEqual(result.evicted.length, 25);
+});
+
+test('evict: no eviction needed when entries below target', () => {
+  const mr = freshModule();
+  const entries = Array.from({ length: 10 }, (_, i) => ({
+    id: `en${i}`,
+    relevance: 0.5
+  }));
+  const result = mr.evict(entries, 'unknown', { cwd: testDir });
+  assert.strictEqual(result.kept.length, 10);
+  assert.strictEqual(result.evicted.length, 0);
+});
+
+test('evict: evicted entries have _state archived', () => {
+  const mr = freshModule();
+  const entries = Array.from({ length: 100 }, (_, i) => ({
+    id: `es${i}`,
+    relevance: 1 - (i / 100),
+    description: `Entry ${i}`
+  }));
+  const result = mr.evict(entries, 'state-ch', { cwd: testDir });
+  for (const evicted of result.evicted) {
+    assert.strictEqual(evicted._state, 'archived');
+  }
+});
+
+// ============================================================================
+// 21. getChannelMemoryStats
+// ============================================================================
+
+console.log('--- getChannelMemoryStats ---');
+
+test('getChannelMemoryStats: returns entry count', () => {
+  const mr = freshModule();
+  writeChannel('stats-count', [{ id: 's1' }, { id: 's2' }, { id: 's3' }]);
+  const stats = mr.getChannelMemoryStats('stats-count', { cwd: testDir });
+  assert.strictEqual(stats.entryCount, 3);
+  assert.strictEqual(stats.channel, 'stats-count');
+});
+
+test('getChannelMemoryStats: returns utilization percentage', () => {
+  const mr = freshModule();
+  writeChannel('stats-util', Array.from({ length: 50 }, (_, i) => ({ id: `u${i}` })));
+  const stats = mr.getChannelMemoryStats('stats-util', { cwd: testDir });
+  // 50 entries / 100 budget = 50%
+  assert.strictEqual(stats.utilizationPct, 50);
+  assert.strictEqual(stats.budget, 100);
+});
+
+test('getChannelMemoryStats: returns archive count', () => {
+  const mr = freshModule();
+  writeChannel('stats-arch', [{ id: 'sa1' }]);
+  mr.archiveEntry({ id: 'archived1', summary: 'a' }, 'stats-arch', testDir);
+  mr.archiveEntry({ id: 'archived2', summary: 'b' }, 'stats-arch', testDir);
+  const stats = mr.getChannelMemoryStats('stats-arch', { cwd: testDir });
+  assert.strictEqual(stats.archiveCount, 2);
+});
+
+test('getChannelMemoryStats: missing channel returns zero counts', () => {
+  const mr = freshModule();
+  const stats = mr.getChannelMemoryStats('missing', { cwd: testDir });
+  assert.strictEqual(stats.entryCount, 0);
+  assert.strictEqual(stats.archiveCount, 0);
+});
+
+test('getChannelMemoryStats: overBudget flag correct', () => {
+  const mr = freshModule();
+  const policy = { memory: { budgets: { default: 10 }, eviction: { trigger_pct: 90 } } };
+  writeChannel('over-budget', Array.from({ length: 10 }, (_, i) => ({ id: `ob${i}` })));
+  const stats = mr.getChannelMemoryStats('over-budget', { cwd: testDir, policy });
+  assert.strictEqual(stats.overBudget, true);
+});
+
+test('getChannelMemoryStats: handles object data format', () => {
+  const mr = freshModule();
+  writeChannelObject('obj-stats', { items: [{ id: 'o1' }, { id: 'o2' }] });
+  const stats = mr.getChannelMemoryStats('obj-stats', { cwd: testDir });
+  assert.strictEqual(stats.entryCount, 2);
+});
+
+// ============================================================================
+// 22. getAllMemoryStats
+// ============================================================================
+
+console.log('--- getAllMemoryStats ---');
+
+test('getAllMemoryStats: multiple channels', () => {
+  const mr = freshModule();
+  writeChannel('all-a', [{ id: 'a1' }, { id: 'a2' }]);
+  writeChannel('all-b', [{ id: 'b1' }, { id: 'b2' }, { id: 'b3' }]);
+  const stats = mr.getAllMemoryStats({ cwd: testDir });
+  assert.strictEqual(stats.channels.length, 2);
+  assert.strictEqual(stats.totalEntries, 5);
+});
+
+test('getAllMemoryStats: totals include archives', () => {
+  const mr = freshModule();
+  writeChannel('total-a', [{ id: '1' }]);
+  writeChannel('total-b', [{ id: '2' }, { id: '3' }]);
+  mr.archiveEntry({ id: 'ar1', summary: 'x' }, 'total-a', testDir);
+  const stats = mr.getAllMemoryStats({ cwd: testDir });
+  assert.strictEqual(stats.totalEntries, 3);
+  assert.strictEqual(stats.totalArchived, 1);
+  assert.strictEqual(stats.totalBudget, 200);
+});
+
+test('getAllMemoryStats: empty channels dir returns zeros', () => {
+  const mr = freshModule();
+  const stats = mr.getAllMemoryStats({ cwd: testDir });
+  assert.strictEqual(stats.channels.length, 0);
+  assert.strictEqual(stats.totalEntries, 0);
+  assert.strictEqual(stats.totalBudget, 0);
+  assert.strictEqual(stats.totalArchived, 0);
+});
+
+test('getAllMemoryStats: no channels dir returns zeros', () => {
+  const mr = freshModule();
+  fs.rmSync(path.join(testDir, '.claude/pilot/memory/channels'), { recursive: true, force: true });
+  const stats = mr.getAllMemoryStats({ cwd: testDir });
+  assert.deepStrictEqual(stats, { channels: [], totalEntries: 0, totalBudget: 0, totalArchived: 0 });
+});
+
+// ============================================================================
+// 23. getRelevantMemory (tiered loading from memory.js)
+// ============================================================================
+
+console.log('--- getRelevantMemory (tiered loading) ---');
+
+test('getRelevantMemory: scores and filters by threshold', () => {
+  const memory = freshModule('memory');
+  writeChannel('rel-test', [
+    { id: 'd1', lastAccessed: new Date(NOW).toISOString(), accessCount: 10, tags: ['auth'], files: ['src/auth.js'] },
+    { id: 'd2', lastAccessed: new Date(NOW - 30 * ONE_DAY_MS).toISOString(), accessCount: 1, tags: ['old'] }
+  ]);
+  const result = memory.getRelevantMemory(
+    { tags: ['auth'], files: ['src/auth.js'] },
+    50,
+    { cwd: testDir }
   );
+  assert.ok(Array.isArray(result), 'should return array');
+  for (const entry of result) {
+    assert.ok(entry.relevance >= 0.3, `entry ${entry.id} relevance ${entry.relevance} should be >= threshold 0.3`);
+  }
+});
 
-  test('reads all archived entries', () => {
-    const entries = mr.readArchive('test-chan', { cwd: testDir });
-    assert.strictEqual(entries.length, 3);
-  });
-
-  test('respects limit', () => {
-    const entries = mr.readArchive('test-chan', { cwd: testDir, limit: 2 });
-    assert.strictEqual(entries.length, 2);
-    assert.strictEqual(entries[0].id, 'a2'); // last 2
-  });
-
-  test('returns empty for missing channel', () => {
-    assert.deepStrictEqual(mr.readArchive('nonexistent', { cwd: testDir }), []);
-  });
-} finally { teardown(); }
-
-// ============================================================================
-// 16. Budget config
-// ============================================================================
-
-console.log('\n=== 16. Budget config ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
-
-  test('loads budget config', () => {
-    const config = mr.loadBudgetConfig();
-    assert.strictEqual(config.default, 100);
-    assert.strictEqual(config.overrides['design-tokens'], 200);
-    assert.strictEqual(config.overrides['working-context'], 50);
-  });
-
-  test('getChannelBudget returns override when exists', () => {
-    assert.strictEqual(mr.getChannelBudget('design-tokens'), 200);
-    assert.strictEqual(mr.getChannelBudget('working-context'), 50);
-  });
-
-  test('getChannelBudget returns default for unknown channel', () => {
-    assert.strictEqual(mr.getChannelBudget('unknown'), 100);
-  });
-
-  test('loads eviction config', () => {
-    const config = mr.loadEvictionConfig();
-    assert.strictEqual(config.strategy, 'lru');
-    assert.strictEqual(config.trigger_pct, 90);
-    assert.strictEqual(config.target_pct, 75);
-  });
-} finally { teardown(); }
-
-// ============================================================================
-// 17. checkBudget
-// ============================================================================
-
-console.log('\n=== 17. checkBudget ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
-
-  test('not over budget when below trigger', () => {
-    const result = mr.checkBudget('unknown', 50);
-    assert.strictEqual(result.overBudget, false);
-    assert.strictEqual(result.budget, 100);
-  });
-
-  test('over budget when at trigger threshold', () => {
-    const result = mr.checkBudget('unknown', 90);
-    assert.strictEqual(result.overBudget, true);
-  });
-
-  test('over budget when above trigger threshold', () => {
-    const result = mr.checkBudget('unknown', 95);
-    assert.strictEqual(result.overBudget, true);
-  });
-
-  test('uses channel-specific budget', () => {
-    // working-context budget is 50, trigger at 90% = 45
-    const result = mr.checkBudget('working-context', 45);
-    assert.strictEqual(result.overBudget, true);
-    assert.strictEqual(result.budget, 50);
-  });
-} finally { teardown(); }
-
-// ============================================================================
-// 18. evict
-// ============================================================================
-
-console.log('\n=== 18. evict ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
-
-  test('no eviction when under target', () => {
-    const entries = Array.from({ length: 10 }, (_, i) => ({
-      id: 'e' + i, relevance: 1 - (i / 10)
-    }));
-    const result = mr.evict(entries, 'unknown', { dryRun: true });
-    assert.strictEqual(result.kept.length, 10);
-    assert.strictEqual(result.evicted.length, 0);
-  });
-
-  test('evicts down to target count', () => {
-    // working-context: budget 50, target 75% = 37
-    const entries = Array.from({ length: 50 }, (_, i) => ({
-      id: 'e' + i, relevance: 1 - (i / 50), description: 'Entry ' + i
-    }));
-    const result = mr.evict(entries, 'working-context', { dryRun: true });
-    assert.strictEqual(result.kept.length, 37);
-    assert.strictEqual(result.evicted.length, 13);
-    assert.strictEqual(result.targetCount, 37);
-  });
-
-  test('keeps highest relevance entries', () => {
-    const entries = [
-      { id: 'high', relevance: 0.9, description: 'High' },
-      { id: 'mid', relevance: 0.5, description: 'Mid' },
-      { id: 'low', relevance: 0.1, description: 'Low' }
-    ];
-    // Use a budget where target = 2
-    // working-context target = 37, too high for 3 entries
-    // Let's just verify ordering — all 3 entries are under target
-    const result = mr.evict(entries, 'working-context', { dryRun: true });
-    assert.strictEqual(result.kept.length, 3); // 3 < 37 target
-  });
-
-  test('archives evicted entries when not dry run', () => {
-    // working-context: budget 50, target 75% = 37
-    const entries = Array.from({ length: 50 }, (_, i) => ({
-      id: 'evict' + i, relevance: 1 - (i / 50), description: 'Entry ' + i
-    }));
-    const result = mr.evict(entries, 'working-context', { cwd: testDir });
-    const archivePath = path.join(testDir, '.claude/pilot/memory/archive/working-context/entries.jsonl');
-    assert(fs.existsSync(archivePath), `Archive should be created at ${archivePath}`);
-    assert(result.evicted.length > 0, `Expected evictions, got ${result.evicted.length}`);
-  });
-} finally { teardown(); }
-
-// ============================================================================
-// 19. getChannelMemoryStats
-// ============================================================================
-
-console.log('\n=== 19. getChannelMemoryStats ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
-
-  writeChannel('stats-test', [
-    { id: 'a' }, { id: 'b' }, { id: 'c' }
-  ]);
-
-  test('returns correct stats for channel', () => {
-    const stats = mr.getChannelMemoryStats('stats-test', { cwd: testDir });
-    assert.strictEqual(stats.channel, 'stats-test');
-    assert.strictEqual(stats.entryCount, 3);
-    assert.strictEqual(stats.budget, 100);
-    assert.strictEqual(stats.utilizationPct, 3);
-    assert.strictEqual(stats.overBudget, false);
-  });
-
-  test('returns zero stats for missing channel', () => {
-    const stats = mr.getChannelMemoryStats('nonexistent', { cwd: testDir });
-    assert.strictEqual(stats.entryCount, 0);
-  });
-
-  test('counts archived entries', () => {
-    const archiveDir = path.join(testDir, '.claude/pilot/memory/archive/stats-test');
-    fs.mkdirSync(archiveDir, { recursive: true });
-    fs.writeFileSync(path.join(archiveDir, 'entries.jsonl'), '{"id":"a"}\n{"id":"b"}\n');
-    const stats = mr.getChannelMemoryStats('stats-test', { cwd: testDir });
-    assert.strictEqual(stats.archiveCount, 2);
-  });
-} finally { teardown(); }
-
-// ============================================================================
-// 20. getAllMemoryStats
-// ============================================================================
-
-console.log('\n=== 20. getAllMemoryStats ===');
-setup();
-try {
-  const mr = freshModule('../memory-relevance');
-
-  writeChannel('ch-a', [{ id: 'a1' }, { id: 'a2' }]);
-  writeChannel('ch-b', [{ id: 'b1' }]);
-
-  test('aggregates stats across channels', () => {
-    const stats = mr.getAllMemoryStats({ cwd: testDir });
-    assert.strictEqual(stats.channels.length, 2);
-    assert.strictEqual(stats.totalEntries, 3);
-    assert.strictEqual(stats.totalBudget, 200); // 2 * default 100
-  });
-
-  test('returns empty for no channels dir', () => {
-    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'empty-'));
-    const stats = mr.getAllMemoryStats({ cwd: emptyDir });
-    assert.strictEqual(stats.channels.length, 0);
-    fs.rmSync(emptyDir, { recursive: true, force: true });
-  });
-} finally { teardown(); }
-
-// ============================================================================
-// 21. Tiered loading (getRelevantMemory)
-// ============================================================================
-
-console.log('\n=== 21. Tiered loading ===');
-setup();
-try {
-  const now = Date.now();
-
+test('getRelevantMemory: applies tier labels (full/summary)', () => {
+  const memory = freshModule('memory');
   writeChannel('tier-test', [
-    { id: 'high', tags: ['memory', 'scoring'], accessCount: 10, linkCount: 5, ts: new Date(now).toISOString() },
-    { id: 'mid', tags: ['memory'], accessCount: 3, linkCount: 1, ts: new Date(now - 5 * MS_PER_DAY).toISOString() },
-    { id: 'low', tags: ['unrelated'], accessCount: 0, linkCount: 0, ts: new Date(now - 30 * MS_PER_DAY).toISOString() }
+    { id: 't1', lastAccessed: new Date(NOW).toISOString(), accessCount: 10, tags: ['auth'], files: ['src/auth.js'] },
+    { id: 't2', lastAccessed: new Date(NOW - 5 * ONE_DAY_MS).toISOString(), accessCount: 3, tags: ['auth'] }
   ]);
-
-  // Need to clear cache for memory.js too
-  Object.keys(require.cache).filter(k =>
-    k.includes('memory') || k.includes('policy')
-  ).forEach(k => delete require.cache[k]);
-
-  const memory = require('../memory');
-
-  test('returns entries above threshold', () => {
-    const relevant = memory.getRelevantMemory(
-      { tags: ['memory', 'scoring'], files: [] },
-      10,
-      { cwd: testDir }
+  const result = memory.getRelevantMemory(
+    { tags: ['auth'], files: ['src/auth.js'] },
+    50,
+    { cwd: testDir }
+  );
+  for (const entry of result) {
+    assert.ok(
+      entry._tier === 'full' || entry._tier === 'summary',
+      `entry ${entry.id} should have valid tier label, got ${entry._tier}`
     );
-    // high and mid should be above threshold, low should be filtered
-    const ids = relevant.map(e => e.id);
-    assert(ids.includes('high'), 'high should be included');
-    // low should be excluded (too old, no matching tags)
-    if (ids.includes('low')) {
-      const lowEntry = relevant.find(e => e.id === 'low');
-      assert(lowEntry.relevance >= 0.3, 'low entry should only be included if above threshold');
+  }
+});
+
+test('getRelevantMemory: respects max limit', () => {
+  const memory = freshModule('memory');
+  writeChannel('many-entries', Array.from({ length: 20 }, (_, i) => ({
+    id: `m${i}`,
+    lastAccessed: new Date(NOW - i * ONE_DAY_MS).toISOString(),
+    accessCount: 20 - i,
+    tags: ['test']
+  })));
+  const result = memory.getRelevantMemory({ tags: ['test'] }, 5, { cwd: testDir });
+  assert.ok(result.length <= 5, `should respect limit of 5, got ${result.length}`);
+});
+
+test('getRelevantMemory: returns empty for no channels', () => {
+  const memory = freshModule('memory');
+  const result = memory.getRelevantMemory({ tags: ['auth'] }, 50, { cwd: testDir });
+  assert.deepStrictEqual(result, []);
+});
+
+test('getRelevantMemory: high-relevance entries get full tier', () => {
+  const memory = freshModule('memory');
+  writeChannel('high-rel', [
+    { id: 'hr1', lastAccessed: new Date(NOW).toISOString(), accessCount: 10, tags: ['auth'], files: ['src/auth.js'] }
+  ]);
+  const policy = {
+    memory: {
+      loading: { relevance_threshold: 0.1, max_total_per_load: 50, tier_thresholds: { full: 0.5, summary: 0.2 } },
+      relevance_weights: { recency: 0.50, frequency: 0.25, similarity: 0.15, links: 0.10 }
     }
-  });
+  };
+  const result = memory.getRelevantMemory(
+    { tags: ['auth'], files: ['src/auth.js'] },
+    50,
+    { cwd: testDir, policy }
+  );
+  assert.ok(result.length >= 1, 'should return at least one entry');
+  assert.strictEqual(result[0]._tier, 'full', 'high-relevance entry should be full tier');
+});
 
-  test('assigns tiers correctly', () => {
-    const relevant = memory.getRelevantMemory(
-      { tags: ['memory', 'scoring'], files: [] },
-      10,
-      { cwd: testDir }
-    );
-    if (relevant.length > 0) {
-      const highEntry = relevant.find(e => e.id === 'high');
-      if (highEntry) {
-        assert(highEntry._tier === 'full' || highEntry._tier === 'summary',
-          `Expected tier full or summary, got ${highEntry._tier}`);
-      }
-    }
-  });
+// ============================================================================
+// Additional edge cases and constants
+// ============================================================================
 
-  test('respects limit', () => {
-    const relevant = memory.getRelevantMemory(
-      { tags: ['memory'] },
-      1,
-      { cwd: testDir }
-    );
-    assert(relevant.length <= 1);
-  });
+console.log('--- Additional edge cases ---');
 
-  test('returns empty for no matches', () => {
-    const relevant = memory.getRelevantMemory(
-      { tags: ['completely-unrelated-xyz'] },
-      10,
-      { cwd: testDir }
-    );
-    // May return entries if recency alone puts them above threshold
-    // Just verify it doesn't crash
-    assert(Array.isArray(relevant));
-  });
-} finally { teardown(); }
+test('DEFAULT_WEIGHTS constant has correct values', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.DEFAULT_WEIGHTS.recency, 0.30);
+  assert.strictEqual(mr.DEFAULT_WEIGHTS.frequency, 0.25);
+  assert.strictEqual(mr.DEFAULT_WEIGHTS.similarity, 0.25);
+  assert.strictEqual(mr.DEFAULT_WEIGHTS.links, 0.20);
+});
+
+test('RECENCY_HALF_LIFE_MS is 7 days', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.RECENCY_HALF_LIFE_MS, 7 * 24 * 60 * 60 * 1000);
+});
+
+test('STATE constants are correct', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.STATE_FULL, 'full');
+  assert.strictEqual(mr.STATE_SUMMARY, 'summary');
+  assert.strictEqual(mr.STATE_ARCHIVED, 'archived');
+});
+
+test('MS_PER_DAY constant is correct', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.MS_PER_DAY, 24 * 60 * 60 * 1000);
+});
+
+test('ARCHIVE_DIR constant is correct', () => {
+  const mr = freshModule();
+  assert.strictEqual(mr.ARCHIVE_DIR, '.claude/pilot/memory/archive');
+});
 
 // ============================================================================
 // RESULTS
 // ============================================================================
 
-console.log(`\n\n${'='.repeat(60)}`);
-console.log(`Results: ${passed} passed, ${failed} failed out of ${passed + failed} tests`);
-console.log('='.repeat(60));
-
-if (failed > 0) {
-  process.exit(1);
-}
+console.log(`\n  ${passed} passed, ${failed} failed\n`);
+process.exit(failed > 0 ? 1 : 0);
