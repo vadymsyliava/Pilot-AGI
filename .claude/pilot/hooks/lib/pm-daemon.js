@@ -34,6 +34,24 @@ const respawnTracker = require('./respawn-tracker');
 const artifactRegistry = require('./artifact-registry');
 const overnightMode = require('./overnight-mode');
 
+// Phase 5.0: Lazy deps for PM Hub + Brain
+let _PmHub = null;
+let _PmBrain = null;
+
+function getPmHub() {
+  if (!_PmHub) {
+    try { _PmHub = require('./pm-hub').PmHub; } catch (e) { _PmHub = null; }
+  }
+  return _PmHub;
+}
+
+function getPmBrain() {
+  if (!_PmBrain) {
+    try { _PmBrain = require('./pm-brain').PmBrain; } catch (e) { _PmBrain = null; }
+  }
+  return _PmBrain;
+}
+
 // ============================================================================
 // CONSTANTS
 // ============================================================================
@@ -234,6 +252,95 @@ class PmDaemon {
       max_agents: this.opts.maxAgents
     });
 
+    // Phase 5.0: Initialize PM Brain + Hub
+    try {
+      const BrainClass = getPmBrain();
+      if (BrainClass) {
+        this.brain = new BrainClass(this.projectRoot);
+        this.log.info('PM Brain initialized');
+      }
+    } catch (e) {
+      this.log.warn('PM Brain init failed, continuing without', { error: e.message });
+    }
+
+    try {
+      const HubClass = getPmHub();
+      if (HubClass) {
+        // Port from policy.yaml > opts > default
+        let hubPort = this.opts.hubPort || 3847;
+        try {
+          const policy = loadPolicy(this.projectRoot);
+          if (policy.pm_hub && policy.pm_hub.port) {
+            hubPort = policy.pm_hub.port;
+          }
+        } catch (e) { /* use default */ }
+
+        this.hub = new HubClass(this.projectRoot, {
+          port: hubPort,
+          brain: this.brain || null
+        });
+
+        // Wire up hub events
+        this.hub.on('agent_registered', (sessionId, data) => {
+          this.log.info('Agent registered via hub', { sessionId, role: data.role });
+        });
+
+        this.hub.on('agent_disconnected', (sessionId) => {
+          this.log.info('Agent disconnected (WS close)', { sessionId });
+          // Instant crash detection — check if agent had a claimed task
+          const agentInfo = this.hub.agents.get(sessionId);
+          if (agentInfo && agentInfo.taskId) {
+            this.log.warn('Agent disconnected with active task', {
+              sessionId,
+              taskId: agentInfo.taskId
+            });
+            // Trigger recovery scan immediately
+            if (this.loop && typeof this.loop._recoveryScan === 'function') {
+              try { this.loop._recoveryScan(); } catch (e) { /* best effort */ }
+            }
+          }
+        });
+
+        this.hub.on('agent_heartbeat', (sessionId, data) => {
+          // Real-time health update — logged at debug level
+          this.log.debug('Agent heartbeat via hub', {
+            sessionId,
+            pressure: data.pressure,
+            taskId: data.taskId
+          });
+        });
+
+        this.hub.on('task_complete', (sessionId, taskId, result) => {
+          this.log.info('Task completed via hub', { sessionId, taskId });
+          this._onTaskCompleted({ task_id: taskId, session_id: sessionId });
+        });
+
+        this.hub.on('task_claimed', (sessionId, taskId) => {
+          this.log.info('Task claimed via hub', { sessionId, taskId });
+        });
+
+        this.hub.on('report', (sessionId, data) => {
+          this.log.info('Agent report via hub', { sessionId, type: data.type || 'unknown' });
+        });
+
+        this.hub.on('agent_reaped', (sessionId) => {
+          this.log.info('Stale agent reaped from hub', { sessionId });
+        });
+
+        this.hub.start().then((hubResult) => {
+          if (hubResult.success) {
+            this.log.info('PM Hub started', { port: hubResult.port });
+          } else {
+            this.log.warn('PM Hub start failed', { error: hubResult.error });
+          }
+        }).catch((e) => {
+          this.log.warn('PM Hub start error', { error: e.message });
+        });
+      }
+    } catch (e) {
+      this.log.warn('PM Hub init failed, continuing without', { error: e.message });
+    }
+
     // Initialize PmLoop
     this.loop = new PmLoop(this.projectRoot, {
       pmSessionId: this.pmSessionId,
@@ -324,6 +431,16 @@ class PmDaemon {
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
+    }
+
+    // Phase 5.0: Stop hub + clear brain
+    if (this.hub) {
+      try { this.hub.stop(); } catch (e) { /* best effort */ }
+      this.hub = null;
+    }
+    if (this.brain) {
+      try { this.brain.clearAllThreads(); } catch (e) { /* best effort */ }
+      this.brain = null;
     }
 
     // Stop watcher
@@ -1002,7 +1119,8 @@ class PmDaemon {
         exited_at: e.exitedAt
       })),
       watcher: this.watcher ? this.watcher.getStatus() : null,
-      loop: this.loop ? this.loop.getStats() : null
+      loop: this.loop ? this.loop.getStats() : null,
+      hub: this.hub ? this.hub.getStatus() : null
     };
   }
 }
