@@ -23,6 +23,8 @@ let _pmResearch = null;
 let _memory = null;
 let _policy = null;
 let _artifactRegistry = null;
+let _modelScheduler = null;
+let _adapterRegistry = null;
 
 function getSession() {
   if (!_session) _session = require('./session');
@@ -60,6 +62,20 @@ function getArtifactRegistry() {
     try { _artifactRegistry = require('./artifact-registry'); } catch (e) { _artifactRegistry = null; }
   }
   return _artifactRegistry;
+}
+
+function getModelScheduler(projectRoot) {
+  if (!_modelScheduler) {
+    try { _modelScheduler = require('./model-scheduler').getModelScheduler({ projectRoot }); } catch (e) { _modelScheduler = null; }
+  }
+  return _modelScheduler;
+}
+
+function getAdapterRegistry() {
+  if (!_adapterRegistry) {
+    try { _adapterRegistry = require('./agent-adapter-registry').getRegistry(); } catch (e) { _adapterRegistry = null; }
+  }
+  return _adapterRegistry;
 }
 
 function getPolicy() {
@@ -620,6 +636,71 @@ function scheduleOne(task, excludeSessionId, projectRoot) {
 }
 
 // ============================================================================
+// MODEL-AWARE SCHEDULING (Phase 6.12)
+// ============================================================================
+
+/**
+ * Schedule with model selection: for each task, pick the best model AND agent.
+ * Wraps schedule() and enriches each assignment with a model recommendation.
+ *
+ * @param {object[]} readyTasks - Tasks from bd ready
+ * @param {string} excludeSessionId - PM session to exclude
+ * @param {string} projectRoot - Project root
+ * @returns {{ assignments: object[], unassigned_tasks: object[], no_agents: boolean }}
+ */
+function scheduleWithModel(readyTasks, excludeSessionId, projectRoot) {
+  // Run normal agent scheduling first
+  const result = schedule(readyTasks, excludeSessionId, projectRoot);
+
+  // Enrich assignments with model recommendation
+  const ms = getModelScheduler(projectRoot);
+  const ar = getAdapterRegistry();
+
+  if (!ms || !ar) {
+    // Model scheduler not available — return plain scheduling results
+    return result;
+  }
+
+  // Get available adapter names
+  const availableAdapters = ar.hasDetected
+    ? ar.getAvailable().map(a => a.name)
+    : ['claude']; // Default: only Claude available if not detected
+
+  for (const assignment of result.assignments) {
+    try {
+      const modelSelection = ms.selectModel(assignment.task, availableAdapters);
+      assignment.model = modelSelection;
+    } catch (e) {
+      // Model selection failed — leave assignment without model recommendation
+      assignment.model = null;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Select the best model for a single task (without agent assignment).
+ * Useful when the PM already knows which agent to use but wants to pick the model.
+ *
+ * @param {object} task - Task object
+ * @param {string} projectRoot
+ * @returns {{ modelId: string, adapterId: string, score: number, breakdown: object } | null}
+ */
+function selectModelForTask(task, projectRoot) {
+  const ms = getModelScheduler(projectRoot);
+  const ar = getAdapterRegistry();
+
+  if (!ms) return null;
+
+  const availableAdapters = ar?.hasDetected
+    ? ar.getAvailable().map(a => a.name)
+    : ['claude'];
+
+  return ms.selectModel(task, availableAdapters);
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
@@ -627,6 +708,8 @@ module.exports = {
   // Main API
   schedule,
   scheduleOne,
+  scheduleWithModel,
+  selectModelForTask,
 
   // Sub-components (for testing / custom use)
   loadSchedulerConfig,
