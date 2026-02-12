@@ -39,6 +39,7 @@ const ESCALATION_SCAN_INTERVAL_MS = 60000; // 60s between escalation scans (Phas
 const ANALYTICS_SCAN_INTERVAL_MS = 300000; // 5min between analytics aggregation (Phase 3.13)
 const PROGRESS_SCAN_INTERVAL_MS = 60000;  // 60s between progress/artifact scans (Phase 4.7)
 const OVERNIGHT_SCAN_INTERVAL_MS = 60000; // 60s between overnight run checks (Phase 4.8)
+const APPROVAL_SCAN_INTERVAL_MS = 120000; // 2min between approval confidence scans (Phase 5.1)
 const PRESSURE_NUDGE_THRESHOLD_PCT = 70;  // PM nudges agents above this if no auto-checkpoint
 const MAX_ACTIONS_PER_CYCLE = 10;         // Prevent runaway action storms
 const ACTION_LOG_PATH = '.claude/pilot/state/orchestrator/action-log.jsonl';
@@ -63,6 +64,7 @@ class PmLoop {
     this.lastAnalyticsScan = 0;
     this.lastProgressScan = 0;
     this.lastOvernightScan = 0;
+    this.lastApprovalScan = 0;
     this.actionQueue = [];  // Used by pm-queue.js for persistence
     this.opts = {
       healthScanIntervalMs: opts.healthScanIntervalMs || HEALTH_SCAN_INTERVAL_MS,
@@ -74,6 +76,7 @@ class PmLoop {
       analyticsScanIntervalMs: opts.analyticsScanIntervalMs || ANALYTICS_SCAN_INTERVAL_MS,
       progressScanIntervalMs: opts.progressScanIntervalMs || PROGRESS_SCAN_INTERVAL_MS,
       overnightScanIntervalMs: opts.overnightScanIntervalMs || OVERNIGHT_SCAN_INTERVAL_MS,
+      approvalScanIntervalMs: opts.approvalScanIntervalMs || APPROVAL_SCAN_INTERVAL_MS,
       maxActionsPerCycle: opts.maxActionsPerCycle || MAX_ACTIONS_PER_CYCLE,
       dryRun: opts.dryRun || false,
       ...opts
@@ -205,6 +208,13 @@ class PmLoop {
       this.lastOvernightScan = now;
       const overnightResults = this._overnightScan();
       results.push(...overnightResults);
+    }
+
+    // Approval confidence scan (Phase 5.1) — check threshold suggestions, log metrics
+    if (now - this.lastApprovalScan >= this.opts.approvalScanIntervalMs) {
+      this.lastApprovalScan = now;
+      const approvalResults = this._approvalScan();
+      results.push(...approvalResults);
     }
 
     return results;
@@ -1324,6 +1334,86 @@ class PmLoop {
     } catch (e) {
       this.logAction('overnight_report_error', { error: e.message });
     }
+  }
+
+  // ==========================================================================
+  // APPROVAL CONFIDENCE SCAN (Phase 5.1)
+  // ==========================================================================
+
+  /**
+   * Phase 5.1: Periodic approval confidence scan.
+   * - Checks accuracy metrics and suggests threshold adjustments
+   * - Logs confidence scoring health to action log
+   * - Records outcomes for completed tasks
+   */
+  _approvalScan() {
+    const results = [];
+
+    try {
+      const scorer = require('./confidence-scorer');
+
+      // Check accuracy metrics
+      const metrics = scorer.getAccuracyMetrics();
+      if (metrics.total >= 5) {
+        this.logAction('approval_metrics', {
+          total: metrics.total,
+          correct_auto: metrics.correct_auto,
+          false_auto: metrics.false_auto,
+          accuracy: metrics.accuracy
+        });
+
+        // Check if threshold adjustment is suggested
+        const adjustment = scorer.suggestThresholdAdjustment();
+        if (adjustment) {
+          this.logAction('approval_threshold_suggestion', {
+            adjust_auto_approve: adjustment.adjust_auto_approve,
+            reason: adjustment.reason
+          });
+
+          results.push({
+            action: 'approval_threshold_suggestion',
+            ...adjustment
+          });
+        }
+      }
+
+      // Record outcomes for recently completed tasks that have confidence scores
+      const completedSessions = session.getAllSessionStates()
+        .filter(s => s.status === 'ended' && s.claimed_task);
+
+      for (const s of completedSessions) {
+        const score = scorer.loadScore(s.claimed_task);
+        if (score && !score.outcome_recorded) {
+          // Check if task was closed successfully
+          const success = s.exit_reason !== 'error' && s.exit_reason !== 'crashed';
+          scorer.recordOutcome(s.claimed_task, success, {
+            labels: score.risk_tags || []
+          });
+
+          // Mark outcome as recorded to avoid double-recording
+          const scoreState = { ...score, outcome_recorded: true };
+          const scorePath = require('path').join(
+            process.cwd(), scorer.HISTORY_DIR,
+            `${s.claimed_task.replace(/\s+/g, '_')}.json`
+          );
+          try {
+            const tmpPath = scorePath + '.tmp.' + process.pid;
+            fs.writeFileSync(tmpPath, JSON.stringify(scoreState, null, 2));
+            fs.renameSync(tmpPath, scorePath);
+          } catch (e) { /* best effort */ }
+
+          results.push({
+            action: 'outcome_recorded',
+            task_id: s.claimed_task,
+            success
+          });
+        }
+      }
+    } catch (e) {
+      this.logAction('approval_scan_error', { error: e.message });
+    }
+
+    return results;
   }
 
   // ==========================================================================
