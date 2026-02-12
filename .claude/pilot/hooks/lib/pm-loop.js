@@ -17,7 +17,19 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFile: execFileCb } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFileCb);
+
+// Async bd command helper — avoids blocking event loop
+async function bdAsync(args, projectRoot, timeout = 15000) {
+  const { stdout } = await execFileAsync('bd', args, {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    timeout
+  });
+  return stdout;
+}
 const orchestrator = require('./orchestrator');
 const session = require('./session');
 const messaging = require('./messaging');
@@ -102,11 +114,12 @@ class PmLoop {
   /**
    * Process a batch of classified bus events.
    * Called by PmWatcher when new events arrive.
+   * Async to support non-blocking bd commands in handlers.
    *
    * @param {Array<{event: object, classification: object}>} classifiedEvents
-   * @returns {Array<{action: string, result: object}>}
+   * @returns {Promise<Array<{action: string, result: object}>>}
    */
-  processEvents(classifiedEvents) {
+  async processEvents(classifiedEvents) {
     if (!this.running || !this.pmSessionId) return [];
 
     const results = [];
@@ -121,7 +134,7 @@ class PmLoop {
         break;
       }
 
-      const result = this._handleEvent(event, classification);
+      const result = await this._handleEvent(event, classification);
       if (result) {
         results.push(result);
         actionsThisCycle++;
@@ -134,8 +147,9 @@ class PmLoop {
   /**
    * Run periodic scans (health, tasks, drift).
    * Should be called on a timer by the watcher.
+   * Async to avoid blocking event loop with bd commands.
    */
-  runPeriodicScans() {
+  async runPeriodicScans() {
     if (!this.running || !this.pmSessionId) return [];
 
     const now = Date.now();
@@ -148,10 +162,10 @@ class PmLoop {
       results.push(...healthResults);
     }
 
-    // Task assignment scan
+    // Task assignment scan (async — uses bd commands)
     if (now - this.lastTaskScan >= this.opts.taskScanIntervalMs) {
       this.lastTaskScan = now;
-      const taskResults = this._taskScan();
+      const taskResults = await this._taskScan();
       results.push(...taskResults);
     }
 
@@ -200,7 +214,7 @@ class PmLoop {
     // Progress/artifact scan (Phase 4.7) — detect blocked tasks, aggregate progress
     if (now - this.lastProgressScan >= this.opts.progressScanIntervalMs) {
       this.lastProgressScan = now;
-      const progressResults = this._progressScan();
+      const progressResults = await this._progressScan();
       results.push(...progressResults);
     }
 
@@ -241,9 +255,9 @@ class PmLoop {
   // ==========================================================================
 
   /**
-   * Route a classified event to the appropriate handler
+   * Route a classified event to the appropriate handler (supports async handlers)
    */
-  _handleEvent(event, classification) {
+  async _handleEvent(event, classification) {
     const handler = this._eventHandlers[classification.action];
     if (!handler) {
       this.logAction('unhandled_event', {
@@ -255,7 +269,7 @@ class PmLoop {
     }
 
     try {
-      const result = handler.call(this, event, classification);
+      const result = await handler.call(this, event, classification);
       this.actionCount++;
       return { action: classification.action, result, event_id: event.id };
     } catch (e) {
@@ -272,7 +286,7 @@ class PmLoop {
     /**
      * Agent finished a task — find and assign next work
      */
-    assign_next: function(event) {
+    assign_next: async function(event) {
       const agentSession = event.from;
       const taskId = event.payload?.data?.task_id;
 
@@ -286,8 +300,8 @@ class PmLoop {
         try { overnightMode.recordTaskCompletion(taskId, this.projectRoot); } catch (e) { /* best effort */ }
       }
 
-      // Find next ready task
-      const readyTask = this._getNextReadyTask();
+      // Find next ready task (async)
+      const readyTask = await this._getNextReadyTask();
       if (!readyTask) {
         this.logAction('no_ready_tasks', { after_completion: taskId });
         return { assigned: false, reason: 'no_ready_tasks' };
@@ -420,13 +434,13 @@ class PmLoop {
     /**
      * New agent joined — greet and optionally assign work
      */
-    greet_agent: function(event) {
+    greet_agent: async function(event) {
       const newSession = event.from;
 
       this.logAction('new_agent', { session: newSession });
 
-      // Check if there's ready work to assign
-      const readyTask = this._getNextReadyTask();
+      // Check if there's ready work to assign (async)
+      const readyTask = await this._getNextReadyTask();
       if (readyTask && !this.opts.dryRun) {
         // Phase 3.2: Auto-research before assignment
         let researchContext = null;
@@ -553,14 +567,14 @@ class PmLoop {
   }
 
   /**
-   * Task scan: find idle agents and assign ready tasks
+   * Task scan: find idle agents and assign ready tasks (async for non-blocking bd)
    */
-  _taskScan() {
+  async _taskScan() {
     const results = [];
 
     try {
-      // Get all ready tasks in one call
-      const readyTasks = this._getAllReadyTasks();
+      // Get all ready tasks in one call (async)
+      const readyTasks = await this._getAllReadyTasks();
       if (readyTasks.length === 0) return results;
 
       // Phase 3.2 + 3.3: Pre-process tasks (research + decomposition) before scheduling
@@ -1220,7 +1234,7 @@ class PmLoop {
    * Progress/artifact scan (Phase 4.7)
    * Detects tasks blocked on missing artifacts and aggregates progress.
    */
-  _progressScan() {
+  async _progressScan() {
     const results = [];
 
     try {
@@ -1246,8 +1260,8 @@ class PmLoop {
         }
       }
 
-      // Check ready tasks for artifact blocking
-      const readyTasks = this._getAllReadyTasks();
+      // Check ready tasks for artifact blocking (async)
+      const readyTasks = await this._getAllReadyTasks();
       for (const task of readyTasks) {
         const blocking = artifactRegistry.getBlockingArtifacts(task.id, this.projectRoot);
         if (blocking.length > 0) {
@@ -1452,16 +1466,11 @@ class PmLoop {
   // ==========================================================================
 
   /**
-   * Get all ready tasks from bd (using execFileSync for safety)
+   * Get all ready tasks from bd (async to avoid blocking event loop)
    */
-  _getAllReadyTasks() {
+  async _getAllReadyTasks() {
     try {
-      const output = execFileSync('bd', ['ready', '--json'], {
-        cwd: this.projectRoot,
-        encoding: 'utf8',
-        timeout: 5000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
+      const output = await bdAsync(['ready', '--json'], this.projectRoot);
       return JSON.parse(output);
     } catch (e) {
       return [];
@@ -1469,10 +1478,10 @@ class PmLoop {
   }
 
   /**
-   * Get next ready task from bd (convenience wrapper)
+   * Get next ready task from bd (convenience wrapper, async)
    */
-  _getNextReadyTask() {
-    const tasks = this._getAllReadyTasks();
+  async _getNextReadyTask() {
+    const tasks = await this._getAllReadyTasks();
     return tasks.length > 0 ? tasks[0] : null;
   }
 
