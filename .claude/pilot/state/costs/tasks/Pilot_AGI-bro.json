@@ -1,0 +1,15 @@
+{
+  "task_id": "Pilot AGI-bro",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 29,
+  "sessions": {
+    "S-mlj6jaxs-7a87": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 29
+    }
+  },
+  "created_at": "2026-02-12T08:30:39.220Z",
+  "updated_at": "2026-02-12T08:34:50.696Z"
+}

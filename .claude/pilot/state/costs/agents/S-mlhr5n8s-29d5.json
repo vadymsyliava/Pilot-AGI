@@ -1,0 +1,19 @@
+{
+  "session_id": "S-mlhr5n8s-29d5",
+  "days": {
+    "2026-02-11": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 63
+    }
+  },
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 63,
+  "tasks_worked": [
+    "Pilot AGI-veo",
+    "Pilot AGI-ia2"
+  ],
+  "created_at": "2026-02-11T08:14:00.596Z",
+  "updated_at": "2026-02-11T09:44:52.561Z"
+}

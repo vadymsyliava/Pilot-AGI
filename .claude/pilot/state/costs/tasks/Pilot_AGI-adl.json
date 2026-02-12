@@ -1,0 +1,15 @@
+{
+  "task_id": "Pilot AGI-adl",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 64,
+  "sessions": {
+    "S-mlihte3r-43f5": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 64
+    }
+  },
+  "created_at": "2026-02-12T00:54:58.616Z",
+  "updated_at": "2026-02-12T01:02:25.190Z"
+}

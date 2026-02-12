@@ -1,0 +1,18 @@
+{
+  "session_id": "S-mlhqydp2-f9bb",
+  "days": {
+    "2026-02-11": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 7
+    }
+  },
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 7,
+  "tasks_worked": [
+    "Pilot AGI-2v8"
+  ],
+  "created_at": "2026-02-11T08:08:40.737Z",
+  "updated_at": "2026-02-11T08:09:12.559Z"
+}
