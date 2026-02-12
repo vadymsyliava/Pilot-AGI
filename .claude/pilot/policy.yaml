@@ -916,3 +916,63 @@ telegram:
 
   # Emergency kill switch phrase (case-insensitive)
   kill_switch_phrase: "LOCKDOWN"
+
+# =============================================================================
+# NOTIFICATIONS (Phase 5.9)
+# Real-time notification system — channels, routing, and digest
+# =============================================================================
+notifications:
+  # Channel configurations
+  # Each channel is opt-in: set enabled: true and provide credentials
+  channels:
+    # macOS system notifications (always available, no config needed)
+    system:
+      enabled: true
+
+    # Slack — provide webhook URL from Slack > Apps > Incoming Webhooks
+    slack:
+      enabled: false
+      # webhook_url: "https://hooks.slack.com/services/T00/B00/xxxx"
+
+    # Discord — provide webhook URL from Server Settings > Integrations
+    discord:
+      enabled: false
+      # webhook_url: "https://discord.com/api/webhooks/xxxx/yyyy"
+
+    # Email — SMTP configuration
+    email:
+      enabled: false
+      # smtp_host: "smtp.gmail.com"
+      # smtp_port: 587
+      # smtp_user: ""
+      # smtp_pass: ""  # Use env var PILOT_SMTP_PASS instead
+      # from: "pilot-agi@yourdomain.com"
+      # to: "you@yourdomain.com"
+
+  # Primary channel for warning-level notifications (default: system)
+  primary_channel: "system"
+
+  # Digest interval for info-level notifications (minutes)
+  digest_interval_minutes: 30
+
+  # Event routing overrides — send specific events to specific channels
+  # Each key is an event type, value has channels list
+  routing:
+    # escalation.human:
+    #   channels: ["slack", "system", "email"]
+    # morning_report:
+    #   channels: ["slack", "email"]
+
+  # Morning report schedule (24h format)
+  morning_report_time: "08:00"
+
+  # Event types that trigger notifications
+  events:
+    escalation_human: true
+    escalation_warning: true
+    task_complete: true
+    sprint_complete: true
+    budget_alert: true
+    agent_stall: true
+    morning_report: true
+    error_budget_exceeded: true
