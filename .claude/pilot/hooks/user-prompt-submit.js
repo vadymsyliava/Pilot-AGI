@@ -47,6 +47,16 @@ function isPilotCommand(prompt) {
 }
 
 /**
+ * Check if prompt is a PM command (should NOT receive active task context)
+ * PM commands should run without worker-task bias
+ */
+function isPmCommand(prompt) {
+  const trimmed = prompt.trim().toLowerCase();
+  return trimmed.startsWith('/pilot-pm') ||
+         trimmed.startsWith('/pilot-dashboard');
+}
+
+/**
  * Check if prompt is clearly a question (pass through)
  */
 function isQuestion(prompt) {
@@ -233,7 +243,8 @@ async function main() {
   // Decide whether to inject guardian context
   if (!shouldInjectGuardian(prompt, activeTask)) {
     // Quick heuristics passed - no injection needed
-    if (activeTask) {
+    // PM commands should NOT get active task context (prevents PM from executing tasks)
+    if (activeTask && !isPmCommand(prompt)) {
       // Remind about active task + session awareness
       let context = `Active task: [${activeTask.id}] ${activeTask.title}`;
       if (sessionAwareness) {
