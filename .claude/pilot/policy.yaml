@@ -732,6 +732,70 @@ overnight:
     timeout_min: 15
 
 # =============================================================================
+# MEMORY CONSOLIDATION (Phase 5.7)
+# Relevance scoring, summarization, tiered loading, and budget management
+# =============================================================================
+memory:
+  # Relevance scoring weights (must sum to 1.0)
+  relevance_weights:
+    recency: 0.30       # How recently the entry was created/updated
+    frequency: 0.25     # How often the entry has been accessed
+    similarity: 0.25    # Semantic similarity to current task context
+    links: 0.20         # Cross-references from other entries/channels
+
+  # Per-channel memory budgets (max entries before eviction)
+  budgets:
+    default: 100         # Default budget for any channel
+    overrides:
+      design-tokens: 200   # Design tokens need more capacity
+      working-context: 50  # Working context is ephemeral
+      decisions: 150       # Decision log is high-value, keep more
+
+  # Summarization pipeline configuration
+  summarization:
+    # Minimum relevance score to keep entry at full fidelity
+    full_fidelity_threshold: 0.6
+
+    # Days after last access before summarizing (full → summary)
+    summary_after_days: 7
+
+    # Days after last access before archiving (summary → archived)
+    archive_after_days: 30
+
+    # Maximum summary length (characters)
+    max_summary_length: 500
+
+    # Minimum entries before triggering consolidation pass
+    min_entries_for_consolidation: 20
+
+  # Tiered loading configuration
+  loading:
+    # Minimum relevance score to include in context load
+    relevance_threshold: 0.3
+
+    # Maximum entries to load per channel per request
+    max_entries_per_load: 20
+
+    # Maximum total entries across all channels per load
+    max_total_per_load: 50
+
+    # Tiers: full (score >= 0.7), summary (0.3-0.7), skip (< 0.3)
+    tier_thresholds:
+      full: 0.7
+      summary: 0.3
+
+  # Eviction policy
+  eviction:
+    # Strategy: lru (least recently used) or lrs (lowest relevance score)
+    strategy: "lru"
+
+    # Run eviction when channel reaches this % of budget
+    trigger_pct: 90
+
+    # Evict down to this % of budget
+    target_pct: 75
+
+# =============================================================================
 # QUALITY GATES (optional, disabled by default)
 # Pre-commit quality checks - these duplicate Claude Code native functionality
 # Enable only if you need stricter checks than Claude Code provides
