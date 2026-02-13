@@ -3,14 +3,13 @@
 /**
  * Tests for Phase 5.8 — Cross-Project Learning
  *
- * Run: node --test tests/cross-project-knowledge.test.js
+ * Run: npx vitest run tests/cross-project-knowledge.test.js
  */
 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { describe, test, beforeEach, afterEach } = require('node:test');
-const assert = require('node:assert/strict');
+const { describe, it: test, beforeEach, afterEach, expect } = require('vitest');
 
 let testDir;
 let knowledgeDir;
