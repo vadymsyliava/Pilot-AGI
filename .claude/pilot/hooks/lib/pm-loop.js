@@ -555,6 +555,38 @@ class PmLoop {
         return { dry_run: true, would_review: taskId };
       }
 
+      // Phase 8.3: Check peer review gate before PM review
+      try {
+        const reviewGate = require('./review-gate');
+        const gateCheck = reviewGate.checkReviewGate(taskId);
+
+        if (!gateCheck.passed) {
+          // Attempt auto-review
+          const diff = event.payload?.data?.diff || '';
+          const authorRole = event.payload?.data?.author_role || null;
+
+          if (diff && authorRole) {
+            const autoResult = reviewGate.autoReview(taskId, authorRole, diff);
+            if (autoResult.reviewed && !autoResult.approved) {
+              this.logAction('peer_review_rejected', {
+                task_id: taskId,
+                reviewer: autoResult.reviewer,
+                feedback: autoResult.feedback
+              });
+              orchestrator.rejectMerge(taskId, this.pmSessionId,
+                `Peer review rejected: ${autoResult.feedback || 'issues found'}`
+              );
+              return { reviewed: true, approved: false, peer_review: 'rejected' };
+            }
+          } else if (gateCheck.reason === 'peer review not completed') {
+            this.logAction('peer_review_pending', { task_id: taskId });
+            return { reviewed: false, approved: false, reason: 'peer review required but not completed' };
+          }
+        }
+      } catch (e) {
+        // Review gate module not available — proceed without
+      }
+
       const review = orchestrator.reviewWork(taskId);
 
       if (review.approved) {
