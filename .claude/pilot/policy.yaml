@@ -446,6 +446,32 @@ worktree:
   # Base branch to create worktrees from
   base_branch: "main"
 
+  # Semantic merge conflict resolution (Phase 5.2)
+  merge_resolution:
+    # Master switch for auto-resolution
+    enabled: true
+
+    # Confidence thresholds for auto-resolution decisions
+    # Resolutions above 'high' are applied without review
+    # Between 'medium' and 'high' are applied with logging
+    # Below 'medium' are escalated to human
+    confidence_high: 0.85
+    confidence_medium: 0.60
+
+    # Maximum conflict size in bytes for auto-resolution
+    max_conflict_size: 8000
+
+    # Supported languages for structural analysis
+    languages:
+      - javascript
+      - typescript
+      - python
+      - go
+      - rust
+
+    # Require test validation after auto-resolution
+    test_validation: true
+
 # =============================================================================
 # PM ORCHESTRATOR (Phase 2.4)
 # Controls for the PM team-lead agent coordination
@@ -983,7 +1009,7 @@ notifications:
 # =============================================================================
 terminal_orchestration:
   # Master switch — disabled by default, opt-in
-  enabled: false
+  enabled: true
 
   # Provider: 'auto' (iTerm2 → AppleScript), 'iterm2', 'applescript'
   provider: 'auto'
