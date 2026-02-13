@@ -1199,3 +1199,55 @@ cross_project:
 
   # Prune entries older than N days (with zero usage)
   prune_after_days: 90
+
+# =============================================================================
+# GITHUB PR AUTOMATION (Phase 5.11)
+# Controls automatic PR creation, CI monitoring, and auto-merge
+# =============================================================================
+github:
+  # Master switch — opt-in only (fallback: local merge)
+  enabled: false
+
+  # Create PR when task completes
+  pr_on_complete: true
+
+  # Auto-merge when CI checks pass + PM approves
+  auto_merge: false
+
+  # Push branch to remote on task complete
+  auto_push: true
+
+  # PR merge strategy: squash | merge | rebase
+  merge_strategy: "squash"
+
+  # Delete remote branch after PR merge
+  delete_branch_after_merge: true
+
+  # PR template: "default" or path to custom template
+  pr_template: "default"
+
+  # Wait for CI checks to pass before merge
+  require_checks_pass: true
+
+  # Commit atomicity enforcement
+  commit_enforcement:
+    max_lines_per_commit: 500
+    require_conventional: true
+    block_on_violation: false
+
+  # Labels applied to auto-created PRs
+  labels:
+    - "pilot-agi"
+    - "auto-generated"
+
+  # GitHub usernames for PR reviewers (empty = none required)
+  reviewers: []
+
+  # Target branch for PRs
+  base_branch: "main"
+
+  # CI check monitoring
+  ci_timeout_minutes: 30
+
+  # PM loop PR monitor scan interval (seconds)
+  pr_monitor_scan_interval_sec: 60
