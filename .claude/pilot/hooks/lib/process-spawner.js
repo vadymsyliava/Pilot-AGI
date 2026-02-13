@@ -460,11 +460,50 @@ function cleanupContextFile(taskId, projectRoot) {
 }
 
 // ============================================================================
+// EXECUTION PROVIDER INTEGRATION (Phase 5.10)
+// ============================================================================
+
+let _executionProvider = null;
+function getExecutionProvider() {
+  if (!_executionProvider) {
+    try { _executionProvider = require('./execution-provider'); } catch (e) { _executionProvider = null; }
+  }
+  return _executionProvider;
+}
+
+/**
+ * Spawn an agent via the configured execution provider.
+ * Falls back to direct local spawn if provider system is unavailable.
+ *
+ * @param {object} task - Task object
+ * @param {object} options - Same as spawnAgent options
+ * @returns {{ success: boolean, processId?: string, provider?: string, pid?: number, error?: string }}
+ */
+async function spawnViaProvider(task, options = {}) {
+  const ep = getExecutionProvider();
+  if (!ep) {
+    // Fallback to direct local spawn
+    return spawnAgent(task, options);
+  }
+
+  const providerName = ep.getActiveProviderName(options.projectRoot);
+
+  // If local provider, just use spawnAgent directly for efficiency
+  if (providerName === 'local') {
+    return spawnAgent(task, options);
+  }
+
+  // Use execution provider for remote/docker execution
+  return ep.spawnViaProvider(task, options);
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
 module.exports = {
   spawnAgent,
+  spawnViaProvider,
   cleanupContextFile,
   CONTEXT_FILE_DIR,
   MAX_PROMPT_LENGTH,

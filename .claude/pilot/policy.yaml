@@ -1132,3 +1132,70 @@ pool:
 
   # How often to evaluate scaling decisions (seconds)
   evaluation_interval_seconds: 60
+
+# =============================================================================
+# CLOUD EXECUTION BRIDGE (Phase 5.10)
+# Pluggable execution providers for local, SSH, and Docker agent execution
+# =============================================================================
+execution:
+  # Active provider: local | ssh | docker
+  active_provider: "local"
+
+  # Provider-specific configurations
+  providers:
+    ssh:
+      hosts: []
+      # Example host config:
+      # hosts:
+      #   - host: "build-server-1"
+      #     user: "pilot"
+      #     port: 22
+      #     key_path: "~/.ssh/id_rsa"
+      #     remote_path: "/home/pilot/workspace"
+      #     max_agents: 4
+
+    docker:
+      image: "pilot-agi:latest"
+      network: "pilot-net"
+      cpu_limit: "2"
+      mem_limit: "4g"
+      max_containers: 8
+
+  # State synchronization between local and remote
+  state_sync:
+    method: "git"               # git | rsync
+    auto_sync: true
+    sync_interval_seconds: 300
+
+# =============================================================================
+# CROSS-PROJECT LEARNING (Phase 5.8)
+# Share anonymized knowledge across projects
+# =============================================================================
+cross_project:
+  # Master switch — opt-in only
+  enabled: true
+
+  # Allow publishing anonymized learnings to global knowledge base
+  publish: true
+
+  # Allow consuming knowledge from other projects
+  consume: true
+
+  # Anonymization level: "full" | "partial" | "none"
+  anonymize_level: "full"
+
+  # Patterns to never export (matched against content)
+  exclude_patterns:
+    - "*.env"
+    - "*secret*"
+    - "*password*"
+    - "*token*"
+
+  # Custom knowledge path (null = ~/.pilot-agi/knowledge/)
+  knowledge_path: null
+
+  # Maximum entries per knowledge type before pruning
+  max_entries_per_type: 500
+
+  # Prune entries older than N days (with zero usage)
+  prune_after_days: 90
