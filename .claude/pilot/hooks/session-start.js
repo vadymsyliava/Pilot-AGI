@@ -623,6 +623,43 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
+  // 8e. Agent Soul Context (Phase 7.1)
+  // -------------------------------------------------------------------------
+
+  try {
+    const souls = require('./lib/souls');
+
+    // Resolve agent role from session state
+    let soulRole = null;
+    try {
+      const sessDir = path.join(process.cwd(), '.claude/pilot/state/sessions');
+      const sessFile = path.join(sessDir, `${sessionId}.json`);
+      if (fs.existsSync(sessFile)) {
+        const sessData = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+        soulRole = sessData.role || null;
+      }
+    } catch (e) {
+      // No session state — skip soul
+    }
+
+    if (soulRole) {
+      // Auto-initialize soul on first session for this role
+      if (!souls.soulExists(soulRole)) {
+        souls.initializeSoul(soulRole);
+      }
+
+      const soulCtx = souls.loadSoulContext(soulRole);
+      if (soulCtx) {
+        context.agent_soul = soulCtx;
+        const size = souls.getSoulSize(soulRole);
+        messages.push(`Soul [${soulRole}]: loaded (${size}b)`);
+      }
+    }
+  } catch (e) {
+    // Soul module not available, continue without
+  }
+
+  // -------------------------------------------------------------------------
   // 8b. Inter-Agent Messaging Context (Phase 2.3)
   // -------------------------------------------------------------------------
 
