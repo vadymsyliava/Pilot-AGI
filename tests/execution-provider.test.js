@@ -11,10 +11,11 @@
  *   - process-spawner.js: spawnViaProvider integration
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import path from 'path';
-import fs from 'fs';
-import os from 'os';
+const { describe, test, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
 
 // ============================================================================
 // FRESH MODULE HELPER
@@ -39,19 +40,19 @@ describe('execution-provider', () => {
   });
 
   describe('validateProvider', () => {
-    it('should reject null/undefined', () => {
-      expect(ep.validateProvider(null).valid).toBe(false);
-      expect(ep.validateProvider(undefined).valid).toBe(false);
+    test('should reject null/undefined', () => {
+      assert.equal(ep.validateProvider(null).valid, false);
+      assert.equal(ep.validateProvider(undefined).valid, false);
     });
 
-    it('should reject provider missing required methods', () => {
+    test('should reject provider missing required methods', () => {
       const result = ep.validateProvider({ name: 'test' });
-      expect(result.valid).toBe(false);
-      expect(result.missing).toContain('spawn');
-      expect(result.missing).toContain('kill');
+      assert.equal(result.valid, false);
+      assert.ok(result.missing.includes('spawn'));
+      assert.ok(result.missing.includes('kill'));
     });
 
-    it('should validate a complete provider', () => {
+    test('should validate a complete provider', () => {
       const provider = {
         name: 'test',
         spawn: () => {},
@@ -60,10 +61,10 @@ describe('execution-provider', () => {
         getLogs: () => {},
         isAvailable: () => true
       };
-      expect(ep.validateProvider(provider).valid).toBe(true);
+      assert.equal(ep.validateProvider(provider).valid, true);
     });
 
-    it('should reject provider without name', () => {
+    test('should reject provider without name', () => {
       const provider = {
         spawn: () => {},
         kill: () => {},
@@ -72,13 +73,13 @@ describe('execution-provider', () => {
         isAvailable: () => true
       };
       const result = ep.validateProvider(provider);
-      expect(result.valid).toBe(false);
-      expect(result.missing).toContain('name');
+      assert.equal(result.valid, false);
+      assert.ok(result.missing.includes('name'));
     });
   });
 
   describe('registerProvider / getProvider', () => {
-    it('should register and retrieve a provider', () => {
+    test('should register and retrieve a provider', () => {
       const provider = {
         name: 'test',
         spawn: () => {},
@@ -88,28 +89,28 @@ describe('execution-provider', () => {
         isAvailable: () => true
       };
       const result = ep.registerProvider('test', provider);
-      expect(result.success).toBe(true);
-      expect(ep.getProvider('test')).toBe(provider);
+      assert.equal(result.success, true);
+      assert.equal(ep.getProvider('test'), provider);
     });
 
-    it('should reject invalid provider', () => {
+    test('should reject invalid provider', () => {
       const result = ep.registerProvider('bad', {});
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('missing');
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes('missing'));
     });
 
-    it('should reject empty name', () => {
+    test('should reject empty name', () => {
       const result = ep.registerProvider('', { name: 'x', spawn: () => {}, kill: () => {}, getStatus: () => {}, getLogs: () => {}, isAvailable: () => true });
-      expect(result.success).toBe(false);
+      assert.equal(result.success, false);
     });
 
-    it('should return null for unregistered provider', () => {
-      expect(ep.getProvider('nonexistent')).toBeNull();
+    test('should return null for unregistered provider', () => {
+      assert.equal(ep.getProvider('nonexistent'), null);
     });
   });
 
   describe('unregisterProvider', () => {
-    it('should remove a registered provider', () => {
+    test('should remove a registered provider', () => {
       const provider = {
         name: 'test',
         spawn: () => {},
@@ -119,17 +120,17 @@ describe('execution-provider', () => {
         isAvailable: () => true
       };
       ep.registerProvider('test', provider);
-      expect(ep.unregisterProvider('test')).toBe(true);
-      expect(ep.getProvider('test')).toBeNull();
+      assert.equal(ep.unregisterProvider('test'), true);
+      assert.equal(ep.getProvider('test'), null);
     });
 
-    it('should return false for non-existent provider', () => {
-      expect(ep.unregisterProvider('nope')).toBe(false);
+    test('should return false for non-existent provider', () => {
+      assert.equal(ep.unregisterProvider('nope'), false);
     });
   });
 
   describe('listProviders', () => {
-    it('should list all registered providers', () => {
+    test('should list all registered providers', () => {
       const mkProvider = (name) => ({
         name,
         spawn: () => {},
@@ -141,27 +142,29 @@ describe('execution-provider', () => {
       ep.registerProvider('a', mkProvider('a'));
       ep.registerProvider('b', mkProvider('b'));
       const list = ep.listProviders();
-      expect(list).toContain('a');
-      expect(list).toContain('b');
-      expect(list.length).toBe(2);
+      assert.ok(list.includes('a'));
+      assert.ok(list.includes('b'));
+      assert.equal(list.length, 2);
     });
   });
 
   describe('getActiveProviderName', () => {
-    it('should default to local', () => {
-      expect(ep.getActiveProviderName('/nonexistent')).toBe('local');
+    test('should default to local', () => {
+      assert.equal(ep.getActiveProviderName('/nonexistent'), 'local');
     });
   });
 
   describe('spawnViaProvider', () => {
-    it('should spawn via the active provider', async () => {
+    test('should spawn via the active provider', async () => {
+      let spawnCalls = [];
+      let isAvailableCalls = [];
       const provider = {
         name: 'test',
-        spawn: vi.fn().mockReturnValue({ success: true, processId: 'p-1' }),
+        spawn: (...args) => { spawnCalls.push(args); return { success: true, processId: 'p-1' }; },
         kill: () => {},
         getStatus: () => {},
         getLogs: () => {},
-        isAvailable: vi.fn().mockReturnValue(true)
+        isAvailable: (...args) => { isAvailableCalls.push(args); return true; }
       };
       ep.registerProvider('test', provider);
 
@@ -172,16 +175,19 @@ describe('execution-provider', () => {
       // Directly call the provider since spawnViaProvider uses getActiveProviderName internally
       // We need to re-mock the module's internal function — test the flow manually
       const result = await Promise.resolve(provider.spawn({ id: 'task-1' }, {}));
-      expect(result.success).toBe(true);
-      expect(result.processId).toBe('p-1');
+      assert.equal(result.success, true);
+      assert.equal(result.processId, 'p-1');
 
       ep.getActiveProviderName = origGetName;
     });
 
-    it('should fall back to local when active provider unavailable', async () => {
+    test('should fall back to local when active provider unavailable', async () => {
+      let localSpawnCalls = [];
+      let sshSpawnCalls = [];
+      let sshIsAvailableCalls = [];
       const localProvider = {
         name: 'local',
-        spawn: vi.fn().mockReturnValue({ success: true, processId: 'local-1' }),
+        spawn: (...args) => { localSpawnCalls.push(args); return { success: true, processId: 'local-1' }; },
         kill: () => {},
         getStatus: () => {},
         getLogs: () => {},
@@ -189,11 +195,11 @@ describe('execution-provider', () => {
       };
       const sshProvider = {
         name: 'ssh',
-        spawn: vi.fn(),
+        spawn: (...args) => { sshSpawnCalls.push(args); },
         kill: () => {},
         getStatus: () => {},
         getLogs: () => {},
-        isAvailable: vi.fn().mockReturnValue(false)
+        isAvailable: (...args) => { sshIsAvailableCalls.push(args); return false; }
       };
 
       ep.registerProvider('local', localProvider);
@@ -201,13 +207,13 @@ describe('execution-provider', () => {
 
       const result = await ep.spawnViaProvider({ id: 'task-1' }, { projectRoot: '/nonexistent' });
       // Will use local as fallback since active_provider defaults to 'local'
-      expect(result.provider).toBe('local');
+      assert.equal(result.provider, 'local');
     });
 
-    it('should return error when no provider registered', async () => {
+    test('should return error when no provider registered', async () => {
       const result = await ep.spawnViaProvider({ id: 'task-1' }, { projectRoot: '/nonexistent' });
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('No provider registered');
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes('No provider registered'));
     });
   });
 });
@@ -224,40 +230,40 @@ describe('local-provider', () => {
     localProvider.clearTracking();
   });
 
-  it('should have correct name', () => {
-    expect(localProvider.name).toBe('local');
+  test('should have correct name', () => {
+    assert.equal(localProvider.name, 'local');
   });
 
-  it('should always be available', () => {
-    expect(localProvider.isAvailable()).toBe(true);
+  test('should always be available', () => {
+    assert.equal(localProvider.isAvailable(), true);
   });
 
-  it('should implement all required methods', () => {
-    expect(typeof localProvider.spawn).toBe('function');
-    expect(typeof localProvider.kill).toBe('function');
-    expect(typeof localProvider.getStatus).toBe('function');
-    expect(typeof localProvider.getLogs).toBe('function');
-    expect(typeof localProvider.isAvailable).toBe('function');
+  test('should implement all required methods', () => {
+    assert.equal(typeof localProvider.spawn, 'function');
+    assert.equal(typeof localProvider.kill, 'function');
+    assert.equal(typeof localProvider.getStatus, 'function');
+    assert.equal(typeof localProvider.getLogs, 'function');
+    assert.equal(typeof localProvider.isAvailable, 'function');
   });
 
-  it('should return not-found for unknown process kill', () => {
+  test('should return not-found for unknown process kill', () => {
     const result = localProvider.kill('nonexistent');
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('not found');
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('not found'));
   });
 
-  it('should return not-running for unknown process status', () => {
+  test('should return not-running for unknown process status', () => {
     const result = localProvider.getStatus('nonexistent');
-    expect(result.running).toBe(false);
+    assert.equal(result.running, false);
   });
 
-  it('should return not-found for unknown process logs', () => {
+  test('should return not-found for unknown process logs', () => {
     const result = localProvider.getLogs('nonexistent');
-    expect(result.success).toBe(false);
+    assert.equal(result.success, false);
   });
 
-  it('should track processes', () => {
-    expect(localProvider.getTrackedProcesses()).toEqual([]);
+  test('should track processes', () => {
+    assert.deepEqual(localProvider.getTrackedProcesses(), []);
   });
 });
 
@@ -273,77 +279,77 @@ describe('ssh-provider', () => {
     sshProvider.clearTracking();
   });
 
-  it('should have correct name', () => {
-    expect(sshProvider.name).toBe('ssh');
+  test('should have correct name', () => {
+    assert.equal(sshProvider.name, 'ssh');
   });
 
-  it('should implement all required methods', () => {
-    expect(typeof sshProvider.spawn).toBe('function');
-    expect(typeof sshProvider.kill).toBe('function');
-    expect(typeof sshProvider.getStatus).toBe('function');
-    expect(typeof sshProvider.getLogs).toBe('function');
-    expect(typeof sshProvider.isAvailable).toBe('function');
+  test('should implement all required methods', () => {
+    assert.equal(typeof sshProvider.spawn, 'function');
+    assert.equal(typeof sshProvider.kill, 'function');
+    assert.equal(typeof sshProvider.getStatus, 'function');
+    assert.equal(typeof sshProvider.getLogs, 'function');
+    assert.equal(typeof sshProvider.isAvailable, 'function');
   });
 
   describe('buildSshArgs', () => {
-    it('should build basic SSH args', () => {
+    test('should build basic SSH args', () => {
       const args = sshProvider.buildSshArgs({
         host: 'server1',
         user: 'pilot'
       });
-      expect(args).toContain('-o');
-      expect(args).toContain('BatchMode=yes');
-      expect(args[args.length - 1]).toBe('pilot@server1');
+      assert.ok(args.includes('-o'));
+      assert.ok(args.includes('BatchMode=yes'));
+      assert.equal(args[args.length - 1], 'pilot@server1');
     });
 
-    it('should include port when non-default', () => {
+    test('should include port when non-default', () => {
       const args = sshProvider.buildSshArgs({
         host: 'server1',
         user: 'pilot',
         port: 2222
       });
-      expect(args).toContain('-p');
-      expect(args).toContain('2222');
+      assert.ok(args.includes('-p'));
+      assert.ok(args.includes('2222'));
     });
 
-    it('should include key path', () => {
+    test('should include key path', () => {
       const args = sshProvider.buildSshArgs({
         host: 'server1',
         key_path: '/home/user/.ssh/id_rsa'
       });
-      expect(args).toContain('-i');
-      expect(args).toContain('/home/user/.ssh/id_rsa');
+      assert.ok(args.includes('-i'));
+      assert.ok(args.includes('/home/user/.ssh/id_rsa'));
     });
 
-    it('should handle host without user', () => {
+    test('should handle host without user', () => {
       const args = sshProvider.buildSshArgs({ host: 'server1' });
-      expect(args[args.length - 1]).toBe('server1');
+      assert.equal(args[args.length - 1], 'server1');
     });
   });
 
   describe('loadSshConfig', () => {
-    it('should return config with hosts array', () => {
+    test('should return config with hosts array', () => {
       const config = sshProvider.loadSshConfig();
-      expect(config).toBeDefined();
-      expect(Array.isArray(config.hosts) || typeof config.hosts === 'string').toBe(true);
+      assert.ok(config !== undefined && config !== null);
+      assert.equal(Array.isArray(config.hosts) || typeof config.hosts === 'string', true);
     });
   });
 
   describe('spawn', () => {
-    it('should return result when spawning', () => {
+    test('should return result when spawning', () => {
       // SSH provider spawn returns success/failure depending on host config
       const result = sshProvider.spawn(
         { id: 'task-1', title: 'Test' },
         { projectRoot: '/tmp/nonexistent-pilot-test' }
       );
       // Result has success boolean (may succeed with detached process even if host unreachable)
-      expect(typeof result.success).toBe('boolean');
+      assert.equal(typeof result.success, 'boolean');
       if (!result.success) {
-        expect(result.error).toBeDefined();
+        assert.ok(result.error !== undefined && result.error !== null);
       }
     });
 
-    it('should fail when hostConfig not found and hosts list is empty', () => {
+    test('should fail when hostConfig not found and hosts list is empty', () => {
       // Create a fresh instance to avoid cached policy
       const freshSsh = freshModule('../.claude/pilot/hooks/lib/providers/ssh-provider');
       freshSsh.clearTracking();
@@ -356,34 +362,34 @@ describe('ssh-provider', () => {
         { projectRoot: '/tmp/nonexistent-test-path-ssh' }
       );
       // Either fails with no host or succeeds spawning ssh (which fails later)
-      expect(typeof result.success).toBe('boolean');
+      assert.equal(typeof result.success, 'boolean');
     });
   });
 
   describe('kill', () => {
-    it('should return error for unknown process', () => {
+    test('should return error for unknown process', () => {
       const result = sshProvider.kill('nonexistent');
-      expect(result.success).toBe(false);
+      assert.equal(result.success, false);
     });
   });
 
   describe('getStatus', () => {
-    it('should return not running for unknown process', () => {
+    test('should return not running for unknown process', () => {
       const result = sshProvider.getStatus('nonexistent');
-      expect(result.running).toBe(false);
+      assert.equal(result.running, false);
     });
   });
 
   describe('getLogs', () => {
-    it('should return error for unknown process', () => {
+    test('should return error for unknown process', () => {
       const result = sshProvider.getLogs('nonexistent');
-      expect(result.success).toBe(false);
+      assert.equal(result.success, false);
     });
   });
 
   describe('isAvailable', () => {
-    it('should return false when no hosts configured', () => {
-      expect(sshProvider.isAvailable('/nonexistent')).toBe(false);
+    test('should return false when no hosts configured', () => {
+      assert.equal(sshProvider.isAvailable('/nonexistent'), false);
     });
   });
 });
@@ -400,69 +406,69 @@ describe('docker-provider', () => {
     dockerProvider.clearTracking();
   });
 
-  it('should have correct name', () => {
-    expect(dockerProvider.name).toBe('docker');
+  test('should have correct name', () => {
+    assert.equal(dockerProvider.name, 'docker');
   });
 
-  it('should implement all required methods', () => {
-    expect(typeof dockerProvider.spawn).toBe('function');
-    expect(typeof dockerProvider.kill).toBe('function');
-    expect(typeof dockerProvider.getStatus).toBe('function');
-    expect(typeof dockerProvider.getLogs).toBe('function');
-    expect(typeof dockerProvider.isAvailable).toBe('function');
+  test('should implement all required methods', () => {
+    assert.equal(typeof dockerProvider.spawn, 'function');
+    assert.equal(typeof dockerProvider.kill, 'function');
+    assert.equal(typeof dockerProvider.getStatus, 'function');
+    assert.equal(typeof dockerProvider.getLogs, 'function');
+    assert.equal(typeof dockerProvider.isAvailable, 'function');
   });
 
   describe('loadDockerConfig', () => {
-    it('should return config object', () => {
+    test('should return config object', () => {
       const config = dockerProvider.loadDockerConfig();
-      expect(config).toBeDefined();
-      expect(typeof config).toBe('object');
+      assert.ok(config !== undefined && config !== null);
+      assert.equal(typeof config, 'object');
     });
   });
 
   describe('kill', () => {
-    it('should return error for unknown container', () => {
+    test('should return error for unknown container', () => {
       const result = dockerProvider.kill('nonexistent');
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('not found');
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes('not found'));
     });
   });
 
   describe('getStatus', () => {
-    it('should return not running for unknown container', () => {
+    test('should return not running for unknown container', () => {
       const result = dockerProvider.getStatus('nonexistent');
-      expect(result.running).toBe(false);
+      assert.equal(result.running, false);
     });
   });
 
   describe('getLogs', () => {
-    it('should return error for unknown container', () => {
+    test('should return error for unknown container', () => {
       const result = dockerProvider.getLogs('nonexistent');
-      expect(result.success).toBe(false);
+      assert.equal(result.success, false);
     });
   });
 
   describe('getTrackedContainers', () => {
-    it('should return empty when no containers', () => {
-      expect(dockerProvider.getTrackedContainers()).toEqual([]);
+    test('should return empty when no containers', () => {
+      assert.deepEqual(dockerProvider.getTrackedContainers(), []);
     });
   });
 
   describe('max containers enforcement', () => {
-    it('should reject spawn when at max containers', () => {
+    test('should reject spawn when at max containers', () => {
       const config = { max_containers: 0 };
       const result = dockerProvider.spawn(
         { id: 'task-1', title: 'Test' },
         { dockerConfig: config }
       );
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('Max containers reached (0)');
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes('Max containers reached (0)'));
     });
   });
 
   describe('dockerExec', () => {
-    it('should be exported for testing', () => {
-      expect(typeof dockerProvider.dockerExec).toBe('function');
+    test('should be exported for testing', () => {
+      assert.equal(typeof dockerProvider.dockerExec, 'function');
     });
   });
 });
@@ -485,75 +491,75 @@ describe('remote-state-sync', () => {
   });
 
   describe('loadSyncConfig', () => {
-    it('should return defaults when no policy', () => {
+    test('should return defaults when no policy', () => {
       const config = stateSync.loadSyncConfig('/nonexistent');
-      expect(config.method).toBe('git');
-      expect(config.auto_sync).toBe(true);
-      expect(config.sync_interval_seconds).toBe(300);
+      assert.equal(config.method, 'git');
+      assert.equal(config.auto_sync, true);
+      assert.equal(config.sync_interval_seconds, 300);
     });
   });
 
   describe('buildSshTarget', () => {
-    it('should build target with user', () => {
+    test('should build target with user', () => {
       const result = stateSync.buildSshTarget({
         host: 'server1',
         user: 'pilot',
         port: 22
       });
-      expect(result.target).toBe('pilot@server1');
-      expect(result.sshCmd).toContain('ssh');
+      assert.equal(result.target, 'pilot@server1');
+      assert.ok(result.sshCmd.includes('ssh'));
     });
 
-    it('should build target without user', () => {
+    test('should build target without user', () => {
       const result = stateSync.buildSshTarget({ host: 'server1' });
-      expect(result.target).toBe('server1');
+      assert.equal(result.target, 'server1');
     });
 
-    it('should include custom port', () => {
+    test('should include custom port', () => {
       const result = stateSync.buildSshTarget({
         host: 'server1',
         user: 'pilot',
         port: 2222
       });
-      expect(result.sshCmd).toContain('-p 2222');
+      assert.ok(result.sshCmd.includes('-p 2222'));
     });
   });
 
   describe('pushState', () => {
-    it('should fail when no host config found', () => {
+    test('should fail when no host config found', () => {
       const result = stateSync.pushState('unknown-host', 'task-1', { projectRoot: tmpDir });
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('No config found');
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes('No config found'));
     });
   });
 
   describe('pullState', () => {
-    it('should fail when no host config found', () => {
+    test('should fail when no host config found', () => {
       const result = stateSync.pullState('unknown-host', 'task-1', { projectRoot: tmpDir });
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('No config found');
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes('No config found'));
     });
   });
 
   describe('syncCheckpoint', () => {
-    it('should attempt push and pull', () => {
+    test('should attempt push and pull', () => {
       const result = stateSync.syncCheckpoint('unknown-host', 'task-1', { projectRoot: tmpDir });
       // Both should fail since no host config, but function should not throw
-      expect(result.pushed).toBe(false);
-      expect(result.pulled).toBe(false);
-      expect(result.success).toBe(false);
+      assert.equal(result.pushed, false);
+      assert.equal(result.pulled, false);
+      assert.equal(result.success, false);
     });
   });
 
   describe('logSync', () => {
-    it('should write sync log entry', () => {
+    test('should write sync log entry', () => {
       stateSync.logSync('test_action', { host: 'server1' }, tmpDir);
       const logFile = path.join(tmpDir, stateSync.SYNC_LOG_DIR, 'sync.jsonl');
-      expect(fs.existsSync(logFile)).toBe(true);
+      assert.equal(fs.existsSync(logFile), true);
       const content = fs.readFileSync(logFile, 'utf8');
       const entry = JSON.parse(content.trim());
-      expect(entry.action).toBe('test_action');
-      expect(entry.host).toBe('server1');
+      assert.equal(entry.action, 'test_action');
+      assert.equal(entry.host, 'server1');
     });
   });
 });
@@ -574,47 +580,47 @@ describe('remote-log-streamer', () => {
   });
 
   describe('RemoteLogStreamer class', () => {
-    it('should be exported', () => {
-      expect(logStreamer.RemoteLogStreamer).toBeDefined();
+    test('should be exported', () => {
+      assert.ok(logStreamer.RemoteLogStreamer !== undefined && logStreamer.RemoteLogStreamer !== null);
     });
 
-    it('should create independent instances', () => {
+    test('should create independent instances', () => {
       const a = new logStreamer.RemoteLogStreamer();
       const b = new logStreamer.RemoteLogStreamer();
-      expect(a).not.toBe(b);
+      assert.notEqual(a, b);
     });
   });
 
   describe('startStreaming', () => {
-    it('should fail without required options for SSH', () => {
+    test('should fail without required options for SSH', () => {
       const result = logStreamer.startStreaming('agent-1', { type: 'ssh' });
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('hostConfig required');
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes('hostConfig required'));
     });
 
-    it('should fail without logPath for local', () => {
+    test('should fail without logPath for local', () => {
       const result = logStreamer.startStreaming('agent-1', { type: 'local' });
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('logPath required');
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes('logPath required'));
     });
 
-    it('should fail without containerName for docker', () => {
+    test('should fail without containerName for docker', () => {
       const result = logStreamer.startStreaming('agent-1', { type: 'docker' });
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('containerName required');
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes('containerName required'));
     });
 
-    it('should prevent duplicate streams', () => {
+    test('should prevent duplicate streams', () => {
       // Create a temp file to stream from
       const tmpFile = path.join(os.tmpdir(), `pilot-log-test-${Date.now()}.log`);
       fs.writeFileSync(tmpFile, 'test line\n');
 
       const result1 = logStreamer.startStreaming('agent-dup', { type: 'local', logPath: tmpFile });
-      expect(result1.success).toBe(true);
+      assert.equal(result1.success, true);
 
       const result2 = logStreamer.startStreaming('agent-dup', { type: 'local', logPath: tmpFile });
-      expect(result2.success).toBe(false);
-      expect(result2.error).toContain('Already streaming');
+      assert.equal(result2.success, false);
+      assert.ok(result2.error.includes('Already streaming'));
 
       logStreamer.stopStreaming('agent-dup');
       fs.unlinkSync(tmpFile);
@@ -622,26 +628,26 @@ describe('remote-log-streamer', () => {
   });
 
   describe('stopStreaming', () => {
-    it('should return false for non-existent stream', () => {
+    test('should return false for non-existent stream', () => {
       const result = logStreamer.stopStreaming('nonexistent');
-      expect(result.success).toBe(false);
+      assert.equal(result.success, false);
     });
   });
 
   describe('getRecentLogs', () => {
-    it('should return empty array for non-existent agent', () => {
-      expect(logStreamer.getRecentLogs('nonexistent')).toEqual([]);
+    test('should return empty array for non-existent agent', () => {
+      assert.deepEqual(logStreamer.getRecentLogs('nonexistent'), []);
     });
   });
 
   describe('getActiveStreams', () => {
-    it('should return empty when no streams active', () => {
-      expect(logStreamer.getActiveStreams()).toEqual([]);
+    test('should return empty when no streams active', () => {
+      assert.deepEqual(logStreamer.getActiveStreams(), []);
     });
   });
 
   describe('local file streaming', () => {
-    it('should stream from a local file', async () => {
+    test('should stream from a local file', async () => {
       const tmpFile = path.join(os.tmpdir(), `pilot-log-stream-${Date.now()}.log`);
       fs.writeFileSync(tmpFile, 'line1\nline2\nline3\n');
 
@@ -649,10 +655,10 @@ describe('remote-log-streamer', () => {
         type: 'local',
         logPath: tmpFile
       });
-      expect(result.success).toBe(true);
-      expect(result.stream).toBeDefined();
+      assert.equal(result.success, true);
+      assert.ok(result.stream !== undefined && result.stream !== null);
 
-      expect(logStreamer.getActiveStreams()).toContain('local-test');
+      assert.ok(logStreamer.getActiveStreams().includes('local-test'));
 
       // Wait a bit for tail to read
       await new Promise(resolve => setTimeout(resolve, 200));
@@ -663,9 +669,9 @@ describe('remote-log-streamer', () => {
   });
 
   describe('constants', () => {
-    it('should export expected constants', () => {
-      expect(logStreamer.MAX_LOG_BUFFER).toBe(1000);
-      expect(logStreamer.DEFAULT_TAIL_LINES).toBe(50);
+    test('should export expected constants', () => {
+      assert.equal(logStreamer.MAX_LOG_BUFFER, 1000);
+      assert.equal(logStreamer.DEFAULT_TAIL_LINES, 50);
     });
   });
 });
@@ -681,16 +687,16 @@ describe('process-spawner spawnViaProvider', () => {
     processSpawner = freshModule('../.claude/pilot/hooks/lib/process-spawner');
   });
 
-  it('should export spawnViaProvider', () => {
-    expect(typeof processSpawner.spawnViaProvider).toBe('function');
+  test('should export spawnViaProvider', () => {
+    assert.equal(typeof processSpawner.spawnViaProvider, 'function');
   });
 
-  it('should export spawnAgent', () => {
-    expect(typeof processSpawner.spawnAgent).toBe('function');
+  test('should export spawnAgent', () => {
+    assert.equal(typeof processSpawner.spawnAgent, 'function');
   });
 
-  it('should export cleanupContextFile', () => {
-    expect(typeof processSpawner.cleanupContextFile).toBe('function');
+  test('should export cleanupContextFile', () => {
+    assert.equal(typeof processSpawner.cleanupContextFile, 'function');
   });
 });
 
@@ -706,7 +712,7 @@ describe('provider interface enforcement', () => {
     ep.clearProviders();
   });
 
-  it('should enforce spawn method', () => {
+  test('should enforce spawn method', () => {
     const result = ep.registerProvider('bad', {
       name: 'bad',
       kill: () => {},
@@ -714,11 +720,11 @@ describe('provider interface enforcement', () => {
       getLogs: () => {},
       isAvailable: () => true
     });
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('spawn');
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('spawn'));
   });
 
-  it('should enforce kill method', () => {
+  test('should enforce kill method', () => {
     const result = ep.registerProvider('bad', {
       name: 'bad',
       spawn: () => {},
@@ -726,11 +732,11 @@ describe('provider interface enforcement', () => {
       getLogs: () => {},
       isAvailable: () => true
     });
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('kill');
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('kill'));
   });
 
-  it('should enforce getStatus method', () => {
+  test('should enforce getStatus method', () => {
     const result = ep.registerProvider('bad', {
       name: 'bad',
       spawn: () => {},
@@ -738,11 +744,11 @@ describe('provider interface enforcement', () => {
       getLogs: () => {},
       isAvailable: () => true
     });
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('getStatus');
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('getStatus'));
   });
 
-  it('should enforce getLogs method', () => {
+  test('should enforce getLogs method', () => {
     const result = ep.registerProvider('bad', {
       name: 'bad',
       spawn: () => {},
@@ -750,11 +756,11 @@ describe('provider interface enforcement', () => {
       getStatus: () => {},
       isAvailable: () => true
     });
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('getLogs');
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('getLogs'));
   });
 
-  it('should enforce isAvailable method', () => {
+  test('should enforce isAvailable method', () => {
     const result = ep.registerProvider('bad', {
       name: 'bad',
       spawn: () => {},
@@ -762,11 +768,11 @@ describe('provider interface enforcement', () => {
       getStatus: () => {},
       getLogs: () => {}
     });
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('isAvailable');
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('isAvailable'));
   });
 
-  it('should accept provider with all methods', () => {
+  test('should accept provider with all methods', () => {
     const result = ep.registerProvider('good', {
       name: 'good',
       spawn: () => {},
@@ -775,19 +781,19 @@ describe('provider interface enforcement', () => {
       getLogs: () => {},
       isAvailable: () => true
     });
-    expect(result.success).toBe(true);
+    assert.equal(result.success, true);
   });
 
-  it('should register all three built-in providers', () => {
+  test('should register all three built-in providers', () => {
     const local = freshModule('../.claude/pilot/hooks/lib/providers/local-provider');
     const ssh = freshModule('../.claude/pilot/hooks/lib/providers/ssh-provider');
     const docker = freshModule('../.claude/pilot/hooks/lib/providers/docker-provider');
 
-    expect(ep.registerProvider('local', local).success).toBe(true);
-    expect(ep.registerProvider('ssh', ssh).success).toBe(true);
-    expect(ep.registerProvider('docker', docker).success).toBe(true);
+    assert.equal(ep.registerProvider('local', local).success, true);
+    assert.equal(ep.registerProvider('ssh', ssh).success, true);
+    assert.equal(ep.registerProvider('docker', docker).success, true);
 
-    expect(ep.listProviders()).toEqual(['local', 'ssh', 'docker']);
+    assert.deepEqual(ep.listProviders(), ['local', 'ssh', 'docker']);
   });
 });
 
@@ -796,24 +802,24 @@ describe('provider interface enforcement', () => {
 // ============================================================================
 
 describe('policy configuration', () => {
-  it('should load execution config with defaults', () => {
+  test('should load execution config with defaults', () => {
     const ep = freshModule('../.claude/pilot/hooks/lib/execution-provider');
     const config = ep.loadExecutionConfig('/nonexistent');
-    expect(config.active_provider || 'local').toBe('local');
+    assert.equal(config.active_provider || 'local', 'local');
   });
 
-  it('should have DEFAULT_ACTIVE_PROVIDER constant', () => {
+  test('should have DEFAULT_ACTIVE_PROVIDER constant', () => {
     const ep = freshModule('../.claude/pilot/hooks/lib/execution-provider');
-    expect(ep.DEFAULT_ACTIVE_PROVIDER).toBe('local');
+    assert.equal(ep.DEFAULT_ACTIVE_PROVIDER, 'local');
   });
 
-  it('should have REQUIRED_METHODS list', () => {
+  test('should have REQUIRED_METHODS list', () => {
     const ep = freshModule('../.claude/pilot/hooks/lib/execution-provider');
-    expect(ep.REQUIRED_METHODS).toContain('spawn');
-    expect(ep.REQUIRED_METHODS).toContain('kill');
-    expect(ep.REQUIRED_METHODS).toContain('getStatus');
-    expect(ep.REQUIRED_METHODS).toContain('getLogs');
-    expect(ep.REQUIRED_METHODS).toContain('isAvailable');
-    expect(ep.REQUIRED_METHODS.length).toBe(5);
+    assert.ok(ep.REQUIRED_METHODS.includes('spawn'));
+    assert.ok(ep.REQUIRED_METHODS.includes('kill'));
+    assert.ok(ep.REQUIRED_METHODS.includes('getStatus'));
+    assert.ok(ep.REQUIRED_METHODS.includes('getLogs'));
+    assert.ok(ep.REQUIRED_METHODS.includes('isAvailable'));
+    assert.equal(ep.REQUIRED_METHODS.length, 5);
   });
 });
