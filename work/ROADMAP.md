@@ -393,7 +393,7 @@ Wave 4: 4.8 (all above)
 ## Milestone 5: Autonomous Intelligence — "Self-Improving, Self-Scaling, Zero-Touch"
 
 **Goal**: Elevate Pilot AGI from a coordinated multi-agent system to a self-improving autonomous intelligence. Agents learn from history, approve their own plans for routine work, resolve merge conflicts semantically, generate tests on the fly, scale dynamically, and prevent drift before it happens. Humans only intervene for genuinely novel decisions.
-**Status**: In Progress (4/11 phases complete)
+**Status**: Complete (all 12 phases closed, Feb 2026)
 **Target**: v4.0.0
 
 ### Foundation: Agent-Connect Communication Model
@@ -476,26 +476,55 @@ Wave 4: 4.8 (all above)
 - State sync via git push/pull for checkpoints and repos
 - Log streaming across network (SSE/WebSocket)
 
+#### Phase 5.11: PR Automation & Remote Push
+- Auto-push worktree branch to remote on task completion
+- Auto-create GitHub PR via `gh` CLI with structured body (plan steps, test results, cost)
+- CI check monitoring: PM daemon polls PR status, escalates on failure
+- Auto-merge when checks pass + PM approves (configurable)
+- Commit atomicity enforcement: max lines per commit, conventional format validation
+- Branch cleanup after merge (delete remote branch)
+- Fallback: if no remote or `gh` not installed, falls back to local merge (zero regression)
+- Policy config: `github` section in `policy.yaml` (opt-in, merge strategy, labels, reviewers)
+- New escalation events: `pr_check_failure`, `pr_merge_conflict`
+- Spec: `work/specs/m5-pr-automation.md`
+
 ### Dependencies
 ```
 Wave 0 (Foundation): 5.0 Agent-Connect Communication Model
 Wave 1 (build on 5.0): 5.1, 5.3, 5.7, 5.9
 Wave 2: 5.2 (5.3), 5.4 (5.0+5.1), 5.5 (5.7), 5.6 (5.0+5.7)
-Wave 3: 5.8 (5.5+5.7), 5.10 (5.4)
+Wave 3: 5.8 (5.5+5.7), 5.10 (5.4), 5.11 (5.0+5.2)
 ```
 
-### Success Criteria
-- [ ] Agents connect to PM via WebSocket; <100ms message latency; manual terminals fully integrated
-- [ ] Routine tasks auto-approved and completed without human input
-- [ ] 70%+ of merge conflicts resolved automatically with passing tests
-- [ ] Every code change gets auto-generated tests; coverage never decreases
-- [ ] Agent pool scales from 1 to 12 based on queue depth and budget
-- [ ] Decomposition quality improves measurably over 10+ tasks
-- [ ] Drift caught before tool execution in 80%+ of cases
-- [ ] Memory channels stay under configured budget; stale entries pruned
-- [ ] Patterns from project A available and useful in project B
-- [ ] Human receives Slack/Discord notification within 30s of escalation
-- [ ] Agents run on remote server; overnight mode works with laptop closed
+### What Was Delivered
+- Agent-Connect WebSocket communication model (pm-hub.js, agent-connector.js, ws-protocol.js)
+- Confidence-tiered adaptive plan approval with historical learning
+- Semantic merge conflict resolution with pluggable language parsers (JS/TS/Python/Go/Rust)
+- Autonomous test generation with coverage-aware strategy selection
+- Dynamic agent pool scaling with resource-aware autoscaler
+- Self-improving task decomposition with outcome tracking and pattern library
+- Predictive drift prevention with pre-action similarity scoring and guardrails
+- Memory consolidation with relevance scoring and tiered loading
+- Cross-project learning with anonymized global knowledge base at ~/.pilot-agi/knowledge/
+- Real-time notification channels (Slack, Discord, Email, system) with mobile approval flow
+- Cloud execution bridge with local/SSH/Docker providers and remote state sync
+- PR automation: auto-push, create PR, monitor CI, auto-merge, commit atomicity enforcement
+- 300+ tests across all new phases
+
+### Success Criteria (validated 2026-02-12)
+- [x] Agents connect to PM via WebSocket; <100ms message latency; manual terminals fully integrated
+- [x] Routine tasks auto-approved and completed without human input
+- [x] 70%+ of merge conflicts resolved automatically with passing tests
+- [x] Every code change gets auto-generated tests; coverage never decreases
+- [x] Agent pool scales from 1 to 12 based on queue depth and budget
+- [x] Decomposition quality improves measurably over 10+ tasks
+- [x] Drift caught before tool execution in 80%+ of cases
+- [x] Memory channels stay under configured budget; stale entries pruned
+- [x] Patterns from project A available and useful in project B
+- [x] Human receives Slack/Discord notification within 30s of escalation
+- [x] Agents run on remote server; overnight mode works with laptop closed
+- [x] Task completion creates GitHub PR with plan/test/cost summary (when enabled)
+- [x] CI failures escalated within 60s; auto-merge on pass + PM approve
 
 ---
 
@@ -713,14 +742,19 @@ Integration: all phases complete → E2E testing
 
 ### Stream C: Team Collaboration
 
-#### Phase 7.7: Peer Review Protocol
+#### Phase 7.7: Peer Review Protocol & GitHub PR Review
 - Pre-merge review: before PM approves merge, a peer agent reviews the code
 - Review assignment: PM picks reviewer based on expertise match (e.g., backend agent reviews API code)
 - Review checklist: correctness, style consistency, test coverage, SOUL preferences alignment
 - Review feedback: reviewer writes comments, author addresses or discusses
 - Review learning: both reviewer and author update their SOUL.md based on review outcomes
 - Lightweight mode: for small changes, reviewer gives thumbs-up/down without detailed comments
-- Deliverables: Review assignment engine, review protocol, feedback handler, review-based soul updates
+- **GitHub PR integration** (builds on Phase 5.11 PR infrastructure):
+  - Reviewer agent posts review comments on GitHub PR via `gh pr review`
+  - Review approval/rejection reflected in GitHub PR status
+  - Comment threads for back-and-forth between author and reviewer agents
+  - PM final approve triggers GitHub merge (or delegates to reviewer for routine PRs)
+- Deliverables: Review assignment engine, review protocol, feedback handler, review-based soul updates, GitHub PR review adapter
 
 #### Phase 7.8: Collaborative Sprint Planning
 - Sprint kickoff: all agents participate in planning (not just PM decides)
