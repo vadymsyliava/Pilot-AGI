@@ -236,6 +236,27 @@ async function main() {
   // Get active task
   const activeTask = cache.getActiveTask();
 
+  // Phase 7.3: Detect user corrections and write to soul (fire-and-forget)
+  try {
+    const corrections = require('./lib/correction-capture');
+    const correction = corrections.detectPromptCorrection(prompt);
+    if (correction && activeTask) {
+      // Resolve agent role from session
+      const currentSId = getCurrentSessionId();
+      if (currentSId) {
+        const sessFile = path.join(process.cwd(), '.claude/pilot/state/sessions', `${currentSId}.json`);
+        if (fs.existsSync(sessFile)) {
+          const sessData = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+          if (sessData.role) {
+            corrections.applyCorrection(sessData.role, correction);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // Correction capture not available, continue without
+  }
+
   // Build session awareness (shows peer agents — only when multiple sessions)
   const currentSessionId = getCurrentSessionId();
   const sessionAwareness = buildSessionAwareness(currentSessionId);
