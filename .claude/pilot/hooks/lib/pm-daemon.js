@@ -481,7 +481,36 @@ class PmDaemon {
       this.log.error('First tick error', { error: e.message });
     });
 
+    // Start PM watchdog as a detached child process
+    this._startWatchdog();
+
     return { success: true, mode: 'watch', pm_session: this.pmSessionId };
+  }
+
+  /**
+   * Start the PM watchdog process as a detached background monitor.
+   * Watchdog monitors this daemon's PID and auto-restarts if it crashes.
+   */
+  _startWatchdog() {
+    try {
+      const watchdogScript = path.join(__dirname, 'pm-watchdog.js');
+      if (!fs.existsSync(watchdogScript)) {
+        this.log.debug('PM watchdog script not found, skipping');
+        return;
+      }
+
+      this._watchdogProcess = spawn('node', [watchdogScript, this.projectRoot], {
+        cwd: this.projectRoot,
+        detached: true,
+        stdio: ['ignore', 'ignore', 'ignore'],
+        env: { ...process.env, PILOT_PM_SESSION: '1' }
+      });
+
+      this._watchdogProcess.unref();
+      this.log.info('PM watchdog started', { pid: this._watchdogProcess.pid });
+    } catch (e) {
+      this.log.warn('Failed to start PM watchdog', { error: e.message });
+    }
   }
 
   /**
@@ -501,6 +530,12 @@ class PmDaemon {
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
+    }
+
+    // Stop PM watchdog
+    if (this._watchdogProcess) {
+      try { this._watchdogProcess.kill('SIGTERM'); } catch (e) { /* already dead */ }
+      this._watchdogProcess = null;
     }
 
     // Phase 6.4: Stop terminal controller
