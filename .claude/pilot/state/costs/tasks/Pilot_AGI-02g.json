@@ -1,0 +1,20 @@
+{
+  "task_id": "Pilot AGI-02g",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 94,
+  "sessions": {
+    "S-mlhmxigh-96ad": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 20
+    },
+    "S-mlho7eux-586d": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 74
+    }
+  },
+  "created_at": "2026-02-11T06:50:54.944Z",
+  "updated_at": "2026-02-11T08:03:52.410Z"
+}

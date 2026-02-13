@@ -623,6 +623,79 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
+  // 8e. Agent Soul Context (Phase 7.1)
+  // -------------------------------------------------------------------------
+
+  try {
+    const souls = require('./lib/souls');
+
+    // Resolve agent role from session state
+    let soulRole = null;
+    try {
+      const sessDir = path.join(process.cwd(), '.claude/pilot/state/sessions');
+      const sessFile = path.join(sessDir, `${sessionId}.json`);
+      if (fs.existsSync(sessFile)) {
+        const sessData = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+        soulRole = sessData.role || null;
+      }
+    } catch (e) {
+      // No session state — skip soul
+    }
+
+    if (soulRole) {
+      // Phase 8.1: Auto-restore soul from global backup if no local exists
+      try {
+        const soulLifecycle = require('./lib/soul-auto-lifecycle');
+        const lifecycleResult = soulLifecycle.onSessionStart(soulRole);
+        if (lifecycleResult.restored) {
+          messages.push(`Soul [${soulRole}]: restored from global backup`);
+        }
+
+        // Inject skill gaps and growth goals into context
+        const lifecycleCtx = soulLifecycle.buildContext(soulRole);
+        if (lifecycleCtx) {
+          context.soul_lifecycle = lifecycleCtx;
+          if (lifecycleCtx.skill_gaps && lifecycleCtx.skill_gaps.length > 0) {
+            messages.push(`Skill gaps: ${lifecycleCtx.skill_gaps.map(g => g.area).join(', ')}`);
+          }
+          if (lifecycleCtx.growth_goals && lifecycleCtx.growth_goals.length > 0) {
+            messages.push(`Goals: ${lifecycleCtx.growth_goals.length} active`);
+          }
+        }
+      } catch (e) {
+        // Soul lifecycle not available — fall back to basic init
+        if (!souls.soulExists(soulRole)) {
+          souls.initializeSoul(soulRole);
+        }
+      }
+
+      const soulCtx = souls.loadSoulContext(soulRole);
+      if (soulCtx) {
+        context.agent_soul = soulCtx;
+        const size = souls.getSoulSize(soulRole);
+        messages.push(`Soul [${soulRole}]: loaded (${size}b)`);
+      }
+
+      // Phase 7.2: Load task-relevant lessons for pre-task context
+      try {
+        const postMortem = require('./lib/post-mortem');
+        const taskDesc = context.current_task?.description || context.current_task?.title || '';
+        if (taskDesc) {
+          const relevantLessons = postMortem.getRelevantLessons(soulRole, taskDesc);
+          if (relevantLessons.length > 0) {
+            context.pre_task_lessons = relevantLessons;
+            messages.push(`Lessons: ${relevantLessons.length} relevant`);
+          }
+        }
+      } catch (e) {
+        // Post-mortem module not available, continue without
+      }
+    }
+  } catch (e) {
+    // Soul module not available, continue without
+  }
+
+  // -------------------------------------------------------------------------
   // 8b. Inter-Agent Messaging Context (Phase 2.3)
   // -------------------------------------------------------------------------
 

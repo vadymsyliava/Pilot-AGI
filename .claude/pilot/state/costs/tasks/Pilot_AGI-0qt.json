@@ -1,0 +1,20 @@
+{
+  "task_id": "Pilot AGI-0qt",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 26,
+  "sessions": {
+    "S-mlhtgsdh-3f97": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 18
+    },
+    "S-mlht50wb-701e": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 8
+    }
+  },
+  "created_at": "2026-02-11T09:18:05.464Z",
+  "updated_at": "2026-02-11T09:19:56.021Z"
+}

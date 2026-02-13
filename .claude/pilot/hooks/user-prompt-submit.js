@@ -47,6 +47,16 @@ function isPilotCommand(prompt) {
 }
 
 /**
+ * Check if prompt is a PM command (should NOT receive active task context)
+ * PM commands should run without worker-task bias
+ */
+function isPmCommand(prompt) {
+  const trimmed = prompt.trim().toLowerCase();
+  return trimmed.startsWith('/pilot-pm') ||
+         trimmed.startsWith('/pilot-dashboard');
+}
+
+/**
  * Check if prompt is clearly a question (pass through)
  */
 function isQuestion(prompt) {
@@ -226,6 +236,27 @@ async function main() {
   // Get active task
   const activeTask = cache.getActiveTask();
 
+  // Phase 7.3: Detect user corrections and write to soul (fire-and-forget)
+  try {
+    const corrections = require('./lib/correction-capture');
+    const correction = corrections.detectPromptCorrection(prompt);
+    if (correction && activeTask) {
+      // Resolve agent role from session
+      const currentSId = getCurrentSessionId();
+      if (currentSId) {
+        const sessFile = path.join(process.cwd(), '.claude/pilot/state/sessions', `${currentSId}.json`);
+        if (fs.existsSync(sessFile)) {
+          const sessData = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+          if (sessData.role) {
+            corrections.applyCorrection(sessData.role, correction);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // Correction capture not available, continue without
+  }
+
   // Build session awareness (shows peer agents — only when multiple sessions)
   const currentSessionId = getCurrentSessionId();
   const sessionAwareness = buildSessionAwareness(currentSessionId);
@@ -233,7 +264,8 @@ async function main() {
   // Decide whether to inject guardian context
   if (!shouldInjectGuardian(prompt, activeTask)) {
     // Quick heuristics passed - no injection needed
-    if (activeTask) {
+    // PM commands should NOT get active task context (prevents PM from executing tasks)
+    if (activeTask && !isPmCommand(prompt)) {
       // Remind about active task + session awareness
       let context = `Active task: [${activeTask.id}] ${activeTask.title}`;
       if (sessionAwareness) {

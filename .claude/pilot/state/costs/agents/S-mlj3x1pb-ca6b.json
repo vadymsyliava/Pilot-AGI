@@ -1,0 +1,19 @@
+{
+  "session_id": "S-mlj3x1pb-ca6b",
+  "days": {
+    "2026-02-12": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 89
+    }
+  },
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 89,
+  "tasks_worked": [
+    "Pilot AGI-cni",
+    "Pilot AGI-5ww"
+  ],
+  "created_at": "2026-02-12T07:40:35.098Z",
+  "updated_at": "2026-02-12T08:10:37.010Z"
+}

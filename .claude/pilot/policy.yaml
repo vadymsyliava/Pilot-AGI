@@ -446,6 +446,32 @@ worktree:
   # Base branch to create worktrees from
   base_branch: "main"
 
+  # Semantic merge conflict resolution (Phase 5.2)
+  merge_resolution:
+    # Master switch for auto-resolution
+    enabled: true
+
+    # Confidence thresholds for auto-resolution decisions
+    # Resolutions above 'high' are applied without review
+    # Between 'medium' and 'high' are applied with logging
+    # Below 'medium' are escalated to human
+    confidence_high: 0.85
+    confidence_medium: 0.60
+
+    # Maximum conflict size in bytes for auto-resolution
+    max_conflict_size: 8000
+
+    # Supported languages for structural analysis
+    languages:
+      - javascript
+      - typescript
+      - python
+      - go
+      - rust
+
+    # Require test validation after auto-resolution
+    test_validation: true
+
 # =============================================================================
 # PM ORCHESTRATOR (Phase 2.4)
 # Controls for the PM team-lead agent coordination
@@ -548,6 +574,24 @@ orchestrator:
         levels: [warning, reassign, human]
         cooldown_sec: 30            # 30s — unresponsive needs quick escalation
         auto_deescalate: false      # Agent must actively recover
+
+# =============================================================================
+# DECOMPOSITION FEEDBACK LOOP (Phase 5.5)
+# Self-improving task decomposition via outcome tracking and pattern matching
+# =============================================================================
+decomposition:
+  feedback_loop:
+    # Master switch for feedback loop
+    enabled: true
+
+    # Minimum pattern success rate to use as template (0.0 - 1.0)
+    min_confidence: 0.7
+
+    # Minimum keyword match score to consider a pattern (0.0 - 1.0)
+    pattern_match_threshold: 0.5
+
+    # Maximum patterns stored per task type before pruning
+    max_patterns_per_type: 50
 
 # =============================================================================
 # ADAPTIVE PLAN APPROVAL (Phase 5.1)
@@ -867,3 +911,343 @@ test_generation:
     - deleted_file
     - test_change
     - docs_change
+
+# =============================================================================
+# TELEGRAM BRIDGE (Phase 6.5)
+# Remote human interface via Telegram bot
+# =============================================================================
+telegram:
+  # Master switch — opt-in only
+  enabled: false
+
+  # Numeric Telegram chat IDs authorized to interact with the bot.
+  # Get yours: message @userinfobot on Telegram
+  # SECURITY: Empty list = reject all (secure default, not open dev mode)
+  allowed_chat_ids: []
+
+  # Bot token stored in env var PILOT_TELEGRAM_TOKEN (never in this file)
+
+  # Rate limiting per authorized user
+  rate_limit:
+    per_minute: 10
+    per_hour: 100
+
+  # Which PM events trigger proactive Telegram notifications
+  notifications:
+    escalations: true
+    task_complete: true
+    errors: true
+    morning_report: true
+    morning_report_time: "08:00"
+    sprint_complete: true
+    budget_alert: true
+    agent_stall: true
+
+  # Escalation approval via Telegram inline buttons
+  approval:
+    enabled: true
+    timeout_minutes: 60
+
+  # Actions requiring double-confirmation via inline keyboard
+  confirmation_required:
+    - pause_all
+    - cancel_sprint
+    - kill_agent
+    - change_priority
+
+  # Audit every Telegram interaction
+  audit_log: true
+
+  # Emergency kill switch phrase (case-insensitive)
+  kill_switch_phrase: "LOCKDOWN"
+
+# =============================================================================
+# NOTIFICATIONS (Phase 5.9)
+# Real-time notification system — channels, routing, and digest
+# =============================================================================
+notifications:
+  # Channel configurations
+  # Each channel is opt-in: set enabled: true and provide credentials
+  channels:
+    # macOS system notifications (always available, no config needed)
+    system:
+      enabled: true
+
+    # Slack — provide webhook URL from Slack > Apps > Incoming Webhooks
+    slack:
+      enabled: false
+      # webhook_url: "https://hooks.slack.com/services/T00/B00/xxxx"
+
+    # Discord — provide webhook URL from Server Settings > Integrations
+    discord:
+      enabled: false
+      # webhook_url: "https://discord.com/api/webhooks/xxxx/yyyy"
+
+    # Email — SMTP configuration
+    email:
+      enabled: false
+      # smtp_host: "smtp.gmail.com"
+      # smtp_port: 587
+      # smtp_user: ""
+      # smtp_pass: ""  # Use env var PILOT_SMTP_PASS instead
+      # from: "pilot-agi@yourdomain.com"
+      # to: "you@yourdomain.com"
+
+  # Primary channel for warning-level notifications (default: system)
+  primary_channel: "system"
+
+  # Digest interval for info-level notifications (minutes)
+  digest_interval_minutes: 30
+
+  # Event routing overrides — send specific events to specific channels
+  # Each key is an event type, value has channels list
+  routing:
+    # escalation.human:
+    #   channels: ["slack", "system", "email"]
+    # morning_report:
+    #   channels: ["slack", "email"]
+
+  # Morning report schedule (24h format)
+  morning_report_time: "08:00"
+
+  # Event types that trigger notifications
+  events:
+    escalation_human: true
+    escalation_warning: true
+    task_complete: true
+    sprint_complete: true
+    budget_alert: true
+    agent_stall: true
+    morning_report: true
+    error_budget_exceeded: true
+
+# =============================================================================
+# TERMINAL ORCHESTRATION (Phase 6.4)
+# PM Daemon integration with physical terminal tabs for agent management
+# =============================================================================
+terminal_orchestration:
+  # Master switch — disabled by default, opt-in
+  enabled: true
+
+  # Provider: 'auto' (iTerm2 → AppleScript), 'iterm2', 'applescript'
+  provider: 'iterm2'
+
+  # How to spawn agent tabs: 'tab' (recommended), 'window', 'split'
+  spawn_mode: 'tab'
+
+  # Terminal scan interval in the PM daemon tick loop (ms)
+  scan_interval_ms: 10000
+
+  # Stall detection threshold — agent with no state change exceeding this is stalled
+  stall_threshold_ms: 300000
+
+  # Auto-approve permission prompts in terminal tabs
+  auto_approve:
+    # Master switch for auto-approval
+    enabled: true
+    # Auto-approve plan approval prompts
+    plan_approval: true
+    # Auto-approve tool permission prompts
+    permission: true
+
+  # Dynamic scaling based on queue depth
+  scaling:
+    enabled: true
+    min_agents: 1
+    max_agents: 8
+    # Spawn new agent when ready_tasks exceeds this
+    queue_depth_target: 3
+    # Cooldown between scale-up decisions (ms)
+    cooldown_ms: 10000
+
+  # Stall recovery settings
+  recovery:
+    enabled: true
+    # Automatically restart stalled agents
+    restart_on_stall: true
+    # Maximum restarts per task before escalating
+    max_restarts_per_task: 3
+    # Escalate to human when restart limit exceeded
+    escalate_on_exceed: true
+
+# =============================================================================
+# DRIFT PREVENTION (Phase 5.6)
+# Predictive pre-action drift detection and course correction
+# =============================================================================
+drift_prevention:
+  # Master switch
+  enabled: true
+
+  # Similarity score thresholds
+  thresholds:
+    aligned: 0.6        # score >= 0.6: no intervention
+    monitor: 0.3        # 0.3 <= score < 0.6: warn + log
+    divergent: 0.3      # score < 0.3: redirect or refresh
+
+  # Guardrail behavior
+  guardrails:
+    warn_on_monitor: true        # Log warning on monitor-level drift
+    block_on_divergent: true     # Block tool execution on divergent drift
+    auto_refresh: true           # Refresh context on confusion before blocking
+
+  # Tools exempt from drift check (read-only tools)
+  excluded_tools:
+    - Read
+    - Glob
+    - Grep
+    - WebSearch
+    - WebFetch
+
+  # Check every N tool invocations (1 = every tool call)
+  evaluation_interval_steps: 1
+
+# =============================================================================
+# POOL AUTOSCALING (Phase 5.4)
+# Dynamic agent pool sizing based on queue depth, resources, and budget
+# =============================================================================
+pool:
+  # Pool size bounds
+  min: 1
+  max: 12
+
+  # Scale-up triggers
+  scale_up:
+    # Scale up when queue_depth / active_agents >= this ratio
+    queue_ratio: 2.0
+    # Scale up if idle agents <= this threshold and tasks are pending
+    priority_idle_threshold: 0
+    # Scale up if a task deadline is within N hours
+    deadline_hours: 2
+
+  # Scale-down triggers
+  scale_down:
+    # Minutes with no pending tasks before scaling down
+    idle_cooldown_minutes: 5
+    # Scale down when daily budget usage exceeds this percentage
+    budget_threshold_pct: 90
+    # Scale down when CPU exceeds this percentage
+    cpu_threshold_pct: 80
+    # Scale down when memory exceeds this percentage
+    memory_threshold_pct: 85
+
+  # How often to evaluate scaling decisions (seconds)
+  evaluation_interval_seconds: 60
+
+# =============================================================================
+# CLOUD EXECUTION BRIDGE (Phase 5.10)
+# Pluggable execution providers for local, SSH, and Docker agent execution
+# =============================================================================
+execution:
+  # Active provider: local | ssh | docker
+  active_provider: "local"
+
+  # Provider-specific configurations
+  providers:
+    ssh:
+      hosts: []
+      # Example host config:
+      # hosts:
+      #   - host: "build-server-1"
+      #     user: "pilot"
+      #     port: 22
+      #     key_path: "~/.ssh/id_rsa"
+      #     remote_path: "/home/pilot/workspace"
+      #     max_agents: 4
+
+    docker:
+      image: "pilot-agi:latest"
+      network: "pilot-net"
+      cpu_limit: "2"
+      mem_limit: "4g"
+      max_containers: 8
+
+  # State synchronization between local and remote
+  state_sync:
+    method: "git"               # git | rsync
+    auto_sync: true
+    sync_interval_seconds: 300
+
+# =============================================================================
+# CROSS-PROJECT LEARNING (Phase 5.8)
+# Share anonymized knowledge across projects
+# =============================================================================
+cross_project:
+  # Master switch — opt-in only
+  enabled: true
+
+  # Allow publishing anonymized learnings to global knowledge base
+  publish: true
+
+  # Allow consuming knowledge from other projects
+  consume: true
+
+  # Anonymization level: "full" | "partial" | "none"
+  anonymize_level: "full"
+
+  # Patterns to never export (matched against content)
+  exclude_patterns:
+    - "*.env"
+    - "*secret*"
+    - "*password*"
+    - "*token*"
+
+  # Custom knowledge path (null = ~/.pilot-agi/knowledge/)
+  knowledge_path: null
+
+  # Maximum entries per knowledge type before pruning
+  max_entries_per_type: 500
+
+  # Prune entries older than N days (with zero usage)
+  prune_after_days: 90
+
+# =============================================================================
+# GITHUB PR AUTOMATION (Phase 5.11)
+# Controls automatic PR creation, CI monitoring, and auto-merge
+# =============================================================================
+github:
+  # Master switch — opt-in only (fallback: local merge)
+  enabled: false
+
+  # Create PR when task completes
+  pr_on_complete: true
+
+  # Auto-merge when CI checks pass + PM approves
+  auto_merge: false
+
+  # Push branch to remote on task complete
+  auto_push: true
+
+  # PR merge strategy: squash | merge | rebase
+  merge_strategy: "squash"
+
+  # Delete remote branch after PR merge
+  delete_branch_after_merge: true
+
+  # PR template: "default" or path to custom template
+  pr_template: "default"
+
+  # Wait for CI checks to pass before merge
+  require_checks_pass: true
+
+  # Commit atomicity enforcement
+  commit_enforcement:
+    max_lines_per_commit: 500
+    require_conventional: true
+    block_on_violation: false
+
+  # Labels applied to auto-created PRs
+  labels:
+    - "pilot-agi"
+    - "auto-generated"
+
+  # GitHub usernames for PR reviewers (empty = none required)
+  reviewers: []
+
+  # Target branch for PRs
+  base_branch: "main"
+
+  # CI check monitoring
+  ci_timeout_minutes: 30
+
+  # PM loop PR monitor scan interval (seconds)
+  pr_monitor_scan_interval_sec: 60

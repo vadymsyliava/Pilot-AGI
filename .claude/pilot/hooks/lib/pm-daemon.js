@@ -21,7 +21,29 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFile: execFileCb } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFileCb);
+
+// Async bd command helper — avoids blocking event loop
+async function bdAsync(args, projectRoot, timeout = 15000) {
+  const { stdout } = await execFileAsync('bd', args, {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    timeout
+  });
+  return stdout;
+}
+
+// Timeout wrapper for promises
+function withTimeout(promise, ms, label = 'operation') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    )
+  ]);
+}
 const { PmWatcher } = require('./pm-watcher');
 const { PmLoop } = require('./pm-loop');
 const session = require('./session');
@@ -33,6 +55,15 @@ const taskHandoff = require('./task-handoff');
 const respawnTracker = require('./respawn-tracker');
 const artifactRegistry = require('./artifact-registry');
 const overnightMode = require('./overnight-mode');
+
+// Phase 6.4: Lazy dep for terminal controller
+let _TerminalController = null;
+function getTerminalController() {
+  if (!_TerminalController) {
+    try { _TerminalController = require('./terminal-controller').TerminalController; } catch (e) { _TerminalController = null; }
+  }
+  return _TerminalController;
+}
 
 // Phase 5.0: Lazy deps for PM Hub + Brain
 let _PmHub = null;
@@ -199,8 +230,13 @@ class PmDaemon {
     this.tickTimer = null;
     this.lastSpawnTime = 0;
     this.spawnedAgents = new Map();  // pid -> { taskId, spawnedAt, process }
+    this._spawningTaskIds = new Set(); // Task IDs with in-flight async terminal spawns
+    this.terminalController = null;  // Phase 6.4: Terminal controller instance
     this.tickCount = 0;
     this.shuttingDown = false;
+    this._tickInProgress = false;    // Guard against overlapping async ticks
+    this.lastTerminalScan = 0;       // Phase 6.4: Terminal scan timestamp
+    this.lastScaleCheck = 0;         // Phase 6.4: Scale check timestamp
 
     this.state = {
       started_at: null,
@@ -341,6 +377,29 @@ class PmDaemon {
       this.log.warn('PM Hub init failed, continuing without', { error: e.message });
     }
 
+    // Phase 6.4: Initialize terminal controller if enabled
+    try {
+      const policy = loadPolicy(this.projectRoot);
+      const termPolicy = policy.terminal_orchestration;
+      if (termPolicy && termPolicy.enabled) {
+        const TC = getTerminalController();
+        if (TC) {
+          this.terminalController = new TC({
+            policy: termPolicy,
+            logger: this.log
+          });
+          this.terminalController.start().then((result) => {
+            this.log.info('Terminal controller started', { provider: result.provider });
+          }).catch((e) => {
+            this.log.warn('Terminal controller start failed, continuing without', { error: e.message });
+            this.terminalController = null;
+          });
+        }
+      }
+    } catch (e) {
+      this.log.debug('Terminal orchestration not configured', { error: e.message });
+    }
+
     // Initialize PmLoop
     this.loop = new PmLoop(this.projectRoot, {
       pmSessionId: this.pmSessionId,
@@ -353,10 +412,9 @@ class PmDaemon {
       pollIntervalMs: Math.min(this.opts.tickIntervalMs, 2000)
     });
 
-    // Wire watcher events to loop
+    // Wire watcher events to loop (async handler for non-blocking processing)
     this.watcher.on('bus_event', ({ event, classification }) => {
-      try {
-        const results = this.loop.processEvents([{ event, classification }]);
+      this.loop.processEvents([{ event, classification }]).then(results => {
         this.state.events_processed += results.length;
 
         for (const result of results) {
@@ -370,11 +428,11 @@ class PmDaemon {
             this._onTaskCompleted(event);
           }
         }
-      } catch (e) {
+      }).catch(e => {
         this.state.errors++;
         this.state.last_error = e.message;
         this.log.error('Event processing error', { error: e.message });
-      }
+      });
     });
 
     this.watcher.on('error', (err) => {
@@ -384,8 +442,14 @@ class PmDaemon {
 
     if (this.opts.once) {
       // Single tick mode — no watcher needed, just run one tick and stop
-      this._tick();
-      this.stop('once_complete');
+      // Note: _tick is now async; for --once mode we fire-and-forget
+      // and stop when the tick completes
+      this._tick().then(() => {
+        this.stop('once_complete');
+      }).catch(e => {
+        this.log.error('Once tick error', { error: e.message });
+        this.stop('once_error');
+      });
       return { success: true, mode: 'once', pm_session: this.pmSessionId };
     }
 
@@ -403,15 +467,50 @@ class PmDaemon {
       this._registerSignalHandlers();
     }
 
-    // Start tick timer for periodic work
+    // Start tick timer for periodic work (async ticks don't block event loop)
     this.tickTimer = setInterval(() => {
-      this._tick();
+      this._tick().catch(e => {
+        this.state.errors++;
+        this.log.error('Async tick error', { error: e.message });
+      });
     }, this.opts.tickIntervalMs);
 
     // Run first tick immediately
-    this._tick();
+    this._tick().catch(e => {
+      this.state.errors++;
+      this.log.error('First tick error', { error: e.message });
+    });
+
+    // Start PM watchdog as a detached child process
+    this._startWatchdog();
 
     return { success: true, mode: 'watch', pm_session: this.pmSessionId };
+  }
+
+  /**
+   * Start the PM watchdog process as a detached background monitor.
+   * Watchdog monitors this daemon's PID and auto-restarts if it crashes.
+   */
+  _startWatchdog() {
+    try {
+      const watchdogScript = path.join(__dirname, 'pm-watchdog.js');
+      if (!fs.existsSync(watchdogScript)) {
+        this.log.debug('PM watchdog script not found, skipping');
+        return;
+      }
+
+      this._watchdogProcess = spawn('node', [watchdogScript, this.projectRoot], {
+        cwd: this.projectRoot,
+        detached: true,
+        stdio: ['ignore', 'ignore', 'ignore'],
+        env: { ...process.env, PILOT_PM_SESSION: '1' }
+      });
+
+      this._watchdogProcess.unref();
+      this.log.info('PM watchdog started', { pid: this._watchdogProcess.pid });
+    } catch (e) {
+      this.log.warn('Failed to start PM watchdog', { error: e.message });
+    }
   }
 
   /**
@@ -431,6 +530,18 @@ class PmDaemon {
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
+    }
+
+    // Stop PM watchdog
+    if (this._watchdogProcess) {
+      try { this._watchdogProcess.kill('SIGTERM'); } catch (e) { /* already dead */ }
+      this._watchdogProcess = null;
+    }
+
+    // Phase 6.4: Stop terminal controller
+    if (this.terminalController) {
+      try { this.terminalController.stop(); } catch (e) { /* best effort */ }
+      this.terminalController = null;
     }
 
     // Phase 5.0: Stop hub + clear brain
@@ -476,11 +587,14 @@ class PmDaemon {
   // ==========================================================================
 
   /**
-   * Run a single daemon tick.
+   * Run a single daemon tick (async to avoid blocking event loop).
    * Executes periodic scans and agent lifecycle management.
+   * Uses _tickInProgress guard to prevent overlapping ticks.
    */
-  _tick() {
+  async _tick() {
     if (!this.running) return;
+    if (this._tickInProgress) return; // Prevent overlapping async ticks
+    this._tickInProgress = true;
 
     this.tickCount++;
     this.state.ticks = this.tickCount;
@@ -488,23 +602,28 @@ class PmDaemon {
 
     try {
       // 1. Run PmLoop periodic scans (health, task, drift, pressure, cost, recovery)
-      const scanResults = this.loop.runPeriodicScans();
+      const scanResults = await this.loop.runPeriodicScans();
       if (scanResults.length > 0) {
         this.log.debug('Periodic scan results', { count: scanResults.length });
       }
 
       // 2. Check for idle agents that need work
-      this._manageAgentLifecycle();
+      await this._manageAgentLifecycle();
 
       // 3. Clean up finished agent processes
       this._reapDeadAgents();
 
-      // 4. Persist state
+      // 4. Phase 6.4: Terminal scan loop (ground truth, stall detection, auto-approve)
+      await this._terminalScanLoop();
+
+      // 5. Persist state
       saveDaemonState(this.projectRoot, this.state);
     } catch (e) {
       this.state.errors++;
       this.state.last_error = e.message;
       this.log.error('Tick error', { tick: this.tickCount, error: e.message });
+    } finally {
+      this._tickInProgress = false;
     }
   }
 
@@ -515,7 +634,7 @@ class PmDaemon {
   /**
    * Check if we should spawn new agents based on available work and capacity.
    */
-  _manageAgentLifecycle() {
+  async _manageAgentLifecycle() {
     const policy = loadPolicy();
     const maxAgents = policy.session?.max_concurrent_sessions || this.opts.maxAgents;
 
@@ -547,7 +666,7 @@ class PmDaemon {
     const aliveSpawned = this._countAliveSpawned();
 
     // Check for ready tasks
-    let readyTasks = this._getReadyUnclaimedTasks();
+    let readyTasks = await this._getReadyUnclaimedTasks();
     if (readyTasks.length === 0) return;
 
     // Phase 4.8: Filter out tasks that exceeded error budget
@@ -559,6 +678,11 @@ class PmDaemon {
       }
       return true;
     });
+    if (readyTasks.length === 0) return;
+
+    // Filter out tasks that already have a live spawned agent
+    const spawnedTaskIds = this._getSpawnedTaskIds();
+    readyTasks = readyTasks.filter(task => !spawnedTaskIds.has(task.id));
     if (readyTasks.length === 0) return;
 
     // Check spawn cooldown
@@ -609,6 +733,39 @@ class PmDaemon {
       this.log.warn('Artifact check failed, proceeding with spawn', { task_id: task.id, error: e.message });
     }
 
+    // Phase 6.4: Use terminal-based spawning if enabled
+    if (this.terminalController && this.terminalController._started) {
+      // Guard: prevent duplicate async terminal spawns for the same task
+      if (this._spawningTaskIds.has(task.id)) {
+        this.log.debug('Skipping duplicate terminal spawn (already in flight)', { task_id: task.id });
+        return { success: false, reason: 'spawn_in_flight' };
+      }
+      this._spawningTaskIds.add(task.id);
+
+      this._spawnAgentViaTerminal(task)
+        .catch(e => {
+          this.log.error('Terminal spawn failed, falling back to headless', {
+            task_id: task.id, error: e.message
+          });
+          this._spawnAgentHeadless(task);
+        })
+        .finally(() => {
+          this._spawningTaskIds.delete(task.id);
+        });
+      return { success: true, terminal: true };
+    }
+
+    return this._spawnAgentHeadless(task);
+  }
+
+  /**
+   * Spawn a headless Claude agent process for a task (original behavior).
+   * Phase 4.2: Uses ProcessSpawner v2 for context-aware spawning.
+   *
+   * @param {object} task - { id, title, description, labels }
+   * @returns {{ success: boolean, pid?: number }}
+   */
+  _spawnAgentHeadless(task) {
     // Determine agent type from skill registry
     const agentType = this._resolveAgentType(task);
 
@@ -715,19 +872,13 @@ class PmDaemon {
 
   /**
    * Get ready tasks that are not claimed by any session.
+   * Async to avoid blocking the event loop with bd commands.
    *
-   * @returns {Array<{ id, title }>}
+   * @returns {Promise<Array<{ id, title }>>}
    */
-  _getReadyUnclaimedTasks() {
+  async _getReadyUnclaimedTasks() {
     try {
-      const { execFileSync } = require('child_process');
-      const output = execFileSync('bd', ['ready', '--json'], {
-        cwd: this.projectRoot,
-        encoding: 'utf8',
-        timeout: 5000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-
+      const output = await bdAsync(['ready', '--json'], this.projectRoot);
       const tasks = JSON.parse(output);
       if (tasks.length === 0) return [];
 
@@ -746,17 +897,42 @@ class PmDaemon {
   }
 
   /**
+   * Check if a spawned agent entry is still alive.
+   * Terminal spawns use synthetic string PIDs — check tab registry instead.
+   * Headless spawns use numeric PIDs — use process.kill(pid, 0).
+   *
+   * @param {string|number} pid - The PID key from spawnedAgents map
+   * @param {object} entry - The spawn entry
+   * @returns {boolean} True if the agent is still alive
+   */
+  _isSpawnAlive(pid, entry) {
+    if (entry.isTerminal && entry.tabId) {
+      // Terminal spawn: check if the tab still exists in the registry
+      if (this.terminalController) {
+        const allTabs = this.terminalController.getAllTabs();
+        return allTabs.some(t => t.tabId === entry.tabId);
+      }
+      return false;
+    }
+    // Headless spawn: check via OS signal
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
    * Count spawned agent processes that are still alive.
    */
   _countAliveSpawned() {
     let alive = 0;
     for (const [pid, entry] of this.spawnedAgents) {
       if (entry.exitCode === null) {
-        // Check if still running
-        try {
-          process.kill(pid, 0);
+        if (this._isSpawnAlive(pid, entry)) {
           alive++;
-        } catch (e) {
+        } else {
           entry.exitCode = -1;
           entry.exitedAt = new Date().toISOString();
         }
@@ -789,7 +965,14 @@ class PmDaemon {
             runtime_ms: now - spawnTime
           });
 
-          try { process.kill(pid, 'SIGTERM'); } catch (e) { /* already dead */ }
+          if (entry.isTerminal && entry.tabId) {
+            // Terminal spawn: close the tab instead of process.kill
+            if (this.terminalController) {
+              this.terminalController.closeTab(entry.tabId).catch(() => {});
+            }
+          } else {
+            try { process.kill(pid, 'SIGTERM'); } catch (e) { /* already dead */ }
+          }
           entry.exitCode = -2;
           entry.exitedAt = new Date().toISOString();
         }
@@ -799,6 +982,29 @@ class PmDaemon {
     for (const pid of toRemove) {
       this.spawnedAgents.delete(pid);
     }
+  }
+
+  /**
+   * Get task IDs that already have a live spawned agent process.
+   * Used to prevent spawning duplicate agents for the same task.
+   *
+   * @returns {Set<string>} Set of task IDs with active spawned agents
+   */
+  _getSpawnedTaskIds() {
+    const taskIds = new Set();
+    // Include tasks with in-flight async terminal spawns
+    for (const tid of this._spawningTaskIds) {
+      taskIds.add(tid);
+    }
+    for (const [pid, entry] of this.spawnedAgents) {
+      if (entry.exitCode === null) {
+        // Verify process/terminal is still alive
+        if (this._isSpawnAlive(pid, entry)) {
+          taskIds.add(entry.taskId);
+        }
+      }
+    }
+    return taskIds;
   }
 
   // ==========================================================================
@@ -958,29 +1164,20 @@ class PmDaemon {
       pressurePct: handoff.checkpoint_version ? null : null
     }, this.projectRoot);
 
-    // Get task info for respawn
-    let task = { id: taskId, title: taskId };
-    try {
-      const { execFileSync } = require('child_process');
-      const output = execFileSync('bd', ['show', taskId, '--json'], {
-        cwd: this.projectRoot,
-        encoding: 'utf8',
-        timeout: 5000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-      task = JSON.parse(output);
-    } catch (e) {
-      // Use minimal task info
-    }
-
+    // Get task info for respawn (async to avoid blocking)
     this.log.info('Respawning agent for checkpoint-resume', {
       task_id: taskId,
       respawn_count: check.respawn_count + 1,
       max: check.max
     });
 
-    // Spawn fresh agent with resume context
-    this._spawnAgent(task);
+    bdAsync(['show', taskId, '--json'], this.projectRoot).then(output => {
+      const task = JSON.parse(output);
+      this._spawnAgent(task);
+    }).catch(() => {
+      // Use minimal task info on failure
+      this._spawnAgent({ id: taskId, title: taskId });
+    });
   }
 
   // ==========================================================================
@@ -1006,24 +1203,17 @@ class PmDaemon {
       if (review.approved) {
         this.log.info('Auto-review passed', { task_id: taskId, checks: review.checks });
 
-        // Auto-close the task
+        // Auto-close the task (async to avoid blocking)
         if (!this.opts.dryRun) {
-          try {
-            const { execFileSync } = require('child_process');
-            execFileSync('bd', ['close', taskId], {
-              cwd: this.projectRoot,
-              encoding: 'utf8',
-              timeout: 5000,
-              stdio: ['pipe', 'pipe', 'pipe']
-            });
+          bdAsync(['close', taskId], this.projectRoot).then(() => {
             this.state.tasks_auto_closed++;
             this.log.info('Task auto-closed', { task_id: taskId });
 
             // Phase 4.8: Record task completion in overnight run
             overnightMode.recordTaskCompletion(taskId, this.projectRoot);
-          } catch (e) {
+          }).catch(e => {
             this.log.warn('bd close failed', { task_id: taskId, error: e.message });
-          }
+          });
         }
       } else {
         this.log.warn('Auto-review failed', {
@@ -1068,6 +1258,461 @@ class PmDaemon {
       fs.appendFileSync(escalationPath, JSON.stringify(escalation) + '\n');
     } catch (e) {
       this.log.error('Failed to write escalation', { error: e.message });
+    }
+  }
+
+  // ==========================================================================
+  // TERMINAL ORCHESTRATION (Phase 6.4)
+  // ==========================================================================
+
+  /**
+   * Terminal scan loop: reconcile terminal state, detect stalls,
+   * auto-approve permission prompts, and handle dynamic scaling.
+   *
+   * Runs as part of each daemon tick when terminal orchestration is enabled.
+   */
+  async _terminalScanLoop() {
+    if (!this.terminalController || !this.terminalController._started) return;
+
+    const policy = loadPolicy(this.projectRoot);
+    const termPolicy = policy.terminal_orchestration || {};
+    const scanInterval = termPolicy.scan_interval_ms || 10000;
+    const now = Date.now();
+
+    if (now - this.lastTerminalScan < scanInterval) return;
+    this.lastTerminalScan = now;
+
+    try {
+      // 1. Sync registry with actual terminal state (with timeout protection)
+      try {
+        const syncResult = await withTimeout(
+          this.terminalController.sync(), 10000, 'terminal sync'
+        );
+        if (syncResult.updated > 0 || syncResult.removed > 0) {
+          this.log.debug('Terminal sync', syncResult);
+        }
+      } catch (e) {
+        this.log.error('Terminal sync error', { error: e.message });
+      }
+
+      // 2. Ground truth reconciliation — compare tracked agents with real tabs
+      this._reconcileTerminalState();
+
+      // 3. Stall detection and auto-recovery
+      await this._detectAndHandleStalls(termPolicy);
+
+      // 4. Auto-approve permission prompts (with timeout protection)
+      await this._autoApproveTerminals(termPolicy);
+
+      // 5. Dynamic scaling
+      await this._dynamicScaleAgents(termPolicy);
+
+    } catch (e) {
+      this.log.error('Terminal scan loop error', { error: e.message });
+    }
+  }
+
+  /**
+   * Ground truth reconciliation: compare internal tracking with actual terminal tabs.
+   * Detects missing tabs (crashed) and orphaned tabs (unknown).
+   */
+  _reconcileTerminalState() {
+    const groundTruthTabs = this.terminalController.getAllTabs();
+    const groundTruthTabIds = new Set(groundTruthTabs.map(t => t.tabId));
+
+    // Check for agents tracked as terminal-based but whose tab no longer exists
+    for (const [pid, entry] of this.spawnedAgents) {
+      if (entry.isTerminal && entry.tabId && !groundTruthTabIds.has(entry.tabId)) {
+        // Tab disappeared — mark as exited
+        if (entry.exitCode === null) {
+          this.log.warn('Terminal tab disappeared (likely crashed)', {
+            tabId: entry.tabId,
+            taskId: entry.taskId
+          });
+          entry.exitCode = -1;
+          entry.exitedAt = new Date().toISOString();
+
+          // Trigger exit handling for recovery
+          this._onAgentExit(pid, entry.taskId, -1, 'tab_closed');
+        }
+      }
+    }
+
+    // Check for tabs in registry that we don't track — orphaned tabs
+    const trackedTabIds = new Set();
+    for (const [, entry] of this.spawnedAgents) {
+      if (entry.isTerminal && entry.tabId) {
+        trackedTabIds.add(entry.tabId);
+      }
+    }
+
+    for (const tab of groundTruthTabs) {
+      if (!trackedTabIds.has(tab.tabId) && tab.role !== 'pm') {
+        // Close orphaned agent tabs that we don't track
+        // (PM tabs are never auto-closed)
+        const isDead = tab.state === 'exited' || tab.state === 'dead' || tab.state === 'idle';
+        if (isDead) {
+          this.log.info('Closing orphaned dead terminal tab', {
+            tabId: tab.tabId,
+            taskId: tab.taskId,
+            state: tab.state
+          });
+          this.terminalController.closeTab(tab.tabId).catch(e => {
+            this.log.warn('Failed to close orphaned tab', { tabId: tab.tabId, error: e.message });
+          });
+        } else {
+          this.log.debug('Orphaned terminal tab (active, not closing)', {
+            tabId: tab.tabId,
+            taskId: tab.taskId,
+            state: tab.state,
+            role: tab.role
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * Detect stalled terminal tabs and handle recovery (restart or escalate).
+   *
+   * @param {object} termPolicy - terminal_orchestration policy section
+   */
+  async _detectAndHandleStalls(termPolicy) {
+    const thresholdMs = termPolicy.stall_threshold_ms || 300000;
+    const recovery = termPolicy.recovery || {};
+    const stalled = this.terminalController.detectStalled(thresholdMs);
+
+    for (const tab of stalled) {
+      if (!recovery.enabled) continue;
+
+      const maxRestarts = recovery.max_restarts_per_task || 3;
+      const restartCount = respawnTracker.getRespawnCount(tab.taskId, this.projectRoot);
+
+      if (recovery.restart_on_stall && restartCount < maxRestarts) {
+        this.log.info('Restarting stalled terminal agent', {
+          tabId: tab.tabId,
+          taskId: tab.taskId,
+          restart_count: restartCount + 1,
+          max: maxRestarts
+        });
+
+        // Record the restart
+        respawnTracker.recordRespawn(tab.taskId, {
+          sessionId: null,
+          exitReason: 'terminal_stall',
+          pressurePct: null
+        }, this.projectRoot);
+
+        // Close stalled tab and respawn (async, no blocking bd call)
+        try {
+          await withTimeout(
+            this.terminalController.closeTab(tab.tabId), 10000, 'close stalled tab'
+          );
+
+          // Get task info and respawn (async)
+          let task = { id: tab.taskId, title: tab.taskId };
+          try {
+            const output = await bdAsync(['show', tab.taskId, '--json'], this.projectRoot);
+            task = JSON.parse(output);
+          } catch (e) { /* use minimal task info */ }
+
+          this._spawnAgent(task);
+        } catch (e) {
+          this.log.error('Failed to restart stalled agent', {
+            tabId: tab.tabId, error: e.message
+          });
+        }
+      } else if (recovery.escalate_on_exceed) {
+        this.log.warn('Stalled agent exceeded restart limit', {
+          taskId: tab.taskId,
+          restarts: restartCount,
+          max: maxRestarts
+        });
+
+        this._escalateToHuman({
+          type: 'terminal_stall_limit',
+          task_id: tab.taskId,
+          restarts: restartCount,
+          max_limit: maxRestarts,
+          ts: new Date().toISOString()
+        });
+      }
+    }
+  }
+
+  /**
+   * Auto-approve permission and plan approval prompts in terminal tabs.
+   *
+   * @param {object} termPolicy - terminal_orchestration policy section
+   */
+  async _autoApproveTerminals(termPolicy) {
+    const autoApprove = termPolicy.auto_approve || {};
+    if (!autoApprove.enabled) return;
+
+    for (const tab of this.terminalController.getAllTabs()) {
+      if (tab.state === 'plan_approval' && autoApprove.plan_approval) {
+        try {
+          await withTimeout(
+            this.terminalController.autoApprove(tab.tabId), 5000, 'auto-approve plan'
+          );
+          this.log.info('Auto-approved plan in terminal', {
+            tabId: tab.tabId,
+            taskId: tab.taskId
+          });
+        } catch (e) {
+          this.log.warn('Auto-approve failed', { tabId: tab.tabId, error: e.message });
+        }
+      }
+
+      if (tab.state === 'waiting_input' && autoApprove.permission) {
+        try {
+          await withTimeout(
+            this.terminalController.autoApprove(tab.tabId), 5000, 'auto-approve permission'
+          );
+          this.log.info('Auto-approved permission in terminal', {
+            tabId: tab.tabId,
+            taskId: tab.taskId
+          });
+        } catch (e) {
+          this.log.warn('Permission auto-approve failed', { tabId: tab.tabId, error: e.message });
+        }
+      }
+    }
+  }
+
+  /**
+   * Dynamic scaling: adjust number of terminal agents based on queue depth.
+   *
+   * @param {object} termPolicy - terminal_orchestration policy section
+   */
+  async _dynamicScaleAgents(termPolicy) {
+    const scaling = termPolicy.scaling || {};
+    if (!scaling.enabled) return;
+
+    const cooldownMs = scaling.cooldown_ms || 10000;
+    const now = Date.now();
+    if (now - this.lastScaleCheck < cooldownMs) return;
+    this.lastScaleCheck = now;
+
+    const maxAgents = scaling.max_agents || this.opts.maxAgents;
+    const minAgents = scaling.min_agents || 1;
+    const queueTarget = scaling.queue_depth_target || 3;
+
+    // Count current terminal agents
+    const currentTerminalTabs = this.terminalController.getAllTabs()
+      .filter(t => t.role !== 'pm');
+    const currentCount = currentTerminalTabs.length;
+
+    // Count ready unclaimed tasks, excluding already-spawned
+    let readyTasks = await this._getReadyUnclaimedTasks();
+    const spawnedTaskIds = this._getSpawnedTaskIds();
+    readyTasks = readyTasks.filter(t => !spawnedTaskIds.has(t.id));
+    const readyCount = readyTasks.length;
+
+    // Scale up if queue depth exceeds target and we have capacity
+    if (readyCount > queueTarget && currentCount < maxAgents) {
+      const toSpawn = Math.min(readyCount - queueTarget, maxAgents - currentCount, 1);
+      for (let i = 0; i < toSpawn; i++) {
+        const task = readyTasks[i];
+        if (task) {
+          this.log.info('Dynamic scale-up: spawning terminal agent', {
+            task_id: task.id,
+            current_agents: currentCount,
+            ready_tasks: readyCount,
+            target_queue: queueTarget
+          });
+          this._spawnAgent(task);
+        }
+      }
+    }
+
+    // Scale down if we have more agents than min and no ready tasks
+    if (readyCount === 0 && currentCount > minAgents) {
+      // Don't scale down actively working agents — only idle ones
+      const idleTabs = currentTerminalTabs.filter(t => t.state === 'idle' || t.state === 'complete');
+      if (idleTabs.length > 0 && currentCount > minAgents) {
+        const toClose = Math.min(idleTabs.length, currentCount - minAgents);
+        for (let i = 0; i < toClose; i++) {
+          this.log.info('Dynamic scale-down: closing idle terminal', {
+            tabId: idleTabs[i].tabId,
+            taskId: idleTabs[i].taskId
+          });
+          this.terminalController.closeTab(idleTabs[i].tabId).catch(e => {
+            this.log.warn('Scale-down close failed', { error: e.message });
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * Spawn an agent in a physical terminal tab.
+   * Phase 6.10: Supports multi-adapter spawning (Claude, Aider, OpenCode, Ollama, Codex).
+   *
+   * @param {object} task - Task object { id, title, description, labels }
+   * @param {object} [assignment] - Model assignment from scheduler
+   * @param {string} [assignment.modelId] - Model ID (e.g., 'gpt-4.5')
+   * @param {string} [assignment.adapterId] - Adapter name (e.g., 'aider')
+   * @returns {Promise<{success: boolean, tabId?: string}>}
+   */
+  async _spawnAgentViaTerminal(task, assignment) {
+    const agentType = this._resolveAgentType(task);
+
+    // Build command string from process spawner context
+    const { buildContextCapsule, buildSpawnPrompt } = require('./spawn-context');
+    const capsule = buildContextCapsule(task, {
+      projectRoot: this.projectRoot,
+      agentType
+    });
+    const prompt = buildSpawnPrompt(capsule);
+    const truncatedPrompt = prompt.length > 16000
+      ? prompt.slice(0, 16000) + '\n\n[Context truncated]'
+      : prompt;
+
+    // Phase 6.10: Adapter-aware command building
+    let command;
+    let adapterName = 'claude';
+    let isClaudeNative = true;
+    const modelId = assignment?.modelId || null;
+
+    if (assignment && (assignment.modelId || assignment.adapterId)) {
+      try {
+        const { TerminalLayout } = require('../../../../lib/terminal-layout');
+        const layout = new TerminalLayout({
+          adapterRegistry: this._adapterRegistry || null,
+          projectRoot: this.projectRoot,
+          logger: this.log
+        });
+
+        const result = layout.buildSpawnCommand({
+          modelId: assignment.modelId,
+          adapterName: assignment.adapterId,
+          prompt: truncatedPrompt,
+          cwd: this.projectRoot,
+          maxTokens: this.opts.budgetPerAgentUsd
+            ? Math.round(this.opts.budgetPerAgentUsd * 100000)
+            : undefined
+        });
+
+        command = result.command;
+        adapterName = result.adapterName;
+        isClaudeNative = result.isClaudeNative;
+      } catch (e) {
+        this.log.warn('TerminalLayout unavailable, falling back to claude', { error: e.message });
+      }
+    }
+
+    // Fallback: Build default claude command
+    // Write prompt to file to avoid escaping issues with AppleScript + shell
+    if (!command) {
+      const promptDir = path.join(this.projectRoot, '.claude/pilot/state/spawn-context');
+      if (!fs.existsSync(promptDir)) fs.mkdirSync(promptDir, { recursive: true });
+      const promptFile = path.join(promptDir, `${task.id}.prompt`);
+      fs.writeFileSync(promptFile, truncatedPrompt, 'utf8');
+
+      const args = ['--agent', '--permission-mode', 'acceptEdits'];
+      if (this.opts.budgetPerAgentUsd) {
+        args.push('--max-budget-usd', String(this.opts.budgetPerAgentUsd));
+      }
+      const escapedPath = promptFile.replace(/'/g, "'\\''");
+      command = `claude ${args.join(' ')} -p "$(cat '${escapedPath}')"`;
+    }
+
+    // Set up environment
+    const env = {
+      PILOT_DAEMON_SPAWNED: '1',
+      PILOT_TASK_ID: task.id,
+      PILOT_AGENT_TYPE: agentType || 'general',
+    };
+
+    if (modelId) env.PILOT_MODEL = modelId;
+    if (adapterName !== 'claude') env.PILOT_ADAPTER = adapterName;
+
+    // Get respawn count if applicable
+    const respawnCount = respawnTracker.getRespawnCount(task.id, this.projectRoot);
+    if (respawnCount > 0) {
+      env.PILOT_RESPAWN_COUNT = String(respawnCount);
+    }
+
+    // Phase 6.10: Format tab title with model name
+    let tabTitle = `pilot-${task.id}`;
+    if (modelId) {
+      try {
+        const { TerminalLayout } = require('../../../../lib/terminal-layout');
+        const layout = new TerminalLayout({
+          adapterRegistry: this._adapterRegistry || null,
+          projectRoot: this.projectRoot
+        });
+        tabTitle = layout.formatTabTitle(modelId, task.id, task.title);
+      } catch (e) { /* use default title */ }
+    }
+
+    try {
+      const tabEntry = await this.terminalController.openTab({
+        command,
+        taskId: task.id,
+        role: agentType || 'agent',
+        title: tabTitle,
+        cwd: this.projectRoot,
+        env
+      });
+
+      // Track the terminal agent with a synthetic PID
+      const syntheticPid = `tab-${tabEntry.tabId}`;
+      this.spawnedAgents.set(syntheticPid, {
+        taskId: task.id,
+        taskTitle: task.title,
+        agentType: agentType || 'general',
+        adapterName,
+        modelId: modelId || null,
+        spawnedAt: new Date().toISOString(),
+        process: null,
+        isTerminal: true,
+        tabId: tabEntry.tabId,
+        exitCode: null,
+        logPath: null,
+        isResume: false,
+        worktreePath: null,
+        contextFile: null
+      });
+
+      this.lastSpawnTime = Date.now();
+      this.state.agents_spawned++;
+
+      // Phase 6.10: Start enforcement for non-Claude agents
+      if (!isClaudeNative) {
+        try {
+          const { TerminalLayout } = require('../../../../lib/terminal-layout');
+          const layout = new TerminalLayout({
+            adapterRegistry: this._adapterRegistry || null,
+            projectRoot: this.projectRoot,
+            logger: this.log
+          });
+          layout.startEnforcement({
+            taskId: task.id,
+            sessionId: syntheticPid,
+            adapterName,
+            cwd: this.projectRoot
+          });
+        } catch (e) {
+          this.log.warn('Failed to start enforcement for non-Claude agent', {
+            adapter: adapterName, error: e.message
+          });
+        }
+      }
+
+      this.log.info('Agent spawned in terminal tab', {
+        tabId: tabEntry.tabId,
+        task_id: task.id,
+        agent_type: agentType || 'general',
+        adapter: adapterName,
+        model: modelId || 'default'
+      });
+
+      return { success: true, tabId: tabEntry.tabId };
+    } catch (e) {
+      this.log.error('Terminal spawn failed', { task_id: task.id, error: e.message });
+      return { success: false, error: e.message };
     }
   }
 
@@ -1120,7 +1765,12 @@ class PmDaemon {
       })),
       watcher: this.watcher ? this.watcher.getStatus() : null,
       loop: this.loop ? this.loop.getStats() : null,
-      hub: this.hub ? this.hub.getStatus() : null
+      hub: this.hub ? this.hub.getStatus() : null,
+      terminal: this.terminalController ? {
+        started: this.terminalController._started,
+        provider: this.terminalController.activeProvider,
+        ...this.terminalController.getTabMetrics()
+      } : null
     };
   }
 }
@@ -1160,8 +1810,9 @@ Options:
 
   const once = args.includes('--once');
   const dryRun = args.includes('--dry-run');
+  const rootIdx = args.indexOf('--root');
   const projectRoot = args.find(a => a.startsWith('--root='))?.split('=')[1]
-    || args[args.indexOf('--root') + 1]
+    || (rootIdx >= 0 ? args[rootIdx + 1] : null)
     || process.cwd();
 
   // --status: show full daemon state (replaces /pilot-pm session need)

@@ -17,7 +17,19 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFile: execFileCb } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFileCb);
+
+// Async bd command helper — avoids blocking event loop
+async function bdAsync(args, projectRoot, timeout = 15000) {
+  const { stdout } = await execFileAsync('bd', args, {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    timeout
+  });
+  return stdout;
+}
 const orchestrator = require('./orchestrator');
 const session = require('./session');
 const messaging = require('./messaging');
@@ -40,6 +52,12 @@ const ANALYTICS_SCAN_INTERVAL_MS = 300000; // 5min between analytics aggregation
 const PROGRESS_SCAN_INTERVAL_MS = 60000;  // 60s between progress/artifact scans (Phase 4.7)
 const OVERNIGHT_SCAN_INTERVAL_MS = 60000; // 60s between overnight run checks (Phase 4.8)
 const APPROVAL_SCAN_INTERVAL_MS = 120000; // 2min between approval confidence scans (Phase 5.1)
+const TELEGRAM_SCAN_INTERVAL_MS = 10000;  // 10s between telegram inbox scans (Phase 6.6)
+const POOL_SCALING_SCAN_INTERVAL_MS = 60000; // 60s between pool scaling evaluations (Phase 5.4)
+const DRIFT_PREVENTION_SCAN_INTERVAL_MS = 60000; // 60s between drift prevention aggregate scans (Phase 5.6)
+const DECOMP_LEARNING_SCAN_INTERVAL_MS = 300000; // 5min between decomposition learning scans (Phase 5.5)
+const KNOWLEDGE_HARVEST_SCAN_INTERVAL_MS = 300000; // 5min between knowledge harvest scans (Phase 5.8)
+const PR_STATUS_SCAN_INTERVAL_MS = 60000; // 60s between PR status scans (Phase 5.11)
 const PRESSURE_NUDGE_THRESHOLD_PCT = 70;  // PM nudges agents above this if no auto-checkpoint
 const MAX_ACTIONS_PER_CYCLE = 10;         // Prevent runaway action storms
 const ACTION_LOG_PATH = '.claude/pilot/state/orchestrator/action-log.jsonl';
@@ -65,6 +83,14 @@ class PmLoop {
     this.lastProgressScan = 0;
     this.lastOvernightScan = 0;
     this.lastApprovalScan = 0;
+    this.lastTelegramScan = 0;
+    this.lastNotificationDigestScan = 0;
+    this.lastPoolScalingScan = 0;
+    this.lastDriftPreventionScan = 0;
+    this.lastDecompLearningScan = 0;
+    this.lastKnowledgeHarvestScan = 0;
+    this.lastPrStatusScan = 0;
+    this._telegramConversations = null; // Lazy-initialized in _telegramScan
     this.actionQueue = [];  // Used by pm-queue.js for persistence
     this.opts = {
       healthScanIntervalMs: opts.healthScanIntervalMs || HEALTH_SCAN_INTERVAL_MS,
@@ -77,6 +103,12 @@ class PmLoop {
       progressScanIntervalMs: opts.progressScanIntervalMs || PROGRESS_SCAN_INTERVAL_MS,
       overnightScanIntervalMs: opts.overnightScanIntervalMs || OVERNIGHT_SCAN_INTERVAL_MS,
       approvalScanIntervalMs: opts.approvalScanIntervalMs || APPROVAL_SCAN_INTERVAL_MS,
+      telegramScanIntervalMs: opts.telegramScanIntervalMs || TELEGRAM_SCAN_INTERVAL_MS,
+      poolScalingScanIntervalMs: opts.poolScalingScanIntervalMs || POOL_SCALING_SCAN_INTERVAL_MS,
+      driftPreventionScanIntervalMs: opts.driftPreventionScanIntervalMs || DRIFT_PREVENTION_SCAN_INTERVAL_MS,
+      decompLearningScanIntervalMs: opts.decompLearningScanIntervalMs || DECOMP_LEARNING_SCAN_INTERVAL_MS,
+      knowledgeHarvestScanIntervalMs: opts.knowledgeHarvestScanIntervalMs || KNOWLEDGE_HARVEST_SCAN_INTERVAL_MS,
+      prStatusScanIntervalMs: opts.prStatusScanIntervalMs || PR_STATUS_SCAN_INTERVAL_MS,
       maxActionsPerCycle: opts.maxActionsPerCycle || MAX_ACTIONS_PER_CYCLE,
       dryRun: opts.dryRun || false,
       ...opts
@@ -101,11 +133,12 @@ class PmLoop {
   /**
    * Process a batch of classified bus events.
    * Called by PmWatcher when new events arrive.
+   * Async to support non-blocking bd commands in handlers.
    *
    * @param {Array<{event: object, classification: object}>} classifiedEvents
-   * @returns {Array<{action: string, result: object}>}
+   * @returns {Promise<Array<{action: string, result: object}>>}
    */
-  processEvents(classifiedEvents) {
+  async processEvents(classifiedEvents) {
     if (!this.running || !this.pmSessionId) return [];
 
     const results = [];
@@ -120,7 +153,7 @@ class PmLoop {
         break;
       }
 
-      const result = this._handleEvent(event, classification);
+      const result = await this._handleEvent(event, classification);
       if (result) {
         results.push(result);
         actionsThisCycle++;
@@ -133,8 +166,9 @@ class PmLoop {
   /**
    * Run periodic scans (health, tasks, drift).
    * Should be called on a timer by the watcher.
+   * Async to avoid blocking event loop with bd commands.
    */
-  runPeriodicScans() {
+  async runPeriodicScans() {
     if (!this.running || !this.pmSessionId) return [];
 
     const now = Date.now();
@@ -147,10 +181,10 @@ class PmLoop {
       results.push(...healthResults);
     }
 
-    // Task assignment scan
+    // Task assignment scan (async — uses bd commands)
     if (now - this.lastTaskScan >= this.opts.taskScanIntervalMs) {
       this.lastTaskScan = now;
-      const taskResults = this._taskScan();
+      const taskResults = await this._taskScan();
       results.push(...taskResults);
     }
 
@@ -199,7 +233,7 @@ class PmLoop {
     // Progress/artifact scan (Phase 4.7) — detect blocked tasks, aggregate progress
     if (now - this.lastProgressScan >= this.opts.progressScanIntervalMs) {
       this.lastProgressScan = now;
-      const progressResults = this._progressScan();
+      const progressResults = await this._progressScan();
       results.push(...progressResults);
     }
 
@@ -215,6 +249,55 @@ class PmLoop {
       this.lastApprovalScan = now;
       const approvalResults = this._approvalScan();
       results.push(...approvalResults);
+    }
+
+    // Notification digest flush (Phase 5.9) — batch info-level notifications
+    if (now - this.lastNotificationDigestScan >= 60000) { // check every 60s
+      this.lastNotificationDigestScan = now;
+      const digestResults = this._notificationDigestScan();
+      results.push(...digestResults);
+    }
+
+    // Telegram inbox scan (Phase 6.6) — process Telegram intents
+    if (now - this.lastTelegramScan >= this.opts.telegramScanIntervalMs) {
+      this.lastTelegramScan = now;
+      const telegramResults = this._telegramScan();
+      results.push(...telegramResults);
+    }
+
+    // Pool scaling scan (Phase 5.4) — evaluate dynamic pool scaling
+    if (now - this.lastPoolScalingScan >= this.opts.poolScalingScanIntervalMs) {
+      this.lastPoolScalingScan = now;
+      const poolResults = this._poolScalingScan();
+      results.push(...poolResults);
+    }
+
+    // Drift prevention scan (Phase 5.6) — aggregate drift scores across agents
+    if (now - this.lastDriftPreventionScan >= this.opts.driftPreventionScanIntervalMs) {
+      this.lastDriftPreventionScan = now;
+      const driftPreventionResults = this._driftPreventionScan();
+      results.push(...driftPreventionResults);
+    }
+
+    // Decomposition learning scan (Phase 5.5) — finalize completed decompositions
+    if (now - this.lastDecompLearningScan >= this.opts.decompLearningScanIntervalMs) {
+      this.lastDecompLearningScan = now;
+      const decompResults = this._decompositionLearningScan();
+      results.push(...decompResults);
+    }
+
+    // Knowledge harvest scan (Phase 5.8) — harvest learnings from closed tasks
+    if (now - this.lastKnowledgeHarvestScan >= this.opts.knowledgeHarvestScanIntervalMs) {
+      this.lastKnowledgeHarvestScan = now;
+      const knowledgeResults = this._knowledgeHarvestScan();
+      results.push(...knowledgeResults);
+    }
+
+    // PR status scan (Phase 5.11) — check open PRs for CI pass/merge readiness
+    if (now - this.lastPrStatusScan >= this.opts.prStatusScanIntervalMs) {
+      this.lastPrStatusScan = now;
+      const prResults = this._prStatusScan();
+      results.push(...prResults);
     }
 
     return results;
@@ -233,9 +316,9 @@ class PmLoop {
   // ==========================================================================
 
   /**
-   * Route a classified event to the appropriate handler
+   * Route a classified event to the appropriate handler (supports async handlers)
    */
-  _handleEvent(event, classification) {
+  async _handleEvent(event, classification) {
     const handler = this._eventHandlers[classification.action];
     if (!handler) {
       this.logAction('unhandled_event', {
@@ -247,7 +330,7 @@ class PmLoop {
     }
 
     try {
-      const result = handler.call(this, event, classification);
+      const result = await handler.call(this, event, classification);
       this.actionCount++;
       return { action: classification.action, result, event_id: event.id };
     } catch (e) {
@@ -264,7 +347,7 @@ class PmLoop {
     /**
      * Agent finished a task — find and assign next work
      */
-    assign_next: function(event) {
+    assign_next: async function(event) {
       const agentSession = event.from;
       const taskId = event.payload?.data?.task_id;
 
@@ -278,8 +361,8 @@ class PmLoop {
         try { overnightMode.recordTaskCompletion(taskId, this.projectRoot); } catch (e) { /* best effort */ }
       }
 
-      // Find next ready task
-      const readyTask = this._getNextReadyTask();
+      // Find next ready task (async)
+      const readyTask = await this._getNextReadyTask();
       if (!readyTask) {
         this.logAction('no_ready_tasks', { after_completion: taskId });
         return { assigned: false, reason: 'no_ready_tasks' };
@@ -412,13 +495,13 @@ class PmLoop {
     /**
      * New agent joined — greet and optionally assign work
      */
-    greet_agent: function(event) {
+    greet_agent: async function(event) {
       const newSession = event.from;
 
       this.logAction('new_agent', { session: newSession });
 
-      // Check if there's ready work to assign
-      const readyTask = this._getNextReadyTask();
+      // Check if there's ready work to assign (async)
+      const readyTask = await this._getNextReadyTask();
       if (readyTask && !this.opts.dryRun) {
         // Phase 3.2: Auto-research before assignment
         let researchContext = null;
@@ -470,6 +553,38 @@ class PmLoop {
 
       if (this.opts.dryRun) {
         return { dry_run: true, would_review: taskId };
+      }
+
+      // Phase 8.3: Check peer review gate before PM review
+      try {
+        const reviewGate = require('./review-gate');
+        const gateCheck = reviewGate.checkReviewGate(taskId);
+
+        if (!gateCheck.passed) {
+          // Attempt auto-review
+          const diff = event.payload?.data?.diff || '';
+          const authorRole = event.payload?.data?.author_role || null;
+
+          if (diff && authorRole) {
+            const autoResult = reviewGate.autoReview(taskId, authorRole, diff);
+            if (autoResult.reviewed && !autoResult.approved) {
+              this.logAction('peer_review_rejected', {
+                task_id: taskId,
+                reviewer: autoResult.reviewer,
+                feedback: autoResult.feedback
+              });
+              orchestrator.rejectMerge(taskId, this.pmSessionId,
+                `Peer review rejected: ${autoResult.feedback || 'issues found'}`
+              );
+              return { reviewed: true, approved: false, peer_review: 'rejected' };
+            }
+          } else if (gateCheck.reason === 'peer review not completed') {
+            this.logAction('peer_review_pending', { task_id: taskId });
+            return { reviewed: false, approved: false, reason: 'peer review required but not completed' };
+          }
+        }
+      } catch (e) {
+        // Review gate module not available — proceed without
       }
 
       const review = orchestrator.reviewWork(taskId);
@@ -545,14 +660,14 @@ class PmLoop {
   }
 
   /**
-   * Task scan: find idle agents and assign ready tasks
+   * Task scan: find idle agents and assign ready tasks (async for non-blocking bd)
    */
-  _taskScan() {
+  async _taskScan() {
     const results = [];
 
     try {
-      // Get all ready tasks in one call
-      const readyTasks = this._getAllReadyTasks();
+      // Get all ready tasks in one call (async)
+      const readyTasks = await this._getAllReadyTasks();
       if (readyTasks.length === 0) return results;
 
       // Phase 3.2 + 3.3: Pre-process tasks (research + decomposition) before scheduling
@@ -1186,10 +1301,33 @@ class PmLoop {
   }
 
   /**
+   * Notification digest scan (Phase 5.9)
+   * Flushes batched info-level notifications when interval elapses.
+   */
+  _notificationDigestScan() {
+    const results = [];
+    try {
+      const { getRouter } = require('./notification-router');
+      const router = getRouter(this.projectRoot);
+      if (router.shouldFlushDigest()) {
+        router.flushDigest().then(({ sent }) => {
+          if (sent > 0) {
+            this.logAction('notification_digest_flushed', { sent });
+          }
+        }).catch(() => { /* best effort */ });
+        results.push({ action: 'notification_digest_flush', result: { triggered: true } });
+      }
+    } catch {
+      // notification-router not available — no-op
+    }
+    return results;
+  }
+
+  /**
    * Progress/artifact scan (Phase 4.7)
    * Detects tasks blocked on missing artifacts and aggregates progress.
    */
-  _progressScan() {
+  async _progressScan() {
     const results = [];
 
     try {
@@ -1215,8 +1353,8 @@ class PmLoop {
         }
       }
 
-      // Check ready tasks for artifact blocking
-      const readyTasks = this._getAllReadyTasks();
+      // Check ready tasks for artifact blocking (async)
+      const readyTasks = await this._getAllReadyTasks();
       for (const task of readyTasks) {
         const blocking = artifactRegistry.getBlockingArtifacts(task.id, this.projectRoot);
         if (blocking.length > 0) {
@@ -1421,16 +1559,11 @@ class PmLoop {
   // ==========================================================================
 
   /**
-   * Get all ready tasks from bd (using execFileSync for safety)
+   * Get all ready tasks from bd (async to avoid blocking event loop)
    */
-  _getAllReadyTasks() {
+  async _getAllReadyTasks() {
     try {
-      const output = execFileSync('bd', ['ready', '--json'], {
-        cwd: this.projectRoot,
-        encoding: 'utf8',
-        timeout: 5000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
+      const output = await bdAsync(['ready', '--json'], this.projectRoot);
       return JSON.parse(output);
     } catch (e) {
       return [];
@@ -1438,10 +1571,10 @@ class PmLoop {
   }
 
   /**
-   * Get next ready task from bd (convenience wrapper)
+   * Get next ready task from bd (convenience wrapper, async)
    */
-  _getNextReadyTask() {
-    const tasks = this._getAllReadyTasks();
+  async _getNextReadyTask() {
+    const tasks = await this._getAllReadyTasks();
     return tasks.length > 0 ? tasks[0] : null;
   }
 
@@ -1519,8 +1652,493 @@ class PmLoop {
       last_task_scan: this.lastTaskScan ? new Date(this.lastTaskScan).toISOString() : null,
       last_drift_scan: this.lastDriftScan ? new Date(this.lastDriftScan).toISOString() : null,
       last_pressure_scan: this.lastPressureScan ? new Date(this.lastPressureScan).toISOString() : null,
-      last_cost_scan: this.lastCostScan ? new Date(this.lastCostScan).toISOString() : null
+      last_cost_scan: this.lastCostScan ? new Date(this.lastCostScan).toISOString() : null,
+      last_telegram_scan: this.lastTelegramScan ? new Date(this.lastTelegramScan).toISOString() : null,
+      last_pool_scaling_scan: this.lastPoolScalingScan ? new Date(this.lastPoolScalingScan).toISOString() : null,
+      last_knowledge_harvest_scan: this.lastKnowledgeHarvestScan ? new Date(this.lastKnowledgeHarvestScan).toISOString() : null,
+      last_pr_status_scan: this.lastPrStatusScan ? new Date(this.lastPrStatusScan).toISOString() : null
     };
+  }
+
+  // ==========================================================================
+  // POOL SCALING SCAN (Phase 5.4)
+  // ==========================================================================
+
+  /**
+   * Pool scaling scan: evaluate dynamic pool sizing and record decisions.
+   * Uses pool-autoscaler to determine scale-up/scale-down/hold.
+   */
+  _poolScalingScan() {
+    const results = [];
+
+    try {
+      const poolAutoscaler = require('./pool-autoscaler');
+      const poolState = poolAutoscaler.getPoolState({
+        projectRoot: this.projectRoot,
+        pmSessionId: this.pmSessionId
+      });
+
+      // Track when pending tasks are seen (for cooldown calculation)
+      if (poolState.pending > 0) {
+        poolAutoscaler.markPendingTasksSeen(this.projectRoot);
+      }
+
+      const decision = poolAutoscaler.evaluateScaling(poolState, {
+        projectRoot: this.projectRoot
+      });
+
+      // Record all non-hold decisions and periodic hold checks
+      if (decision.action !== 'hold') {
+        poolAutoscaler.recordScalingDecision({
+          ...decision,
+          poolState
+        }, this.projectRoot);
+
+        this.logAction('pool_scaling', {
+          action: decision.action,
+          reason: decision.reason,
+          target_count: decision.targetCount,
+          pool: poolState
+        });
+
+        results.push({
+          action: 'pool_scaling',
+          scaling_action: decision.action,
+          reason: decision.reason,
+          target_count: decision.targetCount,
+          pool: poolState
+        });
+      }
+    } catch (e) {
+      this.logAction('pool_scaling_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  // ==========================================================================
+  // DRIFT PREVENTION SCAN (Phase 5.6)
+  // ==========================================================================
+
+  /**
+   * Drift prevention scan: aggregate drift prediction scores across all
+   * active agents. Escalate if any agent has persistent drift (>3
+   * consecutive redirections).
+   */
+  _driftPreventionScan() {
+    const results = [];
+
+    try {
+      const driftPredictor = require('./drift-predictor');
+      const driftPolicy = driftPredictor.loadDriftPolicy();
+      if (!driftPolicy.enabled) return results;
+
+      const activeSessions = session.getActiveSessions();
+      const escalation = require('./escalation');
+
+      for (const agent of activeSessions) {
+        const sid = agent.session_id;
+        if (!sid || sid === this.pmSessionId) continue;
+
+        const history = driftPredictor.getDriftHistory(sid);
+        if (history.stats.total === 0) continue;
+
+        const consecutiveRedirects = driftPredictor.getConsecutiveRedirects(sid);
+
+        // Escalate if persistent drift (>3 consecutive divergent predictions)
+        if (consecutiveRedirects > 3) {
+          const taskId = agent.claimed_task;
+
+          this.logAction('drift_prevention_persistent', {
+            agent: sid,
+            task_id: taskId,
+            consecutive_redirects: consecutiveRedirects,
+            stats: history.stats
+          });
+
+          // Trigger escalation for persistent drift
+          const esc = escalation.triggerEscalation(
+            escalation.EVENT_TYPES.DRIFT, sid, taskId,
+            {
+              consecutive_redirects: consecutiveRedirects,
+              drift_stats: history.stats,
+              source: 'drift_prevention_scan'
+            }
+          );
+
+          if (esc.action !== 'noop' && !this.opts.dryRun) {
+            escalation.executeAction(esc.action, {
+              eventType: escalation.EVENT_TYPES.DRIFT,
+              sessionId: sid,
+              taskId,
+              pmSessionId: this.pmSessionId,
+              context: {
+                consecutive_redirects: consecutiveRedirects,
+                source: 'drift_prevention'
+              },
+              dryRun: this.opts.dryRun
+            });
+          }
+
+          results.push({
+            action: 'drift_prevention_scan',
+            agent: sid,
+            consecutive_redirects: consecutiveRedirects,
+            escalation_level: esc.level,
+            stats: history.stats
+          });
+        }
+      }
+
+      // Log aggregate accuracy
+      const accuracy = driftPredictor.getAccuracy();
+      if (accuracy.total_sessions > 0) {
+        this.logAction('drift_prevention_accuracy', accuracy);
+      }
+    } catch (e) {
+      this.logAction('drift_prevention_scan_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  // ==========================================================================
+  // DECOMPOSITION LEARNING SCAN (Phase 5.5)
+  // ==========================================================================
+
+  /**
+   * Decomposition learning scan: check completed parent tasks and finalize
+   * their decomposition outcomes (record patterns, update sizing).
+   */
+  _decompositionLearningScan() {
+    const results = [];
+
+    try {
+      const decompositionOutcomes = require('./decomposition-outcomes');
+
+      // Scan outcomes dir for tasks with predictions
+      const outcomesDir = path.join(this.projectRoot, decompositionOutcomes.OUTCOMES_DIR);
+      if (!fs.existsSync(outcomesDir)) return results;
+
+      const files = fs.readdirSync(outcomesDir)
+        .filter(f => f.endsWith('.json') && f !== 'sizing.json');
+
+      for (const f of files) {
+        try {
+          const filePath = path.join(outcomesDir, f);
+          const state = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+          if (!state || !state.prediction || state.finalized) continue;
+
+          // Check if all predicted subtasks have outcomes
+          if (decompositionOutcomes.isDecompositionComplete(state.task_id)) {
+            // Finalize: record patterns and update sizing
+            decomposition.finalizeDecomposition(state.task_id);
+
+            // Mark as finalized
+            state.finalized = true;
+            state.finalized_at = new Date().toISOString();
+            const tmpPath = filePath + '.tmp.' + process.pid;
+            fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2));
+            fs.renameSync(tmpPath, filePath);
+
+            this.logAction('decomposition_finalized', {
+              task_id: state.task_id,
+              task_type: state.prediction.task_type,
+              predicted_count: state.prediction.subtask_count,
+              actual_count: Object.keys(state.outcomes || {}).length
+            });
+
+            results.push({
+              action: 'decomposition_learning',
+              task_id: state.task_id,
+              finalized: true
+            });
+          }
+        } catch (e) {
+          // Skip corrupted files
+        }
+      }
+    } catch (e) {
+      this.logAction('decomposition_learning_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  // ==========================================================================
+  // KNOWLEDGE HARVEST SCAN (Phase 5.8)
+  // ==========================================================================
+
+  /**
+   * Knowledge harvest scan: detect recently closed tasks and harvest
+   * their learnings into the global cross-project knowledge base.
+   */
+  _knowledgeHarvestScan() {
+    const results = [];
+
+    try {
+      const harvester = require('./knowledge-harvester');
+      const policy = harvester.loadCrossProjectPolicy(this.projectRoot);
+      if (!policy.enabled || !policy.publish) return results;
+
+      // Find recently completed sessions with closed tasks
+      const completedSessions = session.getAllSessionStates()
+        .filter(s => s.status === 'ended' && s.claimed_task);
+
+      // Track already-harvested tasks to avoid duplicates
+      const harvestedPath = path.join(this.projectRoot, '.claude/pilot/state/knowledge-harvested.json');
+      let harvested = {};
+      try {
+        if (fs.existsSync(harvestedPath)) {
+          harvested = JSON.parse(fs.readFileSync(harvestedPath, 'utf8'));
+        }
+      } catch (e) { /* start fresh */ }
+
+      for (const s of completedSessions) {
+        const taskId = s.claimed_task;
+        if (harvested[taskId]) continue;
+
+        try {
+          const result = harvester.harvestFromTask(taskId, this.projectRoot);
+
+          harvested[taskId] = {
+            harvested_at: new Date().toISOString(),
+            published: result.published.length,
+            skipped: result.skipped.length
+          };
+
+          if (result.published.length > 0) {
+            this.logAction('knowledge_harvested', {
+              task_id: taskId,
+              published: result.published.length,
+              types: result.published.map(p => p.type)
+            });
+
+            results.push({
+              action: 'knowledge_harvest',
+              task_id: taskId,
+              published: result.published.length
+            });
+          }
+        } catch (e) {
+          this.logAction('knowledge_harvest_error', {
+            task_id: taskId,
+            error: e.message
+          });
+        }
+      }
+
+      // Save harvested tracking
+      try {
+        const dir = path.dirname(harvestedPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const tmpPath = harvestedPath + '.tmp.' + process.pid;
+        fs.writeFileSync(tmpPath, JSON.stringify(harvested, null, 2));
+        fs.renameSync(tmpPath, harvestedPath);
+      } catch (e) { /* best effort */ }
+    } catch (e) {
+      this.logAction('knowledge_harvest_scan_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  // ==========================================================================
+  // PR STATUS SCAN (Phase 5.11)
+  // ==========================================================================
+
+  /**
+   * PR status scan: check open PRs for CI check results, trigger auto-merge
+   * or escalation as needed.
+   */
+  _prStatusScan() {
+    const results = [];
+
+    try {
+      const prAutomation = require('./pr-automation');
+      const policy = prAutomation.loadGitHubPolicy(this.projectRoot);
+      if (!policy.enabled) return results;
+
+      const prereqs = prAutomation.checkPrerequisites(this.projectRoot);
+      if (!prereqs.available) return results;
+
+      const openPRs = prAutomation.getOpenPRs(this.projectRoot);
+      if (openPRs.length === 0) return results;
+
+      for (const pr of openPRs) {
+        if (!pr.pr_number) continue;
+
+        try {
+          const status = prAutomation.checkPRStatus(pr.pr_number, {
+            projectRoot: this.projectRoot
+          });
+
+          // Update local state
+          prAutomation.updatePRStatus(pr.task_id, {
+            checks_passed: status.checks_passed,
+            mergeable: status.mergeable,
+            state: status.state
+          }, this.projectRoot);
+
+          // PR was merged externally or closed
+          if (status.state === 'MERGED' || status.state === 'CLOSED') {
+            prAutomation.updatePRStatus(pr.task_id, {
+              status: status.state.toLowerCase(),
+              merged: status.state === 'MERGED'
+            }, this.projectRoot);
+
+            this.logAction('pr_status_changed', {
+              task_id: pr.task_id,
+              pr_number: pr.pr_number,
+              state: status.state
+            });
+
+            results.push({
+              action: 'pr_' + status.state.toLowerCase(),
+              task_id: pr.task_id,
+              pr_number: pr.pr_number
+            });
+            continue;
+          }
+
+          // CI checks failed → escalate
+          if (status.checks_passed === false) {
+            this.logAction('pr_checks_failed', {
+              task_id: pr.task_id,
+              pr_number: pr.pr_number
+            });
+
+            try {
+              const escalation = require('./escalation');
+              escalation.triggerEscalation('pr_check_failure', {
+                task_id: pr.task_id,
+                pr_number: pr.pr_number,
+                message: 'CI checks failed on PR #' + pr.pr_number
+              }, this.projectRoot);
+            } catch (e) { /* escalation module may not exist */ }
+
+            results.push({
+              action: 'pr_checks_failed',
+              task_id: pr.task_id,
+              pr_number: pr.pr_number
+            });
+            continue;
+          }
+
+          // CI passed + auto-merge enabled → merge
+          if (status.checks_passed === true && policy.auto_merge && status.mergeable) {
+            const mergeResult = prAutomation.mergePR(pr.pr_number, {
+              projectRoot: this.projectRoot,
+              strategy: policy.merge_strategy,
+              deleteAfter: policy.delete_branch_after_merge
+            });
+
+            if (mergeResult.success) {
+              prAutomation.updatePRStatus(pr.task_id, {
+                status: 'merged',
+                merged: true,
+                merged_at: new Date().toISOString()
+              }, this.projectRoot);
+
+              this.logAction('pr_auto_merged', {
+                task_id: pr.task_id,
+                pr_number: pr.pr_number
+              });
+
+              results.push({
+                action: 'pr_auto_merged',
+                task_id: pr.task_id,
+                pr_number: pr.pr_number
+              });
+            } else {
+              this.logAction('pr_merge_failed', {
+                task_id: pr.task_id,
+                pr_number: pr.pr_number,
+                error: mergeResult.error
+              });
+
+              try {
+                const escalation = require('./escalation');
+                escalation.triggerEscalation('pr_merge_conflict', {
+                  task_id: pr.task_id,
+                  pr_number: pr.pr_number,
+                  message: 'PR merge failed: ' + (mergeResult.error || 'unknown')
+                }, this.projectRoot);
+              } catch (e) { /* escalation module may not exist */ }
+
+              results.push({
+                action: 'pr_merge_failed',
+                task_id: pr.task_id,
+                pr_number: pr.pr_number
+              });
+            }
+          }
+        } catch (e) {
+          this.logAction('pr_status_check_error', {
+            task_id: pr.task_id,
+            error: e.message
+          });
+        }
+      }
+    } catch (e) {
+      this.logAction('pr_status_scan_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  // ==========================================================================
+  // TELEGRAM SCAN (Phase 6.6)
+  // ==========================================================================
+
+  /**
+   * Telegram inbox scan: read pending intents from Telegram bridge inbox,
+   * dispatch to handlers, write responses to outbox.
+   *
+   * Lazy-initializes TelegramConversations on first call (only if telegram
+   * is enabled in policy).
+   */
+  _telegramScan() {
+    const results = [];
+
+    try {
+      // Check if telegram is enabled in policy
+      const { loadPolicy } = require('./policy');
+      const policy = loadPolicy(this.projectRoot);
+      if (!policy.telegram || !policy.telegram.enabled) return results;
+
+      // Lazy-initialize
+      if (!this._telegramConversations) {
+        const { TelegramConversations } = require('./telegram-conversations');
+        this._telegramConversations = new TelegramConversations(this.projectRoot, {
+          policy: policy.telegram,
+          pmSessionId: this.pmSessionId,
+        });
+      }
+
+      // Process pending messages
+      const telegramResults = this._telegramConversations.processPendingMessages();
+      for (const r of telegramResults) {
+        this.logAction('telegram_intent', {
+          action: r.action,
+          chatId: r.chatId,
+          result: r.result || r.taskId,
+        });
+        results.push(r);
+      }
+    } catch (e) {
+      this.logAction('telegram_scan_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  /**
+   * Get the TelegramConversations instance (for external registration).
+   * @returns {TelegramConversations|null}
+   */
+  get telegramConversations() {
+    return this._telegramConversations;
   }
 }
 

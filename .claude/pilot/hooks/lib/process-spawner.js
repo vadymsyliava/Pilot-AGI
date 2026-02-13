@@ -53,7 +53,8 @@ const MAX_PROMPT_LENGTH = 16000; // Keep prompts under 16KB
 // ============================================================================
 
 /**
- * Spawn a Claude agent process with full context injection.
+ * Spawn an agent process with full context injection.
+ * Phase 6.10: Supports multi-adapter spawning (Claude, Aider, OpenCode, Ollama, Codex).
  *
  * @param {object} task - Task object { id, title, description, labels }
  * @param {object} options
@@ -62,6 +63,8 @@ const MAX_PROMPT_LENGTH = 16000; // Keep prompts under 16KB
  * @param {number} [options.budgetUsd] - Max budget in USD
  * @param {boolean} [options.dryRun] - If true, don't actually spawn
  * @param {object} [options.logger] - Logger instance
+ * @param {object} [options.adapter] - AgentAdapter instance (Phase 6.10: multi-LLM)
+ * @param {string} [options.modelId] - Model ID for adapter (Phase 6.10)
  * @returns {{ success: boolean, pid?: number, worktree?: object, isResume?: boolean, error?: string }}
  */
 function spawnAgent(task, options = {}) {
@@ -70,7 +73,9 @@ function spawnAgent(task, options = {}) {
     agentType,
     budgetUsd,
     dryRun,
-    logger
+    logger,
+    adapter,
+    modelId
   } = options;
 
   const log = logger || { info() {}, warn() {}, error() {}, debug() {} };
@@ -125,25 +130,63 @@ function spawnAgent(task, options = {}) {
     };
   }
 
-  // 6. Build spawn args
-  const args = ['-p', truncatedPrompt, '--permission-mode', 'acceptEdits'];
+  // 6. Build spawn args (adapter-aware — Phase 6.10)
+  let spawnBinary = 'claude';
+  let args;
 
-  // Agent type
-  if (agentType) {
-    args.push('--agent', agentType);
-    // Model from skill registry
+  if (adapter && typeof adapter.buildCommand === 'function') {
+    // Phase 6.10: Multi-LLM — use adapter to build spawn command
+    // adapter.spawn() returns { pid, sessionId, process } but we need the raw spawn
+    // so we parse the buildCommand() output
     try {
-      const registry = getOrchestrator().loadSkillRegistry();
-      const roleConfig = registry?.roles?.[agentType];
-      if (roleConfig?.model) {
-        args.push('--model', roleConfig.model);
-      }
-    } catch (e) { /* use default model */ }
-  }
+      const commandStr = adapter.buildCommand({
+        prompt: truncatedPrompt,
+        model: modelId,
+        cwd: (worktreeInfo && worktreeInfo.path) ? worktreeInfo.path : projectRoot,
+        contextFile: contextFilePath,
+        maxTokens: budgetUsd ? Math.round(budgetUsd * 100000) : undefined,
+        env: { PILOT_CONTEXT_FILE: contextFilePath }
+      });
 
-  // Budget limit
-  if (budgetUsd) {
-    args.push('--max-budget-usd', String(budgetUsd));
+      // Parse the command string into binary + args
+      // Commands look like: 'aider --message "..." --model gpt-4.5'
+      // or: 'claude -p "..." --model opus-4-6'
+      const parsed = _parseCommand(commandStr);
+      spawnBinary = parsed.binary;
+      args = parsed.args;
+
+      log.info('Using adapter for spawn', {
+        adapter: adapter.name,
+        binary: spawnBinary,
+        model: modelId || 'default'
+      });
+    } catch (e) {
+      log.warn('Adapter buildCommand failed, falling back to Claude', {
+        adapter: adapter.name, error: e.message
+      });
+      args = ['-p', truncatedPrompt, '--permission-mode', 'acceptEdits'];
+    }
+  } else {
+    // Default: Claude Code direct spawn
+    args = ['-p', truncatedPrompt, '--permission-mode', 'acceptEdits'];
+
+    // Agent type
+    if (agentType) {
+      args.push('--agent', agentType);
+      // Model from skill registry
+      try {
+        const registry = getOrchestrator().loadSkillRegistry();
+        const roleConfig = registry?.roles?.[agentType];
+        if (roleConfig?.model) {
+          args.push('--model', roleConfig.model);
+        }
+      } catch (e) { /* use default model */ }
+    }
+
+    // Budget limit
+    if (budgetUsd) {
+      args.push('--max-budget-usd', String(budgetUsd));
+    }
   }
 
   // 7. Build environment
@@ -151,9 +194,14 @@ function spawnAgent(task, options = {}) {
     ...process.env,
     PILOT_DAEMON_SPAWNED: '1',
     PILOT_TASK_HINT: task.id,
+    PILOT_TASK_ID: task.id,
     PILOT_CONTEXT_FILE: contextFilePath,
     PILOT_IS_RESUME: resumeInfo.isResume ? '1' : '0'
   };
+
+  // Phase 6.10: Pass model and adapter info
+  if (modelId) env.PILOT_MODEL = modelId;
+  if (adapter) env.PILOT_ADAPTER = adapter.name;
 
   if (resumeInfo.previousSessionId) {
     env.PILOT_RESUME_SESSION = resumeInfo.previousSessionId;
@@ -189,7 +237,7 @@ function spawnAgent(task, options = {}) {
 
   // 9. Spawn the process
   try {
-    const child = spawn('claude', args, {
+    const child = spawn(spawnBinary, args, {
       cwd,
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -234,6 +282,53 @@ function spawnAgent(task, options = {}) {
     });
     return { success: false, error: e.message };
   }
+}
+
+// ============================================================================
+// COMMAND PARSING (Phase 6.10)
+// ============================================================================
+
+/**
+ * Parse a shell command string into binary + args.
+ * Handles simple quoting but not full shell expansion.
+ *
+ * @param {string} commandStr - e.g., 'aider --message "hello world" --model gpt-4.5'
+ * @returns {{ binary: string, args: string[] }}
+ */
+function _parseCommand(commandStr) {
+  const parts = [];
+  let current = '';
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+
+  for (let i = 0; i < commandStr.length; i++) {
+    const ch = commandStr[i];
+
+    if (ch === "'" && !inDoubleQuote) {
+      inSingleQuote = !inSingleQuote;
+    } else if (ch === '"' && !inSingleQuote) {
+      inDoubleQuote = !inDoubleQuote;
+    } else if (ch === ' ' && !inSingleQuote && !inDoubleQuote) {
+      if (current.length > 0) {
+        parts.push(current);
+        current = '';
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (current.length > 0) parts.push(current);
+
+  // Filter out env var assignments at the start (e.g., 'PILOT_CONTEXT_FILE=...')
+  let binaryIdx = 0;
+  while (binaryIdx < parts.length && parts[binaryIdx].includes('=')) {
+    binaryIdx++;
+  }
+
+  return {
+    binary: parts[binaryIdx] || 'claude',
+    args: parts.slice(binaryIdx + 1)
+  };
 }
 
 // ============================================================================
@@ -365,11 +460,50 @@ function cleanupContextFile(taskId, projectRoot) {
 }
 
 // ============================================================================
+// EXECUTION PROVIDER INTEGRATION (Phase 5.10)
+// ============================================================================
+
+let _executionProvider = null;
+function getExecutionProvider() {
+  if (!_executionProvider) {
+    try { _executionProvider = require('./execution-provider'); } catch (e) { _executionProvider = null; }
+  }
+  return _executionProvider;
+}
+
+/**
+ * Spawn an agent via the configured execution provider.
+ * Falls back to direct local spawn if provider system is unavailable.
+ *
+ * @param {object} task - Task object
+ * @param {object} options - Same as spawnAgent options
+ * @returns {{ success: boolean, processId?: string, provider?: string, pid?: number, error?: string }}
+ */
+async function spawnViaProvider(task, options = {}) {
+  const ep = getExecutionProvider();
+  if (!ep) {
+    // Fallback to direct local spawn
+    return spawnAgent(task, options);
+  }
+
+  const providerName = ep.getActiveProviderName(options.projectRoot);
+
+  // If local provider, just use spawnAgent directly for efficiency
+  if (providerName === 'local') {
+    return spawnAgent(task, options);
+  }
+
+  // Use execution provider for remote/docker execution
+  return ep.spawnViaProvider(task, options);
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
 module.exports = {
   spawnAgent,
+  spawnViaProvider,
   cleanupContextFile,
   CONTEXT_FILE_DIR,
   MAX_PROMPT_LENGTH,

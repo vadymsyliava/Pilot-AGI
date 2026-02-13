@@ -215,10 +215,62 @@ Rules:
  * @returns {{ suggestion: string, strategy: string, confidence: string, decision_type: string }}
  */
 function resolveConflict(conflictInfo, opts = {}) {
+  // Phase 5.2: Try semantic resolution first
+  try {
+    const resolver = require('./merge-conflict-resolver');
+    const registry = require('./conflict-parser-registry').getRegistry();
+
+    if (conflictInfo.file && registry.isSupported(conflictInfo.file)) {
+      const oursIntent = resolver.parseCommitIntent(conflictInfo.oursCommitMsg || '');
+      const theirsIntent = resolver.parseCommitIntent(conflictInfo.theirsCommitMsg || '');
+
+      // Build a conflict region from the provided ours/theirs
+      const conflict = {
+        ours: conflictInfo.ours || '',
+        theirs: conflictInfo.theirs || '',
+        base: conflictInfo.base || undefined
+      };
+
+      const classification = resolver.classifyConflict(conflict, conflictInfo.file);
+      const resolution = resolver.resolveConflictRegion(
+        conflict, classification, { oursIntent, theirsIntent }, conflictInfo.file
+      );
+
+      if (resolution.resolved !== null && resolution.confidence >= 0.60) {
+        const strategyMap = {
+          combine: 'merge', interleave: 'merge',
+          prefer_ours: 'ours', prefer_theirs: 'theirs',
+          escalate: 'manual'
+        };
+        return {
+          strategy: strategyMap[resolution.strategy] || 'merge',
+          suggestion: `Semantic resolution (${classification.type}): ${resolution.strategy}`,
+          confidence: resolution.confidence >= 0.85 ? 'high' : 'medium',
+          conflict_type: classification.type,
+          resolution_strategy: resolution.strategy,
+          semantic_confidence: resolution.confidence,
+          resolved_content: resolution.resolved,
+          decision_type: 'semantic'
+        };
+      }
+    }
+  } catch (e) {
+    // Semantic resolution not available — fall through to AI
+  }
+
+  // Fallback: AI-assisted resolution with enhanced context
+  const planContext = conflictInfo.taskId ? (() => {
+    try {
+      const resolver = require('./merge-conflict-resolver');
+      const plan = resolver.loadPlanContext(conflictInfo.taskId, opts.projectRoot);
+      return plan ? `\nPlan context: ${JSON.stringify(plan).substring(0, 500)}` : '';
+    } catch (e) { return ''; }
+  })() : '';
+
   const prompt = `You are resolving a git merge conflict. Analyze the conflict and suggest a resolution. Respond with ONLY valid JSON.
 
 File: ${conflictInfo.file || 'unknown'}
-Task: ${conflictInfo.taskId || 'unknown'}
+Task: ${conflictInfo.taskId || 'unknown'}${planContext}
 
 Our changes:
 \`\`\`
@@ -229,7 +281,7 @@ Their changes:
 \`\`\`
 ${(conflictInfo.theirs || '').substring(0, 2000)}
 \`\`\`
-
+${conflictInfo.base ? `\nBase (original):\n\`\`\`\n${conflictInfo.base.substring(0, 1000)}\n\`\`\`\n` : ''}
 Respond with this exact JSON format:
 {
   "strategy": "ours|theirs|merge|manual",

@@ -1,0 +1,15 @@
+{
+  "task_id": "Pilot AGI-xqn",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 24,
+  "sessions": {
+    "S-mlj1rh07-0ba4": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 24
+    }
+  },
+  "created_at": "2026-02-12T07:20:49.554Z",
+  "updated_at": "2026-02-12T07:28:27.939Z"
+}

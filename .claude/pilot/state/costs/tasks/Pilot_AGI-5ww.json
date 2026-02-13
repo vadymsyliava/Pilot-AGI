@@ -1,0 +1,15 @@
+{
+  "task_id": "Pilot AGI-5ww",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 36,
+  "sessions": {
+    "S-mlj3x1pb-ca6b": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 36
+    }
+  },
+  "created_at": "2026-02-12T08:02:30.092Z",
+  "updated_at": "2026-02-12T08:10:37.004Z"
+}

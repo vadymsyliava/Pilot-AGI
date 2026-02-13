@@ -1,0 +1,15 @@
+{
+  "task_id": "Pilot AGI-tx6",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 8,
+  "sessions": {
+    "S-mlhilz84-e099": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 8
+    }
+  },
+  "created_at": "2026-02-11T05:19:44.109Z",
+  "updated_at": "2026-02-11T05:21:16.250Z"
+}

@@ -1,0 +1,20 @@
+{
+  "task_id": "Pilot AGI-1nv",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 58,
+  "sessions": {
+    "S-mlj5seti-67a3": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 44
+    },
+    "S-mlj5e8hj-51cf": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 14
+    }
+  },
+  "created_at": "2026-02-12T07:54:35.528Z",
+  "updated_at": "2026-02-12T08:07:17.944Z"
+}

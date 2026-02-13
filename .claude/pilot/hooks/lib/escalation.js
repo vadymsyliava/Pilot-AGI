@@ -383,6 +383,15 @@ function _actionWarning(sessionId, taskId, eventType, context, pmSessionId, dryR
     context
   });
 
+  // Send external notification (Phase 5.9) — info level, will be batched
+  _sendExternalNotification({
+    title: `Warning: ${_humanReadableEvent(eventType)}`,
+    body: `Detected on task ${taskId || 'unknown'} by agent ${sessionId}.`,
+    severity: 'info',
+    event: 'escalation_warning',
+    data: { event_type: eventType, task_id: taskId, agent: sessionId }
+  });
+
   return { executed: true, action: 'warning', sessionId, taskId };
 }
 
@@ -498,6 +507,15 @@ function _actionHuman(sessionId, taskId, eventType, context, pmSessionId, dryRun
     severity: 'human',
     message: `HUMAN REVIEW REQUIRED: ${_humanReadableEvent(eventType)} on task ${taskId || 'unknown'} by agent ${sessionId}. All automated escalation levels exhausted.`,
     context
+  });
+
+  // Send external notification (Phase 5.9)
+  _sendExternalNotification({
+    title: `Human Review Required: ${_humanReadableEvent(eventType)}`,
+    body: `Task ${taskId || 'unknown'} by agent ${sessionId}. All automated levels exhausted.`,
+    severity: 'critical',
+    event: 'escalation_human',
+    data: { event_type: eventType, task_id: taskId, agent: sessionId }
   });
 
   return { executed: true, action: 'human', sessionId, taskId };
@@ -664,6 +682,19 @@ function getEscalationHistory(eventKey) {
 // ============================================================================
 // HELPERS
 // ============================================================================
+
+/**
+ * Send an external notification via the notification router (Phase 5.9).
+ * Fire-and-forget — never blocks escalation flow.
+ */
+function _sendExternalNotification(notification) {
+  try {
+    const { notify } = require('./notification-router');
+    notify(notification).catch(() => { /* best effort */ });
+  } catch {
+    // notification-router not available — no-op
+  }
+}
 
 function _humanReadableEvent(eventType) {
   const names = {

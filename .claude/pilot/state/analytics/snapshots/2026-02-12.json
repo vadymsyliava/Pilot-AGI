@@ -1,0 +1,21 @@
+{
+  "date": "2026-02-12",
+  "generated_at": "2026-02-12T08:51:59.243Z",
+  "tasks_assigned": 0,
+  "tasks_completed": 0,
+  "tasks_failed": 0,
+  "tasks_reassigned": 0,
+  "avg_cycle_time_ms": null,
+  "min_cycle_time_ms": null,
+  "max_cycle_time_ms": null,
+  "total_tokens": 0,
+  "cost_usd": 0,
+  "tokens_per_completed_task": null,
+  "success_rate": null,
+  "rework_rate": 0,
+  "complexity_accuracy": 0,
+  "queue_depth": 9,
+  "blocking_task_count": 0,
+  "bottleneck_assessment": "degraded",
+  "agents": []
+}

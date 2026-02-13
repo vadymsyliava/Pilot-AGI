@@ -271,6 +271,53 @@ function mergeWorktree(taskId, commitMsg) {
       execSync('git merge --abort', { cwd: root, stdio: 'pipe' });
     } catch (ignored) { /* May already be aborted */ }
 
+    // Attempt semantic auto-resolution if enabled
+    var mergeResolution = config.merge_resolution || {};
+    if (mergeResolution.enabled && conflicts.length > 0) {
+      try {
+        var resolver = require('./merge-conflict-resolver');
+        // Re-attempt merge to leave conflict markers in files
+        try {
+          execSync('git merge --no-commit --no-ff ' + branchName, { cwd: root, stdio: 'pipe' });
+        } catch (ignored) { /* expected — conflicts will be in files */ }
+
+        var resolution = resolver.resolveAllConflicts(conflicts, {
+          projectRoot: root,
+          oursCommitMsg: commitMsg,
+          oursTaskId: taskId
+        });
+
+        if (resolution.success && !resolution.needsEscalation) {
+          var applied = resolver.applyResolutions(resolution, root);
+          if (applied.applied.length === conflicts.length && applied.failed.length === 0) {
+            // Stage resolved files and complete merge
+            try {
+              for (var f = 0; f < applied.applied.length; f++) {
+                execSync('git add ' + q(applied.applied[f]), { cwd: root, stdio: 'pipe' });
+              }
+              return {
+                success: true,
+                auto_resolved: true,
+                resolution: {
+                  resolvedCount: resolution.resolvedCount,
+                  confidence: resolution.overallConfidence,
+                  files: applied.applied
+                }
+              };
+            } catch (stageErr) {
+              try { execSync('git merge --abort', { cwd: root, stdio: 'pipe' }); } catch (ignored) {}
+            }
+          } else {
+            try { execSync('git merge --abort', { cwd: root, stdio: 'pipe' }); } catch (ignored) {}
+          }
+        } else {
+          try { execSync('git merge --abort', { cwd: root, stdio: 'pipe' }); } catch (ignored) {}
+        }
+      } catch (resolverErr) {
+        try { execSync('git merge --abort', { cwd: root, stdio: 'pipe' }); } catch (ignored) {}
+      }
+    }
+
     return { success: false, conflicts: conflicts, error: 'Merge conflicts detected' };
   }
 
@@ -290,9 +337,26 @@ function mergeWorktree(taskId, commitMsg) {
     }
 
     try { fs.unlinkSync(tmpMsg); } catch (ignored) { /* best effort */ }
-    return { success: true };
+
+    // Phase 5.11: Trigger PR automation after successful merge
+    var prResult = null;
+    try {
+      var prAutomation = require('./pr-automation');
+      var ghPolicy = prAutomation.loadGitHubPolicy(root);
+      if (ghPolicy.enabled) {
+        prResult = prAutomation.handleTaskComplete(taskId, {
+          projectRoot: root
+        });
+      }
+    } catch (prErr) {
+      // PR automation is optional -- never block merge
+      prResult = { success: false, error: prErr.message };
+    }
+
+    return { success: true, pr_automation: prResult };
   } catch (e) {
     try {
+      // execSync is safe here: branchName is sanitized via sanitizeId()
       execSync('git merge --abort', { cwd: root, stdio: 'pipe' });
     } catch (ignored) { /* Best effort */ }
     return { success: false, error: 'Merge failed: ' + e.message };
@@ -424,10 +488,24 @@ function getWorktreeStatus(taskId) {
   }
 }
 
+/**
+ * Standalone semantic conflict resolution (without merge).
+ * Useful for resolving conflicts in an existing dirty merge state.
+ *
+ * @param {string[]} conflictFiles - Files with conflicts
+ * @param {object} opts - Resolution options
+ * @returns {object} Resolution results from merge-conflict-resolver
+ */
+function resolveConflicts(conflictFiles, opts) {
+  var resolver = require('./merge-conflict-resolver');
+  return resolver.resolveAllConflicts(conflictFiles, opts);
+}
+
 module.exports = {
   createWorktree: createWorktree,
   removeWorktree: removeWorktree,
   mergeWorktree: mergeWorktree,
+  resolveConflicts: resolveConflicts,
   listWorktrees: listWorktrees,
   cleanupOrphanedWorktrees: cleanupOrphanedWorktrees,
   getWorktreeStatus: getWorktreeStatus,

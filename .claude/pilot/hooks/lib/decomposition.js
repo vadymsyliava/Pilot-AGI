@@ -12,6 +12,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const pmResearch = require('./pm-research');
 const memory = require('./memory');
+const decompositionOutcomes = require('./decomposition-outcomes');
+const decompositionPatterns = require('./decomposition-patterns');
 
 // ============================================================================
 // CONSTANTS
@@ -858,11 +860,33 @@ function getDecomposition(taskId) {
 // ============================================================================
 
 /**
+ * Load feedback loop configuration from policy.yaml.
+ *
+ * @returns {{ enabled: boolean, min_confidence: number, pattern_match_threshold: number, max_patterns_per_type: number }}
+ */
+function loadFeedbackLoopPolicy() {
+  try {
+    const { loadPolicy } = require('./policy');
+    const policy = loadPolicy();
+    const fl = policy.decomposition?.feedback_loop || {};
+    return {
+      enabled: fl.enabled !== false,
+      min_confidence: fl.min_confidence || 0.7,
+      pattern_match_threshold: fl.pattern_match_threshold || 0.5,
+      max_patterns_per_type: fl.max_patterns_per_type || 50
+    };
+  } catch (e) {
+    return { enabled: true, min_confidence: 0.7, pattern_match_threshold: 0.5, max_patterns_per_type: 50 };
+  }
+}
+
+/**
  * Decompose a task into subtasks with dependency DAG.
+ * Enhanced with pattern library feedback loop (Phase 5.5).
  *
  * @param {object} task - { id, title, description, labels }
  * @param {string} projectRoot - absolute path to project root
- * @returns {{ decomposed: boolean, subtasks: object[], dag: object, domain: object, reason: string }}
+ * @returns {{ decomposed: boolean, subtasks: object[], dag: object, domain: object, reason: string, pattern_used: object|null }}
  */
 function decomposeTask(task, projectRoot) {
   // 1. Check if decomposition is needed
@@ -873,14 +897,58 @@ function decomposeTask(task, projectRoot) {
       subtasks: [],
       dag: null,
       domain: null,
-      reason: decision.reason
+      reason: decision.reason,
+      pattern_used: null
     };
   }
 
   // 2. Classify domain
   const domainInfo = classifyTaskDomain(task);
 
-  // 3. Get research context
+  // 3. Check pattern library for matching template (Phase 5.5)
+  const feedbackPolicy = loadFeedbackLoopPolicy();
+  let patternUsed = null;
+  let subtasksFromPattern = null;
+
+  if (feedbackPolicy.enabled) {
+    try {
+      const taskText = `${task.title || ''} ${task.description || ''}`;
+      const match = decompositionPatterns.findPattern(taskText, {
+        min_success_rate: feedbackPolicy.min_confidence,
+        min_match_score: feedbackPolicy.pattern_match_threshold
+      });
+
+      if (match && match.pattern && match.pattern.template) {
+        // Apply adaptive sizing multiplier
+        const taskType = decompositionPatterns.classifyTaskType(taskText);
+        const sizing = decompositionOutcomes.getAdaptiveSizing(taskType);
+
+        patternUsed = {
+          source_task_id: match.pattern.source_task_id,
+          match_score: match.match_score,
+          success_rate: match.pattern.success_rate,
+          sizing_multiplier: sizing.multiplier
+        };
+
+        // Generate subtasks from pattern template
+        subtasksFromPattern = match.pattern.template.map((tmpl, idx) => ({
+          id: `st-${String(idx + 1).padStart(3, '0')}`,
+          title: tmpl.title_template,
+          description: `From pattern: ${match.pattern.source_task_id}`,
+          agent: tmpl.agent,
+          priority: tmpl.priority,
+          inputs: [],
+          outputs: [],
+          depends_on: tmpl.depends_on_indices || [],
+          wave: tmpl.wave
+        }));
+      }
+    } catch (e) {
+      // Pattern library not available — fall back to standard decomposition
+    }
+  }
+
+  // 4. Get research context
   let research = null;
   try {
     research = pmResearch.buildResearchContext(task.id);
@@ -888,24 +956,44 @@ function decomposeTask(task, projectRoot) {
     // Research may not be available — continue without it
   }
 
-  // 4. Generate subtasks
-  const subtasks = generateSubtasks(task, domainInfo, research);
+  // 5. Generate subtasks (from pattern or standard generation)
+  const subtasks = subtasksFromPattern || generateSubtasks(task, domainInfo, research);
 
-  // 5. Build dependency DAG
+  // 6. Build dependency DAG
   const dag = buildDependencyDAG(subtasks);
 
   if (dag.hasCycle) {
-    // This shouldn't happen with our generator, but be safe
     return {
       decomposed: false,
       subtasks: [],
       dag,
       domain: domainInfo,
-      reason: 'Cycle detected in dependency graph — decomposition aborted'
+      reason: 'Cycle detected in dependency graph — decomposition aborted',
+      pattern_used: null
     };
   }
 
-  // 6. Publish to shared memory
+  // 7. Record prediction for outcome tracking (Phase 5.5)
+  if (feedbackPolicy.enabled) {
+    try {
+      const taskText = `${task.title || ''} ${task.description || ''}`;
+      decompositionOutcomes.recordPrediction(task.id, {
+        subtask_count: subtasks.length,
+        subtask_ids: subtasks.map(s => s.id),
+        complexity_per_subtask: subtasks.reduce((acc, s) => {
+          acc[s.id] = s.priority === 'high' ? 'L' : s.priority === 'low' ? 'S' : 'M';
+          return acc;
+        }, {}),
+        task_type: decompositionPatterns.classifyTaskType(taskText),
+        domain: domainInfo.domain,
+        template_used: patternUsed?.source_task_id || null
+      });
+    } catch (e) {
+      // Best effort — don't break decomposition
+    }
+  }
+
+  // 8. Publish to shared memory
   publishDecomposition(task.id, subtasks, dag);
 
   return {
@@ -913,8 +1001,62 @@ function decomposeTask(task, projectRoot) {
     subtasks,
     dag,
     domain: domainInfo,
-    reason: decision.reason
+    reason: decision.reason,
+    pattern_used: patternUsed
   };
+}
+
+/**
+ * Finalize a decomposition: calculate outcomes, update patterns, update sizing.
+ * Called when all subtasks of a parent task are complete.
+ *
+ * @param {string} taskId - Parent task ID
+ */
+function finalizeDecomposition(taskId) {
+  const feedbackPolicy = loadFeedbackLoopPolicy();
+  if (!feedbackPolicy.enabled) return;
+
+  try {
+    const outcome = decompositionOutcomes.getOutcome(taskId);
+    if (!outcome || !outcome.prediction) return;
+
+    const accuracy = decompositionOutcomes.getAccuracy(taskId);
+    if (!accuracy) return;
+
+    const decomp = getDecomposition(taskId);
+    const subtasks = decomp?.subtasks || [];
+
+    // Record pattern from successful decomposition (accuracy > 0.6)
+    if (accuracy.overall_accuracy >= 0.6) {
+      decompositionPatterns.recordPattern(
+        taskId,
+        {
+          task_title: taskId,
+          task_description: '',
+          task_type: outcome.prediction.task_type,
+          subtasks,
+          domain: outcome.prediction.domain
+        },
+        {
+          success: true,
+          overall_accuracy: accuracy.overall_accuracy,
+          stuck_count: accuracy.stuck_count,
+          rework_count: accuracy.rework_count
+        },
+        feedbackPolicy.max_patterns_per_type
+      );
+    }
+
+    // Update adaptive sizing
+    const actualCount = Object.keys(outcome.outcomes || {}).length;
+    decompositionOutcomes.updateAdaptiveSizing(
+      outcome.prediction.task_type,
+      outcome.prediction.subtask_count,
+      actualCount
+    );
+  } catch (e) {
+    // Best effort — don't crash PM loop
+  }
 }
 
 // ============================================================================
@@ -1044,6 +1186,10 @@ module.exports = {
 
   // Main entry
   decomposeTask,
+
+  // Feedback loop (Phase 5.5)
+  finalizeDecomposition,
+  loadFeedbackLoopPolicy,
 
   // Shared memory
   publishDecomposition,
