@@ -115,6 +115,112 @@ function toRelativePath(filePath) {
 }
 
 // =============================================================================
+// DRIFT PREVENTION (Phase 5.6)
+// =============================================================================
+
+/**
+ * Check drift prevention guardrails before tool execution.
+ * Returns { allowed: true } or { allowed: false, reason: string }.
+ *
+ * Only checks tools that modify state (non-excluded tools).
+ * Requires an active session with an approved plan and current step.
+ */
+function checkDriftPrevention(toolName, toolInput, policy) {
+  const dpConfig = policy?.drift_prevention;
+  if (!dpConfig || dpConfig.enabled === false) return { allowed: true };
+
+  // Check if tool is excluded from drift checking
+  const excludedTools = dpConfig.excluded_tools || [];
+  if (excludedTools.includes(toolName)) return { allowed: true };
+
+  // Need a session to check drift
+  const sessionId = process.env.PILOT_SESSION_ID || null;
+  if (!sessionId) return { allowed: true };
+
+  // Need an active task with approved plan
+  const activeTask = getActiveTask();
+  if (!activeTask) return { allowed: true };
+
+  // Load the approved plan
+  const approvalFile = path.join(process.cwd(), APPROVED_PLANS_DIR, `${activeTask.id}.json`);
+  let approval;
+  try {
+    if (!fs.existsSync(approvalFile)) return { allowed: true };
+    approval = JSON.parse(fs.readFileSync(approvalFile, 'utf8'));
+  } catch (e) {
+    return { allowed: true };
+  }
+
+  // Get plan steps — need at least one step
+  const planSteps = approval.plan?.steps || approval.steps || [];
+  if (planSteps.length === 0) return { allowed: true };
+
+  // Determine current step index from session state
+  let currentStepIndex = 0;
+  try {
+    const sessionState = session.getSessionState ? session.getSessionState(sessionId) : null;
+    if (sessionState && typeof sessionState.current_step === 'number') {
+      currentStepIndex = sessionState.current_step;
+    }
+  } catch (e) { /* use step 0 */ }
+
+  // Clamp to valid range
+  if (currentStepIndex >= planSteps.length) return { allowed: true };
+
+  const currentStep = planSteps[currentStepIndex];
+
+  // Run drift prediction
+  let driftPredictor, guardrails;
+  try {
+    driftPredictor = require('./lib/drift-predictor');
+    guardrails = require('./lib/drift-guardrails');
+  } catch (e) {
+    return { allowed: true }; // Modules not available — fail open
+  }
+
+  const prediction = driftPredictor.predictDrift(
+    currentStep,
+    { tool_name: toolName, tool_input: toolInput },
+    dpConfig.thresholds
+  );
+
+  // Record prediction
+  driftPredictor.recordPrediction(sessionId, prediction, {
+    tool_name: toolName,
+    plan_step_index: currentStepIndex
+  });
+
+  // Evaluate guardrail
+  const guardrailResult = guardrails.evaluateGuardrail(prediction, {
+    sessionId,
+    planStep: currentStep,
+    planStepIndex: currentStepIndex,
+    toolName,
+    toolInput,
+    policy: dpConfig.guardrails || {}
+  });
+
+  if (guardrailResult.action === 'redirect') {
+    return {
+      allowed: false,
+      reason: guardrailResult.message || 'Action blocked by drift prevention guardrail.'
+    };
+  }
+
+  if (guardrailResult.action === 'refresh') {
+    // For refresh, we deny but provide helpful context in the reason
+    return {
+      allowed: false,
+      reason: guardrailResult.refreshPrompt || guardrailResult.message ||
+        'Context refresh triggered. Please review your current plan step.'
+    };
+  }
+
+  // 'allow' or 'warn' — let it through
+  return { allowed: true };
+}
+
+// =============================================================================
 // AUTO-APPROVAL (Autonomy Mode)
 // =============================================================================
 
@@ -310,7 +416,38 @@ async function main() {
   const toolName = hookInput.tool_name || '';
   const toolInput = hookInput.tool_input || {};
 
-  // Only handle Edit and Write tools
+  // Load policy
+  let policy;
+  try {
+    policy = loadPolicy();
+  } catch (e) {
+    // No policy - allow through
+    process.exit(0);
+  }
+
+  // =========================================================================
+  // DRIFT PREVENTION CHECK (Phase 5.6)
+  // Runs BEFORE enforcement for all non-excluded tools.
+  // Read-only tools and excluded tools skip this check.
+  // =========================================================================
+  try {
+    const driftResult = checkDriftPrevention(toolName, toolInput, policy);
+    if (driftResult && !driftResult.allowed) {
+      const output = {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: driftResult.reason
+        }
+      };
+      console.log(JSON.stringify(output));
+      process.exit(0);
+    }
+  } catch (e) {
+    // Drift check failure should never block work — fail open
+  }
+
+  // Only run enforcement checks for Edit and Write tools
   if (toolName !== 'Edit' && toolName !== 'Write') {
     process.exit(0);
   }
@@ -318,15 +455,6 @@ async function main() {
   // Get file path from tool input
   const filePath = toolInput.file_path;
   if (!filePath) {
-    process.exit(0);
-  }
-
-  // Load policy
-  let policy;
-  try {
-    policy = loadPolicy();
-  } catch (e) {
-    // No policy - allow through
     process.exit(0);
   }
 
