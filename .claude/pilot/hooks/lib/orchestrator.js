@@ -770,14 +770,16 @@ function approveMerge(taskId, pmSessionId) {
     };
   }
 
-  // Attempt merge via worktree engine
+  // Attempt merge via worktree engine (includes Phase 5.2 semantic resolution)
   const mergeResult = worktree.mergeWorktree(taskId);
 
-  // Publish decision
+  // Publish decision with auto-resolution metadata
   publishDecision('merge_approved', {
     task_id: taskId,
     approved_by: pmSessionId,
-    merge_result: mergeResult.success ? 'merged' : 'failed'
+    merge_result: mergeResult.success ? 'merged' : 'failed',
+    auto_resolved: mergeResult.auto_resolved || false,
+    resolution_confidence: mergeResult.resolution ? mergeResult.resolution.confidence : undefined
   });
 
   session.logEvent({
