@@ -24,6 +24,7 @@ let _globalSoulsDir = path.join(os.homedir(), '.pilot-agi', 'souls');
 const SNAPSHOT_DIR = '.claude/pilot/state/soul-snapshots';
 const SOUL_FORMAT_VERSION = 1;
 const MAX_SNAPSHOTS = 20;
+let _snapshotSeq = 0;
 
 // =============================================================================
 // PATH HELPERS
@@ -217,7 +218,8 @@ function takeSnapshot(role, soul) {
     ensureDir(dir);
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filePath = path.join(dir, `${timestamp}.json`);
+    const seq = String(_snapshotSeq++).padStart(4, '0');
+    const filePath = path.join(dir, `${timestamp}-${seq}.json`);
 
     const snapshot = {
       role,
