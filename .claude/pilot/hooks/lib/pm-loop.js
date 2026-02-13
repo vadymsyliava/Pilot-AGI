@@ -57,6 +57,7 @@ const POOL_SCALING_SCAN_INTERVAL_MS = 60000; // 60s between pool scaling evaluat
 const DRIFT_PREVENTION_SCAN_INTERVAL_MS = 60000; // 60s between drift prevention aggregate scans (Phase 5.6)
 const DECOMP_LEARNING_SCAN_INTERVAL_MS = 300000; // 5min between decomposition learning scans (Phase 5.5)
 const KNOWLEDGE_HARVEST_SCAN_INTERVAL_MS = 300000; // 5min between knowledge harvest scans (Phase 5.8)
+const PR_STATUS_SCAN_INTERVAL_MS = 60000; // 60s between PR status scans (Phase 5.11)
 const PRESSURE_NUDGE_THRESHOLD_PCT = 70;  // PM nudges agents above this if no auto-checkpoint
 const MAX_ACTIONS_PER_CYCLE = 10;         // Prevent runaway action storms
 const ACTION_LOG_PATH = '.claude/pilot/state/orchestrator/action-log.jsonl';
@@ -88,6 +89,7 @@ class PmLoop {
     this.lastDriftPreventionScan = 0;
     this.lastDecompLearningScan = 0;
     this.lastKnowledgeHarvestScan = 0;
+    this.lastPrStatusScan = 0;
     this._telegramConversations = null; // Lazy-initialized in _telegramScan
     this.actionQueue = [];  // Used by pm-queue.js for persistence
     this.opts = {
@@ -106,6 +108,7 @@ class PmLoop {
       driftPreventionScanIntervalMs: opts.driftPreventionScanIntervalMs || DRIFT_PREVENTION_SCAN_INTERVAL_MS,
       decompLearningScanIntervalMs: opts.decompLearningScanIntervalMs || DECOMP_LEARNING_SCAN_INTERVAL_MS,
       knowledgeHarvestScanIntervalMs: opts.knowledgeHarvestScanIntervalMs || KNOWLEDGE_HARVEST_SCAN_INTERVAL_MS,
+      prStatusScanIntervalMs: opts.prStatusScanIntervalMs || PR_STATUS_SCAN_INTERVAL_MS,
       maxActionsPerCycle: opts.maxActionsPerCycle || MAX_ACTIONS_PER_CYCLE,
       dryRun: opts.dryRun || false,
       ...opts
@@ -288,6 +291,13 @@ class PmLoop {
       this.lastKnowledgeHarvestScan = now;
       const knowledgeResults = this._knowledgeHarvestScan();
       results.push(...knowledgeResults);
+    }
+
+    // PR status scan (Phase 5.11) — check open PRs for CI pass/merge readiness
+    if (now - this.lastPrStatusScan >= this.opts.prStatusScanIntervalMs) {
+      this.lastPrStatusScan = now;
+      const prResults = this._prStatusScan();
+      results.push(...prResults);
     }
 
     return results;
@@ -1613,7 +1623,8 @@ class PmLoop {
       last_cost_scan: this.lastCostScan ? new Date(this.lastCostScan).toISOString() : null,
       last_telegram_scan: this.lastTelegramScan ? new Date(this.lastTelegramScan).toISOString() : null,
       last_pool_scaling_scan: this.lastPoolScalingScan ? new Date(this.lastPoolScalingScan).toISOString() : null,
-      last_knowledge_harvest_scan: this.lastKnowledgeHarvestScan ? new Date(this.lastKnowledgeHarvestScan).toISOString() : null
+      last_knowledge_harvest_scan: this.lastKnowledgeHarvestScan ? new Date(this.lastKnowledgeHarvestScan).toISOString() : null,
+      last_pr_status_scan: this.lastPrStatusScan ? new Date(this.lastPrStatusScan).toISOString() : null
     };
   }
 
@@ -1895,6 +1906,150 @@ class PmLoop {
       } catch (e) { /* best effort */ }
     } catch (e) {
       this.logAction('knowledge_harvest_scan_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  // ==========================================================================
+  // PR STATUS SCAN (Phase 5.11)
+  // ==========================================================================
+
+  /**
+   * PR status scan: check open PRs for CI check results, trigger auto-merge
+   * or escalation as needed.
+   */
+  _prStatusScan() {
+    const results = [];
+
+    try {
+      const prAutomation = require('./pr-automation');
+      const policy = prAutomation.loadGitHubPolicy(this.projectRoot);
+      if (!policy.enabled) return results;
+
+      const prereqs = prAutomation.checkPrerequisites(this.projectRoot);
+      if (!prereqs.available) return results;
+
+      const openPRs = prAutomation.getOpenPRs(this.projectRoot);
+      if (openPRs.length === 0) return results;
+
+      for (const pr of openPRs) {
+        if (!pr.pr_number) continue;
+
+        try {
+          const status = prAutomation.checkPRStatus(pr.pr_number, {
+            projectRoot: this.projectRoot
+          });
+
+          // Update local state
+          prAutomation.updatePRStatus(pr.task_id, {
+            checks_passed: status.checks_passed,
+            mergeable: status.mergeable,
+            state: status.state
+          }, this.projectRoot);
+
+          // PR was merged externally or closed
+          if (status.state === 'MERGED' || status.state === 'CLOSED') {
+            prAutomation.updatePRStatus(pr.task_id, {
+              status: status.state.toLowerCase(),
+              merged: status.state === 'MERGED'
+            }, this.projectRoot);
+
+            this.logAction('pr_status_changed', {
+              task_id: pr.task_id,
+              pr_number: pr.pr_number,
+              state: status.state
+            });
+
+            results.push({
+              action: 'pr_' + status.state.toLowerCase(),
+              task_id: pr.task_id,
+              pr_number: pr.pr_number
+            });
+            continue;
+          }
+
+          // CI checks failed → escalate
+          if (status.checks_passed === false) {
+            this.logAction('pr_checks_failed', {
+              task_id: pr.task_id,
+              pr_number: pr.pr_number
+            });
+
+            try {
+              const escalation = require('./escalation');
+              escalation.triggerEscalation('pr_check_failure', {
+                task_id: pr.task_id,
+                pr_number: pr.pr_number,
+                message: 'CI checks failed on PR #' + pr.pr_number
+              }, this.projectRoot);
+            } catch (e) { /* escalation module may not exist */ }
+
+            results.push({
+              action: 'pr_checks_failed',
+              task_id: pr.task_id,
+              pr_number: pr.pr_number
+            });
+            continue;
+          }
+
+          // CI passed + auto-merge enabled → merge
+          if (status.checks_passed === true && policy.auto_merge && status.mergeable) {
+            const mergeResult = prAutomation.mergePR(pr.pr_number, {
+              projectRoot: this.projectRoot,
+              strategy: policy.merge_strategy,
+              deleteAfter: policy.delete_branch_after_merge
+            });
+
+            if (mergeResult.success) {
+              prAutomation.updatePRStatus(pr.task_id, {
+                status: 'merged',
+                merged: true,
+                merged_at: new Date().toISOString()
+              }, this.projectRoot);
+
+              this.logAction('pr_auto_merged', {
+                task_id: pr.task_id,
+                pr_number: pr.pr_number
+              });
+
+              results.push({
+                action: 'pr_auto_merged',
+                task_id: pr.task_id,
+                pr_number: pr.pr_number
+              });
+            } else {
+              this.logAction('pr_merge_failed', {
+                task_id: pr.task_id,
+                pr_number: pr.pr_number,
+                error: mergeResult.error
+              });
+
+              try {
+                const escalation = require('./escalation');
+                escalation.triggerEscalation('pr_merge_conflict', {
+                  task_id: pr.task_id,
+                  pr_number: pr.pr_number,
+                  message: 'PR merge failed: ' + (mergeResult.error || 'unknown')
+                }, this.projectRoot);
+              } catch (e) { /* escalation module may not exist */ }
+
+              results.push({
+                action: 'pr_merge_failed',
+                task_id: pr.task_id,
+                pr_number: pr.pr_number
+              });
+            }
+          }
+        } catch (e) {
+          this.logAction('pr_status_check_error', {
+            task_id: pr.task_id,
+            error: e.message
+          });
+        }
+      }
+    } catch (e) {
+      this.logAction('pr_status_scan_error', { error: e.message });
     }
 
     return results;
