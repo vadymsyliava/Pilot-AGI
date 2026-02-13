@@ -1312,12 +1312,27 @@ class PmDaemon {
     }
 
     for (const tab of groundTruthTabs) {
-      if (!trackedTabIds.has(tab.tabId)) {
-        this.log.debug('Orphaned terminal tab (not spawned by this daemon)', {
-          tabId: tab.tabId,
-          taskId: tab.taskId,
-          role: tab.role
-        });
+      if (!trackedTabIds.has(tab.tabId) && tab.role !== 'pm') {
+        // Close orphaned agent tabs that we don't track
+        // (PM tabs are never auto-closed)
+        const isDead = tab.state === 'exited' || tab.state === 'dead' || tab.state === 'idle';
+        if (isDead) {
+          this.log.info('Closing orphaned dead terminal tab', {
+            tabId: tab.tabId,
+            taskId: tab.taskId,
+            state: tab.state
+          });
+          this.terminalController.closeTab(tab.tabId).catch(e => {
+            this.log.warn('Failed to close orphaned tab', { tabId: tab.tabId, error: e.message });
+          });
+        } else {
+          this.log.debug('Orphaned terminal tab (active, not closing)', {
+            tabId: tab.tabId,
+            taskId: tab.taskId,
+            state: tab.state,
+            role: tab.role
+          });
+        }
       }
     }
   }

@@ -375,15 +375,16 @@ class TerminalController {
   /**
    * Reconcile registry with actual terminal state.
    * - Update state for each registered tab
-   * - Remove entries for closed tabs
+   * - Remove entries for closed tabs (and physically close dead tabs)
    * - Detect orphaned tabs (open but not in registry)
    *
-   * @returns {Promise<{updated: number, removed: number, orphaned: number}>}
+   * @returns {Promise<{updated: number, removed: number, orphaned: number, closedDead: number}>}
    */
   async sync() {
     let updated = 0;
     let removed = 0;
     let orphaned = 0;
+    let closedDead = 0;
 
     // Check each registered tab
     for (const [tabId, entry] of this.registry) {
@@ -394,15 +395,22 @@ class TerminalController {
           entry.stateChangedAt = Date.now();
           updated++;
         }
+
+        // Detect dead tabs: shell returned to prompt with no Claude running
+        // (state is 'idle' or 'unknown' and agent was previously working/starting)
+        if (state === 'exited' || state === 'dead') {
+          await this._closeDeadTab(tabId, entry, 'detected_dead');
+          closedDead++;
+        }
       } catch (e) {
-        // Tab likely closed — remove from registry
+        // Tab likely closed/crashed — remove from registry
         this.registry.delete(tabId);
         removed++;
-        this.log.info('Tab removed from registry (closed)', { tabId, taskId: entry.taskId });
+        this.log.info('Tab removed from registry (unreachable)', { tabId, taskId: entry.taskId });
       }
     }
 
-    // Check for orphaned tabs (only for applescript which can scan all)
+    // Check for orphaned tabs
     if (this.activeProvider === 'applescript') {
       try {
         const bridge = getAppleScriptBridge();
@@ -415,9 +423,60 @@ class TerminalController {
       } catch (e) {
         // Non-critical
       }
+    } else if (this.activeProvider === 'iterm2' && this._iterm2Instance) {
+      try {
+        const allTabs = await this._iterm2Instance.listTabs();
+        for (const tab of allTabs) {
+          if (!this.registry.has(tab.tabId)) {
+            orphaned++;
+          }
+        }
+      } catch (e) {
+        // Non-critical
+      }
     }
 
-    return { updated, removed, orphaned };
+    return { updated, removed, orphaned, closedDead };
+  }
+
+  /**
+   * Close a dead terminal tab and remove from registry.
+   *
+   * @param {string} tabId
+   * @param {TabEntry} entry
+   * @param {string} reason
+   * @returns {Promise<void>}
+   */
+  async _closeDeadTab(tabId, entry, reason) {
+    try {
+      this.log.info('Closing dead tab', { tabId, taskId: entry.taskId, reason });
+      await this.closeTab(tabId);
+    } catch (e) {
+      // Tab may already be gone — just remove from registry
+      this.registry.delete(tabId);
+      this.log.debug('Dead tab cleanup failed (already gone)', { tabId, error: e.message });
+    }
+  }
+
+  /**
+   * Close all tabs that are in a dead/exited state.
+   *
+   * @returns {Promise<number>} Number of tabs closed
+   */
+  async closeDeadTabs() {
+    let closed = 0;
+    for (const [tabId, entry] of this.registry) {
+      if (entry.state === 'exited' || entry.state === 'dead' || entry.state === 'complete') {
+        try {
+          await this.closeTab(tabId);
+          closed++;
+        } catch (e) {
+          this.registry.delete(tabId);
+          closed++;
+        }
+      }
+    }
+    return closed;
   }
 
   // ==========================================================================
