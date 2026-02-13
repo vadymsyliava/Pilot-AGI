@@ -337,9 +337,26 @@ function mergeWorktree(taskId, commitMsg) {
     }
 
     try { fs.unlinkSync(tmpMsg); } catch (ignored) { /* best effort */ }
-    return { success: true };
+
+    // Phase 5.11: Trigger PR automation after successful merge
+    var prResult = null;
+    try {
+      var prAutomation = require('./pr-automation');
+      var ghPolicy = prAutomation.loadGitHubPolicy(root);
+      if (ghPolicy.enabled) {
+        prResult = prAutomation.handleTaskComplete(taskId, {
+          projectRoot: root
+        });
+      }
+    } catch (prErr) {
+      // PR automation is optional -- never block merge
+      prResult = { success: false, error: prErr.message };
+    }
+
+    return { success: true, pr_automation: prResult };
   } catch (e) {
     try {
+      // execSync is safe here: branchName is sanitized via sanitizeId()
       execSync('git merge --abort', { cwd: root, stdio: 'pipe' });
     } catch (ignored) { /* Best effort */ }
     return { success: false, error: 'Merge failed: ' + e.message };
