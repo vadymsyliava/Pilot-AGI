@@ -56,6 +56,7 @@ const TELEGRAM_SCAN_INTERVAL_MS = 10000;  // 10s between telegram inbox scans (P
 const POOL_SCALING_SCAN_INTERVAL_MS = 60000; // 60s between pool scaling evaluations (Phase 5.4)
 const DRIFT_PREVENTION_SCAN_INTERVAL_MS = 60000; // 60s between drift prevention aggregate scans (Phase 5.6)
 const DECOMP_LEARNING_SCAN_INTERVAL_MS = 300000; // 5min between decomposition learning scans (Phase 5.5)
+const KNOWLEDGE_HARVEST_SCAN_INTERVAL_MS = 300000; // 5min between knowledge harvest scans (Phase 5.8)
 const PRESSURE_NUDGE_THRESHOLD_PCT = 70;  // PM nudges agents above this if no auto-checkpoint
 const MAX_ACTIONS_PER_CYCLE = 10;         // Prevent runaway action storms
 const ACTION_LOG_PATH = '.claude/pilot/state/orchestrator/action-log.jsonl';
@@ -86,6 +87,7 @@ class PmLoop {
     this.lastPoolScalingScan = 0;
     this.lastDriftPreventionScan = 0;
     this.lastDecompLearningScan = 0;
+    this.lastKnowledgeHarvestScan = 0;
     this._telegramConversations = null; // Lazy-initialized in _telegramScan
     this.actionQueue = [];  // Used by pm-queue.js for persistence
     this.opts = {
@@ -103,6 +105,7 @@ class PmLoop {
       poolScalingScanIntervalMs: opts.poolScalingScanIntervalMs || POOL_SCALING_SCAN_INTERVAL_MS,
       driftPreventionScanIntervalMs: opts.driftPreventionScanIntervalMs || DRIFT_PREVENTION_SCAN_INTERVAL_MS,
       decompLearningScanIntervalMs: opts.decompLearningScanIntervalMs || DECOMP_LEARNING_SCAN_INTERVAL_MS,
+      knowledgeHarvestScanIntervalMs: opts.knowledgeHarvestScanIntervalMs || KNOWLEDGE_HARVEST_SCAN_INTERVAL_MS,
       maxActionsPerCycle: opts.maxActionsPerCycle || MAX_ACTIONS_PER_CYCLE,
       dryRun: opts.dryRun || false,
       ...opts
@@ -278,6 +281,13 @@ class PmLoop {
       this.lastDecompLearningScan = now;
       const decompResults = this._decompositionLearningScan();
       results.push(...decompResults);
+    }
+
+    // Knowledge harvest scan (Phase 5.8) — harvest learnings from closed tasks
+    if (now - this.lastKnowledgeHarvestScan >= this.opts.knowledgeHarvestScanIntervalMs) {
+      this.lastKnowledgeHarvestScan = now;
+      const knowledgeResults = this._knowledgeHarvestScan();
+      results.push(...knowledgeResults);
     }
 
     return results;
@@ -1602,7 +1612,8 @@ class PmLoop {
       last_pressure_scan: this.lastPressureScan ? new Date(this.lastPressureScan).toISOString() : null,
       last_cost_scan: this.lastCostScan ? new Date(this.lastCostScan).toISOString() : null,
       last_telegram_scan: this.lastTelegramScan ? new Date(this.lastTelegramScan).toISOString() : null,
-      last_pool_scaling_scan: this.lastPoolScalingScan ? new Date(this.lastPoolScalingScan).toISOString() : null
+      last_pool_scaling_scan: this.lastPoolScalingScan ? new Date(this.lastPoolScalingScan).toISOString() : null,
+      last_knowledge_harvest_scan: this.lastKnowledgeHarvestScan ? new Date(this.lastKnowledgeHarvestScan).toISOString() : null
     };
   }
 
@@ -1806,6 +1817,84 @@ class PmLoop {
       }
     } catch (e) {
       this.logAction('decomposition_learning_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  // ==========================================================================
+  // KNOWLEDGE HARVEST SCAN (Phase 5.8)
+  // ==========================================================================
+
+  /**
+   * Knowledge harvest scan: detect recently closed tasks and harvest
+   * their learnings into the global cross-project knowledge base.
+   */
+  _knowledgeHarvestScan() {
+    const results = [];
+
+    try {
+      const harvester = require('./knowledge-harvester');
+      const policy = harvester.loadCrossProjectPolicy(this.projectRoot);
+      if (!policy.enabled || !policy.publish) return results;
+
+      // Find recently completed sessions with closed tasks
+      const completedSessions = session.getAllSessionStates()
+        .filter(s => s.status === 'ended' && s.claimed_task);
+
+      // Track already-harvested tasks to avoid duplicates
+      const harvestedPath = path.join(this.projectRoot, '.claude/pilot/state/knowledge-harvested.json');
+      let harvested = {};
+      try {
+        if (fs.existsSync(harvestedPath)) {
+          harvested = JSON.parse(fs.readFileSync(harvestedPath, 'utf8'));
+        }
+      } catch (e) { /* start fresh */ }
+
+      for (const s of completedSessions) {
+        const taskId = s.claimed_task;
+        if (harvested[taskId]) continue;
+
+        try {
+          const result = harvester.harvestFromTask(taskId, this.projectRoot);
+
+          harvested[taskId] = {
+            harvested_at: new Date().toISOString(),
+            published: result.published.length,
+            skipped: result.skipped.length
+          };
+
+          if (result.published.length > 0) {
+            this.logAction('knowledge_harvested', {
+              task_id: taskId,
+              published: result.published.length,
+              types: result.published.map(p => p.type)
+            });
+
+            results.push({
+              action: 'knowledge_harvest',
+              task_id: taskId,
+              published: result.published.length
+            });
+          }
+        } catch (e) {
+          this.logAction('knowledge_harvest_error', {
+            task_id: taskId,
+            error: e.message
+          });
+        }
+      }
+
+      // Save harvested tracking
+      try {
+        const dir = path.dirname(harvestedPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const tmpPath = harvestedPath + '.tmp.' + process.pid;
+        fs.writeFileSync(tmpPath, JSON.stringify(harvested, null, 2));
+        fs.renameSync(tmpPath, harvestedPath);
+      } catch (e) { /* best effort */ }
+    } catch (e) {
+      this.logAction('knowledge_harvest_scan_error', { error: e.message });
     }
 
     return results;
