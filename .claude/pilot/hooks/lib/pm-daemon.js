@@ -230,6 +230,7 @@ class PmDaemon {
     this.tickTimer = null;
     this.lastSpawnTime = 0;
     this.spawnedAgents = new Map();  // pid -> { taskId, spawnedAt, process }
+    this._spawningTaskIds = new Set(); // Task IDs with in-flight async terminal spawns
     this.terminalController = null;  // Phase 6.4: Terminal controller instance
     this.tickCount = 0;
     this.shuttingDown = false;
@@ -699,14 +700,23 @@ class PmDaemon {
 
     // Phase 6.4: Use terminal-based spawning if enabled
     if (this.terminalController && this.terminalController._started) {
-      // Fire-and-forget async terminal spawn — track result via registry
-      this._spawnAgentViaTerminal(task).catch(e => {
-        this.log.error('Terminal spawn failed, falling back to headless', {
-          task_id: task.id, error: e.message
+      // Guard: prevent duplicate async terminal spawns for the same task
+      if (this._spawningTaskIds.has(task.id)) {
+        this.log.debug('Skipping duplicate terminal spawn (already in flight)', { task_id: task.id });
+        return { success: false, reason: 'spawn_in_flight' };
+      }
+      this._spawningTaskIds.add(task.id);
+
+      this._spawnAgentViaTerminal(task)
+        .catch(e => {
+          this.log.error('Terminal spawn failed, falling back to headless', {
+            task_id: task.id, error: e.message
+          });
+          this._spawnAgentHeadless(task);
+        })
+        .finally(() => {
+          this._spawningTaskIds.delete(task.id);
         });
-        // Fallback to headless spawn on terminal failure
-        this._spawnAgentHeadless(task);
-      });
       return { success: true, terminal: true };
     }
 
@@ -852,17 +862,42 @@ class PmDaemon {
   }
 
   /**
+   * Check if a spawned agent entry is still alive.
+   * Terminal spawns use synthetic string PIDs — check tab registry instead.
+   * Headless spawns use numeric PIDs — use process.kill(pid, 0).
+   *
+   * @param {string|number} pid - The PID key from spawnedAgents map
+   * @param {object} entry - The spawn entry
+   * @returns {boolean} True if the agent is still alive
+   */
+  _isSpawnAlive(pid, entry) {
+    if (entry.isTerminal && entry.tabId) {
+      // Terminal spawn: check if the tab still exists in the registry
+      if (this.terminalController) {
+        const allTabs = this.terminalController.getAllTabs();
+        return allTabs.some(t => t.tabId === entry.tabId);
+      }
+      return false;
+    }
+    // Headless spawn: check via OS signal
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
    * Count spawned agent processes that are still alive.
    */
   _countAliveSpawned() {
     let alive = 0;
     for (const [pid, entry] of this.spawnedAgents) {
       if (entry.exitCode === null) {
-        // Check if still running
-        try {
-          process.kill(pid, 0);
+        if (this._isSpawnAlive(pid, entry)) {
           alive++;
-        } catch (e) {
+        } else {
           entry.exitCode = -1;
           entry.exitedAt = new Date().toISOString();
         }
@@ -895,7 +930,14 @@ class PmDaemon {
             runtime_ms: now - spawnTime
           });
 
-          try { process.kill(pid, 'SIGTERM'); } catch (e) { /* already dead */ }
+          if (entry.isTerminal && entry.tabId) {
+            // Terminal spawn: close the tab instead of process.kill
+            if (this.terminalController) {
+              this.terminalController.closeTab(entry.tabId).catch(() => {});
+            }
+          } else {
+            try { process.kill(pid, 'SIGTERM'); } catch (e) { /* already dead */ }
+          }
           entry.exitCode = -2;
           entry.exitedAt = new Date().toISOString();
         }
@@ -915,14 +957,15 @@ class PmDaemon {
    */
   _getSpawnedTaskIds() {
     const taskIds = new Set();
+    // Include tasks with in-flight async terminal spawns
+    for (const tid of this._spawningTaskIds) {
+      taskIds.add(tid);
+    }
     for (const [pid, entry] of this.spawnedAgents) {
       if (entry.exitCode === null) {
-        // Verify process is still alive
-        try {
-          process.kill(pid, 0);
+        // Verify process/terminal is still alive
+        if (this._isSpawnAlive(pid, entry)) {
           taskIds.add(entry.taskId);
-        } catch (e) {
-          // Process is dead — don't count it
         }
       }
     }
