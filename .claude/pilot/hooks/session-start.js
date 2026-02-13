@@ -643,9 +643,30 @@ async function main() {
     }
 
     if (soulRole) {
-      // Auto-initialize soul on first session for this role
-      if (!souls.soulExists(soulRole)) {
-        souls.initializeSoul(soulRole);
+      // Phase 8.1: Auto-restore soul from global backup if no local exists
+      try {
+        const soulLifecycle = require('./lib/soul-auto-lifecycle');
+        const lifecycleResult = soulLifecycle.onSessionStart(soulRole);
+        if (lifecycleResult.restored) {
+          messages.push(`Soul [${soulRole}]: restored from global backup`);
+        }
+
+        // Inject skill gaps and growth goals into context
+        const lifecycleCtx = soulLifecycle.buildContext(soulRole);
+        if (lifecycleCtx) {
+          context.soul_lifecycle = lifecycleCtx;
+          if (lifecycleCtx.skill_gaps && lifecycleCtx.skill_gaps.length > 0) {
+            messages.push(`Skill gaps: ${lifecycleCtx.skill_gaps.map(g => g.area).join(', ')}`);
+          }
+          if (lifecycleCtx.growth_goals && lifecycleCtx.growth_goals.length > 0) {
+            messages.push(`Goals: ${lifecycleCtx.growth_goals.length} active`);
+          }
+        }
+      } catch (e) {
+        // Soul lifecycle not available — fall back to basic init
+        if (!souls.soulExists(soulRole)) {
+          souls.initializeSoul(soulRole);
+        }
       }
 
       const soulCtx = souls.loadSoulContext(soulRole);

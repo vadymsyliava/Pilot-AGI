@@ -77,10 +77,24 @@ function emitStatusEvents(sessionId, hookInput) {
       // bd close <id> or bd update <id> --status closed
       if (/bd\s+close\b/.test(cmd) || /bd\s+update\b.*--status\s+closed/.test(cmd)) {
         const idMatch = cmd.match(/bd\s+(?:close|update)\s+["']?([^\s"']+)/);
+        const taskId = idMatch ? idMatch[1] : 'unknown';
         emitBusEvent(sessionId, 'task_complete', {
-          task_id: idMatch ? idMatch[1] : 'unknown',
+          task_id: taskId,
           completed_by: sessionId
         });
+
+        // Phase 8.1: Auto-backup soul + record assessment on task close
+        try {
+          const sessFile = require('path').join(process.cwd(), '.claude/pilot/state/sessions', `${sessionId}.json`);
+          if (require('fs').existsSync(sessFile)) {
+            const sess = JSON.parse(require('fs').readFileSync(sessFile, 'utf8'));
+            const role = sess.role;
+            if (role) {
+              const soulLifecycle = require('./lib/soul-auto-lifecycle');
+              soulLifecycle.onTaskClose(role, taskId);
+            }
+          }
+        } catch (e) { /* best effort */ }
         return;
       }
 
