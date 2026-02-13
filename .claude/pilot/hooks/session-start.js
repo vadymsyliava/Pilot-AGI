@@ -654,6 +654,21 @@ async function main() {
         const size = souls.getSoulSize(soulRole);
         messages.push(`Soul [${soulRole}]: loaded (${size}b)`);
       }
+
+      // Phase 7.2: Load task-relevant lessons for pre-task context
+      try {
+        const postMortem = require('./lib/post-mortem');
+        const taskDesc = context.current_task?.description || context.current_task?.title || '';
+        if (taskDesc) {
+          const relevantLessons = postMortem.getRelevantLessons(soulRole, taskDesc);
+          if (relevantLessons.length > 0) {
+            context.pre_task_lessons = relevantLessons;
+            messages.push(`Lessons: ${relevantLessons.length} relevant`);
+          }
+        }
+      } catch (e) {
+        // Post-mortem module not available, continue without
+      }
     }
   } catch (e) {
     // Soul module not available, continue without
