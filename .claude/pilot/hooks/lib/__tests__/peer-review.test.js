@@ -68,379 +68,357 @@ function test(name, fn) {
   }
 }
 
+// Sample diffs for testing
+const SMALL_DIFF = `diff --git a/src/utils.js b/src/utils.js
+--- a/src/utils.js
++++ b/src/utils.js
+@@ -1,3 +1,5 @@
++function helper() {
++  return true;
++}
+ module.exports = {};`;
+
+const LARGE_DIFF = `diff --git a/src/api/routes.js b/src/api/routes.js
+--- a/src/api/routes.js
++++ b/src/api/routes.js
+@@ -1,5 +1,80 @@
+${Array.from({ length: 75 }, (_, i) => `+const line${i} = ${i};`).join('\n')}
+ module.exports = {};`;
+
+const API_DIFF = `diff --git a/src/api/handler.js b/src/api/handler.js
+--- a/src/api/handler.js
++++ b/src/api/handler.js
+@@ -1,3 +1,10 @@
++async function handleRequest(req, res) {
++  const data = await fetchData();
++  res.json(data);
++}
++module.exports = { handleRequest };`;
+
+const STYLE_DIFF = `diff --git a/src/components/Button.tsx b/src/components/Button.tsx
+--- a/src/components/Button.tsx
++++ b/src/components/Button.tsx
+@@ -1,3 +1,10 @@
++import React from 'react';
++export const Button = ({ label }) => (
++  <button className="btn-primary">{label}</button>
++);`;
+
+const TODO_DIFF = `diff --git a/src/app.js b/src/app.js
+--- a/src/app.js
++++ b/src/app.js
+@@ -1,3 +1,10 @@
++function init() {
++  // TODO: implement proper error handling
++  console.log('debug: starting app');
++  return true;
++}`;
+
 console.log('\n=== Peer Review Tests ===\n');
 
 // --- selectReviewer ---
 
-test('selectReviewer picks backend for api_design changes', () => {
+test('selectReviewer picks backend for api_design domains', () => {
   const pr = freshModule();
-  const result = pr.selectReviewer('frontend', ['api_design'], ['backend', 'testing', 'review']);
+  const result = pr.selectReviewer('frontend', ['api_design']);
+  assert.ok(result);
   assert.strictEqual(result.reviewer, 'backend');
   assert.ok(result.score > 0);
 });
 
-test('selectReviewer picks frontend for styling changes', () => {
+test('selectReviewer picks frontend for styling domains', () => {
   const pr = freshModule();
-  const result = pr.selectReviewer('backend', ['styling'], ['frontend', 'testing', 'review']);
+  const result = pr.selectReviewer('backend', ['styling']);
+  assert.ok(result);
   assert.strictEqual(result.reviewer, 'frontend');
 });
 
 test('selectReviewer excludes author from selection', () => {
   const pr = freshModule();
-  const result = pr.selectReviewer('frontend', ['styling'], ['frontend', 'review']);
+  const result = pr.selectReviewer('frontend', ['styling']);
+  assert.ok(result);
   assert.notStrictEqual(result.reviewer, 'frontend');
 });
 
-test('selectReviewer falls back to review agent', () => {
+test('selectReviewer falls back to review agent for unknown domains', () => {
   const pr = freshModule();
-  const result = pr.selectReviewer('frontend', ['obscure_skill'], ['backend', 'review']);
+  const result = pr.selectReviewer('frontend', ['obscure_skill']);
+  assert.ok(result);
   assert.strictEqual(result.reviewer, 'review');
-});
-
-test('selectReviewer returns null with no available reviewers', () => {
-  const pr = freshModule();
-  const result = pr.selectReviewer('frontend', ['styling'], []);
-  assert.strictEqual(result.reviewer, null);
+  assert.ok(result.reason.includes('fallback'));
 });
 
 test('selectReviewer returns null with insufficient input', () => {
   const pr = freshModule();
-  assert.strictEqual(pr.selectReviewer(null, ['a'], ['b']).reviewer, null);
-  assert.strictEqual(pr.selectReviewer('a', null, ['b']).reviewer, null);
-  assert.strictEqual(pr.selectReviewer('a', [], ['b']).reviewer, null);
+  assert.strictEqual(pr.selectReviewer(null, ['a']), null);
+  assert.strictEqual(pr.selectReviewer('a', null), null);
+  assert.strictEqual(pr.selectReviewer('a', []), null);
 });
 
-// --- requestReview ---
-
-test('requestReview creates a review request', () => {
+test('selectReviewer excludes PM from reviewers', () => {
   const pr = freshModule();
-  const result = pr.requestReview('T-001', 'frontend', {
-    files_changed: ['src/api.js'],
-    lines_added: 100,
-    lines_removed: 20,
-    areas: ['api_design']
-  });
-  assert.ok(result.success);
-  assert.ok(result.reviewer);
-  assert.strictEqual(result.lightweight, false); // 120 lines > threshold
+  // Add pm to registry
+  const regPath = path.join(process.cwd(), '.claude/pilot/agent-registry.json');
+  const reg = JSON.parse(fs.readFileSync(regPath, 'utf8'));
+  reg.agents.pm = { name: 'PM', capabilities: ['api_design', 'styling', 'everything'] };
+  fs.writeFileSync(regPath, JSON.stringify(reg, null, 2));
+
+  const result = pr.selectReviewer('frontend', ['api_design']);
+  assert.ok(result);
+  assert.notStrictEqual(result.reviewer, 'pm');
 });
 
-test('requestReview uses lightweight mode for small changes', () => {
+// --- countDiffLines ---
+
+test('countDiffLines counts added and removed lines', () => {
   const pr = freshModule();
-  const result = pr.requestReview('T-002', 'frontend', {
-    files_changed: ['src/utils.js'],
-    lines_added: 10,
-    lines_removed: 5,
-    areas: ['styling']
+  assert.strictEqual(pr.countDiffLines(SMALL_DIFF), 3); // 3 added lines
+  assert.ok(pr.countDiffLines(LARGE_DIFF) > 50);
+  assert.strictEqual(pr.countDiffLines(''), 0);
+  assert.strictEqual(pr.countDiffLines(null), 0);
+});
+
+// --- isLightweight ---
+
+test('isLightweight detects small diffs', () => {
+  const pr = freshModule();
+  assert.strictEqual(pr.isLightweight(SMALL_DIFF), true);
+  assert.strictEqual(pr.isLightweight(LARGE_DIFF), false);
+});
+
+// --- extractDomainsFromDiff ---
+
+test('extractDomainsFromDiff finds api domain', () => {
+  const pr = freshModule();
+  const domains = pr.extractDomainsFromDiff(API_DIFF);
+  assert.ok(domains.includes('api_design'));
+});
+
+test('extractDomainsFromDiff finds component/styling domains', () => {
+  const pr = freshModule();
+  const domains = pr.extractDomainsFromDiff(STYLE_DIFF);
+  assert.ok(domains.includes('component_creation') || domains.includes('styling'));
+});
+
+// --- buildReviewChecklist ---
+
+test('buildReviewChecklist detects TODO/FIXME', () => {
+  const pr = freshModule();
+  const checklist = pr.buildReviewChecklist(TODO_DIFF, {
+    taskId: 'T-001', authorRole: 'frontend', reviewerRole: 'backend'
   });
-  assert.ok(result.success);
+  assert.ok(checklist.correctness.issues.length > 0);
+  assert.ok(checklist.correctness.issues.some(i => i.includes('TODO')));
+});
+
+test('buildReviewChecklist detects console.log', () => {
+  const pr = freshModule();
+  const checklist = pr.buildReviewChecklist(TODO_DIFF, {
+    taskId: 'T-001', authorRole: 'frontend', reviewerRole: 'backend'
+  });
+  assert.ok(checklist.correctness.issues.some(i => i.includes('console.log')));
+});
+
+test('buildReviewChecklist passes clean diff', () => {
+  const pr = freshModule();
+  const checklist = pr.buildReviewChecklist(SMALL_DIFF, {
+    taskId: 'T-001', authorRole: 'frontend', reviewerRole: 'backend'
+  });
+  assert.strictEqual(checklist.correctness.score, 'pass');
+});
+
+test('buildReviewChecklist checks test coverage for large diffs', () => {
+  const pr = freshModule();
+  const checklist = pr.buildReviewChecklist(LARGE_DIFF, {
+    taskId: 'T-001', authorRole: 'frontend', reviewerRole: 'backend'
+  }, { lightweight: false });
+  assert.ok(checklist.test_coverage.issues.length > 0);
+});
+
+// --- executeReview ---
+
+test('executeReview approves clean diff', () => {
+  const pr = freshModule();
+  const result = pr.executeReview('T-001', SMALL_DIFF, {
+    authorRole: 'frontend', reviewerRole: 'backend'
+  });
+  assert.strictEqual(result.approved, true);
+  assert.ok(result.summary.includes('approved'));
   assert.strictEqual(result.lightweight, true);
 });
 
-test('requestReview accepts explicit reviewer', () => {
+test('executeReview flags TODO/console.log', () => {
   const pr = freshModule();
-  const result = pr.requestReview('T-003', 'frontend', {
-    files_changed: ['src/api.js'],
-    areas: ['api_design']
-  }, { reviewer: 'security' });
-  assert.ok(result.success);
-  assert.strictEqual(result.reviewer, 'security');
-});
-
-test('requestReview requires params', () => {
-  const pr = freshModule();
-  assert.strictEqual(pr.requestReview(null, 'f', {}).success, false);
-  assert.strictEqual(pr.requestReview('T', null, {}).success, false);
-  assert.strictEqual(pr.requestReview('T', 'f', null).success, false);
-});
-
-test('requestReview builds full checklist for large changes', () => {
-  const pr = freshModule();
-  pr.requestReview('T-004', 'frontend', {
-    files_changed: ['src/big.js'],
-    lines_added: 200,
-    areas: ['api_design']
+  const result = pr.executeReview('T-002', TODO_DIFF, {
+    authorRole: 'frontend', reviewerRole: 'backend'
   });
-  const review = pr.loadReview('T-004');
-  assert.ok(review.checklist.length >= 8); // Full checklist has 10 items
+  assert.ok(result.issues.length > 0);
 });
 
-test('requestReview builds lightweight checklist for small changes', () => {
+test('executeReview requires all params', () => {
   const pr = freshModule();
-  pr.requestReview('T-005', 'frontend', {
-    files_changed: ['src/fix.js'],
-    lines_added: 5,
-    areas: ['styling']
-  });
-  const review = pr.loadReview('T-005');
-  assert.strictEqual(review.checklist.length, 3);
+  assert.strictEqual(pr.executeReview(null, SMALL_DIFF, { authorRole: 'f', reviewerRole: 'b' }).approved, false);
+  assert.strictEqual(pr.executeReview('T', null, { authorRole: 'f', reviewerRole: 'b' }).approved, false);
+  assert.strictEqual(pr.executeReview('T', SMALL_DIFF, {}).approved, false);
 });
 
-// --- submitReview ---
-
-test('submitReview records review with comments', () => {
+test('executeReview saves review state', () => {
   const pr = freshModule();
-  const souls = freshSouls();
-  souls.initializeSoul('backend');
-  souls.initializeSoul('frontend');
-
-  pr.requestReview('T-010', 'frontend', {
-    files_changed: ['src/api.js'],
-    lines_added: 100,
-    areas: ['api_design']
-  }, { reviewer: 'backend' });
-
-  const result = pr.submitReview('T-010', 'backend', {
-    checklist_results: [
-      { item: 'Logic is correct and handles edge cases', checked: true },
-      { item: 'No obvious bugs or regressions', checked: true }
-    ],
-    comments: [
-      { severity: 'warning', message: 'Missing error handling on line 42', file: 'src/api.js', line: 42 },
-      { severity: 'suggestion', message: 'Consider using async/await' }
-    ]
+  pr.executeReview('T-003', SMALL_DIFF, {
+    authorRole: 'frontend', reviewerRole: 'backend'
   });
 
-  assert.ok(result.success);
-  assert.strictEqual(result.status, pr.REVIEW_STATUS.APPROVED);
-  assert.strictEqual(result.warnings, 1);
-  assert.strictEqual(result.suggestions, 1);
+  const reviewPath = path.join(process.cwd(), pr._REVIEWS_DIR, 'T-003.json');
+  assert.ok(fs.existsSync(reviewPath));
+  const saved = JSON.parse(fs.readFileSync(reviewPath, 'utf8'));
+  assert.strictEqual(saved.task_id, 'T-003');
+  assert.strictEqual(saved.author, 'frontend');
+  assert.strictEqual(saved.reviewer, 'backend');
 });
 
-test('submitReview auto-detects changes_requested with blockers', () => {
-  const pr = freshModule();
-  pr.requestReview('T-011', 'frontend', {
-    files_changed: ['src/api.js'],
-    lines_added: 100,
-    areas: ['api_design']
-  }, { reviewer: 'backend' });
+// --- requestReview (PM integration) ---
 
-  const result = pr.submitReview('T-011', 'backend', {
-    comments: [
-      { severity: 'blocker', message: 'SQL injection vulnerability' }
-    ]
+test('requestReview runs full review with auto-selected reviewer', () => {
+  const pr = freshModule();
+  const result = pr.requestReview('T-010', 'frontend', API_DIFF, {
+    taskDescription: 'Add new API endpoint'
+  });
+  assert.ok(result.reviewer);
+  assert.ok(result.approved !== undefined);
+  assert.ok(result.checklist);
+});
+
+test('requestReview auto-approves when no reviewer available', () => {
+  const pr = freshModule();
+  // Remove all agents except the author
+  const regPath = path.join(process.cwd(), '.claude/pilot/agent-registry.json');
+  fs.writeFileSync(regPath, JSON.stringify({ agents: { frontend: { capabilities: ['styling'] } } }, null, 2));
+
+  const result = pr.requestReview('T-011', 'frontend', SMALL_DIFF);
+  assert.strictEqual(result.approved, true);
+  assert.strictEqual(result.skipped, true);
+});
+
+test('requestReview returns error for missing params', () => {
+  const pr = freshModule();
+  assert.ok(pr.requestReview(null, 'f', SMALL_DIFF).error);
+  assert.ok(pr.requestReview('T', null, SMALL_DIFF).error);
+  assert.ok(pr.requestReview('T', 'f', null).error);
+});
+
+// --- getReviewFeedback ---
+
+test('getReviewFeedback returns structured feedback', () => {
+  const pr = freshModule();
+  pr.executeReview('T-020', TODO_DIFF, {
+    authorRole: 'frontend', reviewerRole: 'backend'
   });
 
-  assert.strictEqual(result.status, pr.REVIEW_STATUS.CHANGES_REQUESTED);
-  assert.strictEqual(result.blockers, 1);
+  const feedback = pr.getReviewFeedback('T-020');
+  assert.ok(feedback);
+  assert.strictEqual(feedback.task_id, 'T-020');
+  assert.ok(feedback.comments.length > 0);
 });
 
-test('submitReview uses explicit verdict', () => {
+test('getReviewFeedback returns null for missing review', () => {
   const pr = freshModule();
-  pr.requestReview('T-012', 'frontend', {
-    files_changed: ['src/api.js'],
-    lines_added: 100,
-    areas: ['api_design']
-  }, { reviewer: 'backend' });
-
-  const result = pr.submitReview('T-012', 'backend', {
-    verdict: pr.REVIEW_STATUS.APPROVED,
-    comments: []
-  });
-
-  assert.strictEqual(result.status, pr.REVIEW_STATUS.APPROVED);
+  assert.strictEqual(pr.getReviewFeedback('T-nonexistent'), null);
 });
 
-test('submitReview rejects wrong reviewer', () => {
-  const pr = freshModule();
-  pr.requestReview('T-013', 'frontend', {
-    files_changed: ['src/api.js'],
-    lines_added: 100,
-    areas: ['api_design']
-  }, { reviewer: 'backend' });
+// --- learnFromReview ---
 
-  const result = pr.submitReview('T-013', 'testing', { comments: [] });
-  assert.strictEqual(result.success, false);
-});
-
-test('submitReview rejects missing review', () => {
-  const pr = freshModule();
-  const result = pr.submitReview('T-nonexistent', 'backend', { comments: [] });
-  assert.strictEqual(result.success, false);
-});
-
-test('submitReview requires params', () => {
-  const pr = freshModule();
-  assert.strictEqual(pr.submitReview(null, 'r', {}).success, false);
-  assert.strictEqual(pr.submitReview('T', null, {}).success, false);
-  assert.strictEqual(pr.submitReview('T', 'r', null).success, false);
-});
-
-// --- respondToComment ---
-
-test('respondToComment records author response', () => {
-  const pr = freshModule();
-  pr.requestReview('T-020', 'frontend', {
-    files_changed: ['src/api.js'],
-    lines_added: 100,
-    areas: ['api_design']
-  }, { reviewer: 'backend' });
-
-  pr.submitReview('T-020', 'backend', {
-    comments: [
-      { severity: 'warning', message: 'Missing validation' }
-    ]
-  });
-
-  const result = pr.respondToComment('T-020', 0, 'Fixed in latest commit', 'fixed');
-  assert.ok(result.success);
-  assert.strictEqual(result.comment.response.action, 'fixed');
-});
-
-test('respondToComment rejects invalid index', () => {
-  const pr = freshModule();
-  pr.requestReview('T-021', 'frontend', {
-    files_changed: ['src/api.js'],
-    lines_added: 100,
-    areas: ['api_design']
-  }, { reviewer: 'backend' });
-
-  pr.submitReview('T-021', 'backend', { comments: [] });
-
-  const result = pr.respondToComment('T-021', 5, 'response', 'acknowledge');
-  assert.strictEqual(result.success, false);
-});
-
-test('respondToComment returns error for missing review', () => {
-  const pr = freshModule();
-  const result = pr.respondToComment('T-nonexistent', 0, 'resp', 'ack');
-  assert.strictEqual(result.success, false);
-});
-
-// --- getReviewStatus ---
-
-test('getReviewStatus returns review summary', () => {
-  const pr = freshModule();
-  pr.requestReview('T-030', 'frontend', {
-    files_changed: ['src/api.js'],
-    lines_added: 100,
-    areas: ['api_design']
-  }, { reviewer: 'backend' });
-
-  pr.submitReview('T-030', 'backend', {
-    comments: [
-      { severity: 'blocker', message: 'Critical bug' },
-      { severity: 'warning', message: 'Minor issue' },
-      { severity: 'suggestion', message: 'Nice-to-have' }
-    ]
-  });
-
-  const status = pr.getReviewStatus('T-030');
-  assert.ok(status);
-  assert.strictEqual(status.total_comments, 3);
-  assert.strictEqual(status.blockers, 1);
-  assert.strictEqual(status.warnings, 1);
-  assert.strictEqual(status.unresolved_blockers, 1);
-});
-
-test('getReviewStatus returns null for missing review', () => {
-  const pr = freshModule();
-  assert.strictEqual(pr.getReviewStatus('T-nonexistent'), null);
-});
-
-test('getReviewStatus tracks unresolved blockers', () => {
-  const pr = freshModule();
-  pr.requestReview('T-031', 'frontend', {
-    files_changed: ['src/api.js'],
-    lines_added: 100,
-    areas: ['api_design']
-  }, { reviewer: 'backend' });
-
-  pr.submitReview('T-031', 'backend', {
-    comments: [
-      { severity: 'blocker', message: 'Bug 1' },
-      { severity: 'blocker', message: 'Bug 2' }
-    ]
-  });
-
-  // Fix one blocker
-  pr.respondToComment('T-031', 0, 'Fixed', 'fixed');
-
-  const status = pr.getReviewStatus('T-031');
-  assert.strictEqual(status.unresolved_blockers, 1);
-});
-
-// --- listReviews ---
-
-test('listReviews returns all reviews', () => {
-  const pr = freshModule();
-  pr.requestReview('T-040', 'frontend', {
-    files_changed: ['a.js'], lines_added: 100, areas: ['api_design']
-  }, { reviewer: 'backend' });
-  pr.requestReview('T-041', 'backend', {
-    files_changed: ['b.js'], lines_added: 100, areas: ['styling']
-  }, { reviewer: 'frontend' });
-
-  const reviews = pr.listReviews();
-  assert.strictEqual(reviews.length, 2);
-});
-
-test('listReviews filters by status', () => {
-  const pr = freshModule();
-  pr.requestReview('T-050', 'frontend', {
-    files_changed: ['a.js'], lines_added: 100, areas: ['api_design']
-  }, { reviewer: 'backend' });
-  pr.submitReview('T-050', 'backend', { comments: [] });
-
-  pr.requestReview('T-051', 'frontend', {
-    files_changed: ['b.js'], lines_added: 100, areas: ['styling']
-  }, { reviewer: 'review' });
-
-  const approved = pr.listReviews(pr.REVIEW_STATUS.APPROVED);
-  assert.strictEqual(approved.length, 1);
-
-  const pending = pr.listReviews(pr.REVIEW_STATUS.PENDING);
-  assert.strictEqual(pending.length, 1);
-});
-
-// --- Soul learning ---
-
-test('submitReview writes lessons to both reviewer and author souls', () => {
+test('learnFromReview writes lessons to author soul', () => {
   const pr = freshModule();
   const souls = freshSouls();
   souls.initializeSoul('frontend');
   souls.initializeSoul('backend');
 
-  pr.requestReview('T-060', 'frontend', {
-    files_changed: ['src/api.js'],
-    lines_added: 100,
-    areas: ['api_design']
-  }, { reviewer: 'backend' });
-
-  pr.submitReview('T-060', 'backend', {
-    comments: [
-      { severity: 'blocker', message: 'Missing auth check' },
-      { severity: 'warning', message: 'Consider rate limiting' }
-    ]
+  pr.executeReview('T-030', TODO_DIFF, {
+    authorRole: 'frontend', reviewerRole: 'backend'
   });
 
-  // Reviewer should have a lesson about this review
-  const reviewerSoul = souls.loadSoul('backend');
-  assert.ok(reviewerSoul.lessons_learned.some(l => l.lesson.includes('T-060')));
+  const result = pr.learnFromReview('T-030');
+  assert.ok(result.author_updated);
 
-  // Author should have a lesson about the feedback
   const authorSoul = souls.loadSoul('frontend');
-  assert.ok(authorSoul.lessons_learned.some(l => l.lesson.includes('T-060')));
+  assert.ok(authorSoul.lessons_learned.some(l => l.lesson.includes('T-030')));
 });
 
-// --- Praise ---
-
-test('submitReview tracks praise comments', () => {
+test('learnFromReview adds review expertise to reviewer soul', () => {
   const pr = freshModule();
-  pr.requestReview('T-070', 'frontend', {
-    files_changed: ['src/utils.js'],
-    lines_added: 100,
-    areas: ['api_design']
-  }, { reviewer: 'backend' });
+  const souls = freshSouls();
+  souls.initializeSoul('frontend');
+  souls.initializeSoul('backend');
 
-  const result = pr.submitReview('T-070', 'backend', {
-    comments: [
-      { severity: 'praise', message: 'Excellent error handling pattern' }
-    ]
+  pr.executeReview('T-031', TODO_DIFF, {
+    authorRole: 'frontend', reviewerRole: 'backend'
   });
 
-  assert.strictEqual(result.praise, 1);
-  assert.strictEqual(result.status, pr.REVIEW_STATUS.APPROVED);
+  pr.learnFromReview('T-031');
+
+  const reviewerSoul = souls.loadSoul('backend');
+  assert.ok(reviewerSoul.expertise.some(e => e.includes('review')));
+});
+
+test('learnFromReview returns false for missing review', () => {
+  const pr = freshModule();
+  const result = pr.learnFromReview('T-nonexistent');
+  assert.strictEqual(result.author_updated, false);
+  assert.strictEqual(result.reviewer_updated, false);
+});
+
+// --- getReviewHistory ---
+
+test('getReviewHistory returns reviews by author', () => {
+  const pr = freshModule();
+  pr.executeReview('T-040', SMALL_DIFF, { authorRole: 'frontend', reviewerRole: 'backend' });
+  pr.executeReview('T-041', SMALL_DIFF, { authorRole: 'frontend', reviewerRole: 'testing' });
+  pr.executeReview('T-042', SMALL_DIFF, { authorRole: 'backend', reviewerRole: 'frontend' });
+
+  const history = pr.getReviewHistory('frontend');
+  assert.strictEqual(history.length, 2); // T-040 and T-041
+});
+
+test('getReviewHistory returns reviews as reviewer', () => {
+  const pr = freshModule();
+  pr.executeReview('T-050', SMALL_DIFF, { authorRole: 'frontend', reviewerRole: 'backend' });
+  pr.executeReview('T-051', SMALL_DIFF, { authorRole: 'testing', reviewerRole: 'backend' });
+
+  const history = pr.getReviewHistory('backend', { asReviewer: true });
+  assert.strictEqual(history.length, 2);
+});
+
+test('getReviewHistory respects limit', () => {
+  const pr = freshModule();
+  for (let i = 0; i < 5; i++) {
+    pr.executeReview(`T-06${i}`, SMALL_DIFF, { authorRole: 'frontend', reviewerRole: 'backend' });
+  }
+
+  const history = pr.getReviewHistory('frontend', { limit: 3 });
+  assert.strictEqual(history.length, 3);
+});
+
+test('getReviewHistory returns empty for no reviews', () => {
+  const pr = freshModule();
+  assert.deepStrictEqual(pr.getReviewHistory('frontend'), []);
+});
+
+// --- getReviewStats ---
+
+test('getReviewStats counts approvals and rejections', () => {
+  const pr = freshModule();
+  pr.executeReview('T-070', SMALL_DIFF, { authorRole: 'frontend', reviewerRole: 'backend' });
+  pr.executeReview('T-071', TODO_DIFF, { authorRole: 'frontend', reviewerRole: 'backend' });
+
+  const stats = pr.getReviewStats('frontend');
+  assert.strictEqual(stats.as_author.total, 2);
+});
+
+test('getReviewStats returns zeros for no reviews', () => {
+  const pr = freshModule();
+  const stats = pr.getReviewStats('frontend');
+  assert.strictEqual(stats.as_author.total, 0);
+  assert.strictEqual(stats.as_reviewer.total, 0);
 });
 
 // ============================================================================
