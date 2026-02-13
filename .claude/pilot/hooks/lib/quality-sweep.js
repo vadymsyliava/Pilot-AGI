@@ -13,14 +13,95 @@ const SCORES_FILE = '.claude/pilot/registry/quality-scores.json';
 const SWEEP_LOG = '.claude/pilot/registry/sweep-log.jsonl';
 
 // =============================================================================
+// TYPES (JSDoc)
+// =============================================================================
+
+/**
+ * @typedef {object} SweepConfig
+ * @property {string} [projectRoot] - Root directory to scan (default: cwd)
+ * @property {string[]} [changedFiles] - Files changed in the merge
+ */
+
+/**
+ * @typedef {object} QualityScores
+ * @property {number} duplicates - Duplicate code score (0-1, 1 = no duplicates)
+ * @property {number} dead_code - Dead code score (0-1, 1 = no dead code)
+ * @property {number} naming - Naming consistency score (0-1, 1 = fully consistent)
+ * @property {number} patterns - Pattern compliance score (0-1, 1 = no conflicts)
+ * @property {number} overall - Weighted overall score (0-1)
+ */
+
+/**
+ * @typedef {object} SweepIssue
+ * @property {'duplicate_function'|'naming_inconsistency'|'pattern_conflict'|'dead_code'} type
+ * @property {'warning'|'info'|'error'} severity
+ * @property {string} description - Human-readable description of the issue
+ */
+
+/**
+ * @typedef {object} SweepResult
+ * @property {string} timestamp - ISO 8601 timestamp of the sweep
+ * @property {QualityScores} scores - Quality scores across all dimensions
+ * @property {SweepIssue[]} issues - Issues detected during the sweep
+ * @property {number} issue_count - Total number of issues found
+ * @property {string[]} changed_files - Files that triggered this sweep
+ */
+
+/**
+ * @typedef {object} ScoreHistoryEntry
+ * @property {string} timestamp - ISO 8601 timestamp
+ * @property {QualityScores} scores - Quality scores at that point
+ * @property {number} issue_count - Number of issues found
+ */
+
+/**
+ * @typedef {object} ScoreChange
+ * @property {string} metric - Score dimension that changed
+ * @property {number} previous - Previous score value
+ * @property {number} current - Current score value
+ * @property {number} diff - Difference (current - previous)
+ * @property {'improved'|'regressed'} direction - Direction of change
+ */
+
+/**
+ * @typedef {object} ComparisonResult
+ * @property {boolean} regressed - Whether any metric regressed
+ * @property {boolean} improved - Whether any metric improved
+ * @property {ScoreChange[]} changes - List of changed metrics
+ */
+
+/**
+ * @typedef {object} FollowUpTask
+ * @property {string} title - Task title
+ * @property {string} description - Markdown list of issue descriptions
+ * @property {'quality_followup'} type - Always quality_followup
+ * @property {number} priority - Priority level (2 for warnings, 3 for info)
+ * @property {number} issue_count - Number of issues in this group
+ * @property {'quality_sweep'} source - Always quality_sweep
+ */
+
+/**
+ * @typedef {object} TrendEntry
+ * @property {string} timestamp - ISO 8601 timestamp
+ * @property {number} overall - Overall quality score at that point
+ * @property {number} issue_count - Number of issues at that point
+ */
+
+/**
+ * @typedef {object} TrendResult
+ * @property {boolean} trending_down - Whether quality is declining (>5% drop)
+ * @property {number} decline_amount - Amount of decline (0 if not declining)
+ */
+
+// =============================================================================
 // QUALITY SCORE CALCULATION
 // =============================================================================
 
 /**
  * Run a full quality sweep on the project.
  *
- * @param {object} opts - { projectRoot?, changedFiles? }
- * @returns {object} Sweep result with scores
+ * @param {SweepConfig} opts - Sweep configuration
+ * @returns {SweepResult} Sweep result with scores
  */
 function runSweep(opts) {
   opts = opts || {};
@@ -129,8 +210,8 @@ function runSweep(opts) {
 /**
  * Compare current sweep with previous to detect regressions.
  *
- * @param {object} current - Current sweep result
- * @returns {{ regressed, improved, changes }}
+ * @param {SweepResult} current - Current sweep result
+ * @returns {ComparisonResult} Comparison with previous sweep
  */
 function compareWithPrevious(current) {
   const history = loadScoreHistory();
@@ -168,8 +249,8 @@ function compareWithPrevious(current) {
 /**
  * Generate follow-up tasks from sweep issues.
  *
- * @param {object} sweepResult - Output from runSweep
- * @returns {Array<{ title, description, type, priority }>}
+ * @param {SweepResult} sweepResult - Output from runSweep
+ * @returns {FollowUpTask[]} Follow-up tasks grouped by issue type
  */
 function generateFollowUpTasks(sweepResult) {
   if (!sweepResult || !sweepResult.issues) return [];
@@ -208,7 +289,7 @@ function generateFollowUpTasks(sweepResult) {
  * Get quality score trend for the last N sweeps.
  *
  * @param {number} count - Number of entries
- * @returns {Array<{ timestamp, overall, issue_count }>}
+ * @returns {TrendEntry[]} Recent trend entries
  */
 function getTrend(count) {
   count = count || 10;
@@ -224,7 +305,7 @@ function getTrend(count) {
  * Check if quality is trending down over N sweeps.
  *
  * @param {number} windowSize - Number of sweeps to consider
- * @returns {{ trending_down, decline_amount }}
+ * @returns {TrendResult} Trend analysis result
  */
 function checkTrend(windowSize) {
   windowSize = windowSize || 5;
