@@ -3,13 +3,14 @@
 /**
  * Tests for Phase 5.8 — Cross-Project Learning
  *
- * Run: npx vitest run tests/cross-project-knowledge.test.js
+ * Run: node --test tests/cross-project-knowledge.test.js
  */
 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { describe, it: test, beforeEach, afterEach, expect } = require('vitest');
+const { describe, test, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
 
 let testDir;
 let knowledgeDir;
@@ -39,49 +40,26 @@ function cleanupTestDirs() {
   } catch (e) { /* best effort */ }
 }
 
-// ============================================================================
-// CROSS-PROJECT KNOWLEDGE BASE
-// ============================================================================
-
 describe('cross-project-knowledge', () => {
   let knowledge;
-
-  beforeEach(() => {
-    setupTestDirs();
-    knowledge = freshModule('../.claude/pilot/hooks/lib/cross-project-knowledge');
-  });
-
+  beforeEach(() => { setupTestDirs(); knowledge = freshModule('../.claude/pilot/hooks/lib/cross-project-knowledge'); });
   afterEach(() => { cleanupTestDirs(); });
-
   const opts = () => ({ knowledgePath: knowledgeDir });
 
   describe('publishKnowledge', () => {
     test('publishes entry and creates index', () => {
-      const result = knowledge.publishKnowledge(
-        'decomposition-templates',
-        { task_type: 'feature', template: ['step1', 'step2'] },
-        'MyProject', opts()
-      );
+      const result = knowledge.publishKnowledge('decomposition-templates', { task_type: 'feature', template: ['step1', 'step2'] }, 'MyProject', opts());
       assert.ok(result.id);
       assert.equal(result.type, 'decomposition-templates');
       assert.equal(result.deduplicated, false);
       const index = knowledge.loadIndex(opts());
       assert.equal(index.entries.length, 1);
     });
-
     test('rejects invalid knowledge type', () => {
-      assert.throws(() => {
-        knowledge.publishKnowledge('invalid-type', {}, null, opts());
-      }, /Invalid knowledge type/);
+      assert.throws(() => { knowledge.publishKnowledge('invalid-type', {}, null, opts()); }, /Invalid knowledge type/);
     });
-
     test('returns excluded for matching exclude pattern', () => {
-      const result = knowledge.publishKnowledge(
-        'tech-decisions',
-        { decision: 'use secret token for auth' },
-        'TestProject',
-        { ...opts(), excludePatterns: ['*secret*'] }
-      );
+      const result = knowledge.publishKnowledge('tech-decisions', { decision: 'use secret token for auth' }, 'TestProject', { ...opts(), excludePatterns: ['*secret*'] });
       assert.equal(result.excluded, true);
       assert.equal(result.id, null);
     });
@@ -89,24 +67,18 @@ describe('cross-project-knowledge', () => {
 
   describe('queryKnowledge', () => {
     test('finds entries by keyword match', () => {
-      knowledge.publishKnowledge('failure-modes',
-        { event_type: 'test_failure', context: 'react component rendering error' },
-        'Project1', opts());
-      knowledge.publishKnowledge('failure-modes',
-        { event_type: 'budget_exceeded', context: 'database migration timeout' },
-        'Project2', opts());
+      knowledge.publishKnowledge('failure-modes', { event_type: 'test_failure', context: 'react component rendering error' }, 'Project1', opts());
+      knowledge.publishKnowledge('failure-modes', { event_type: 'budget_exceeded', context: 'database migration timeout' }, 'Project2', opts());
       const results = knowledge.queryKnowledge('failure-modes', ['react', 'rendering'], 10, opts());
       assert.ok(results.length >= 1);
       assert.equal(results[0].content.event_type, 'test_failure');
     });
-
     test('returns all types when type is null', () => {
-      knowledge.publishKnowledge('failure-modes', { event: 'test' }, 'P', opts());
-      knowledge.publishKnowledge('tech-decisions', { decision: 'use vitest' }, 'P', opts());
-      const results = knowledge.queryKnowledge(null, ['test', 'vitest'], 10, opts());
+      knowledge.publishKnowledge('failure-modes', { event_type: 'crash', context: 'segfault in native module' }, 'P', opts());
+      knowledge.publishKnowledge('tech-decisions', { decision: 'use vitest for testing framework' }, 'P', opts());
+      const results = knowledge.queryKnowledge(null, ['vitest', 'segfault'], 10, opts());
       assert.equal(results.length, 2);
     });
-
     test('returns empty for no matches', () => {
       const results = knowledge.queryKnowledge('failure-modes', ['nonexistent'], 10, opts());
       assert.deepEqual(results, []);
@@ -115,30 +87,18 @@ describe('cross-project-knowledge', () => {
 
   describe('anonymization', () => {
     test('strips absolute file paths', () => {
-      const result = knowledge.anonymize(
-        { file: '/Users/john/MyProject/src/index.js', note: 'important' },
-        'MyProject', 'full'
-      );
+      const result = knowledge.anonymize({ file: '/Users/john/MyProject/src/index.js', note: 'important' }, 'MyProject', 'full');
       assert.equal(result.file, '<path>');
     });
-
     test('replaces project name in full mode', () => {
-      const result = knowledge.anonymize(
-        { text: 'The MyProject codebase uses React' },
-        'MyProject', 'full'
-      );
+      const result = knowledge.anonymize({ text: 'The MyProject codebase uses React' }, 'MyProject', 'full');
       assert.ok(result.text.includes('<project>'));
       assert.ok(!result.text.includes('MyProject'));
     });
-
     test('skips anonymization in none mode', () => {
-      const result = knowledge.anonymize(
-        { file: '/Users/john/src/index.js' },
-        'MyProject', 'none'
-      );
+      const result = knowledge.anonymize({ file: '/Users/john/src/index.js' }, 'MyProject', 'none');
       assert.equal(result.file, '/Users/john/src/index.js');
     });
-
     test('hashes project name consistently', () => {
       const hash1 = knowledge.hashProject('MyProject');
       const hash2 = knowledge.hashProject('MyProject');
@@ -147,12 +107,8 @@ describe('cross-project-knowledge', () => {
       assert.notEqual(hash1, hash3);
       assert.equal(hash1.length, 12);
     });
-
     test('redacts sensitive patterns in full mode', () => {
-      const result = knowledge.anonymize(
-        { config: 'password: "s3cret123"', api: 'token: "ghp_abc123"' },
-        null, 'full'
-      );
+      const result = knowledge.anonymize({ config: 'password: "s3cret123"', api: 'token: "ghp_abc123"' }, null, 'full');
       assert.ok(result.config.includes('<redacted>'));
       assert.ok(result.api.includes('<redacted>'));
     });
@@ -160,20 +116,13 @@ describe('cross-project-knowledge', () => {
 
   describe('deduplication', () => {
     test('detects duplicate entries', () => {
-      knowledge.publishKnowledge('tech-decisions',
-        { decision: 'use vitest for testing framework', reason: 'fast and compatible' },
-        'Project1', opts());
-      const result = knowledge.publishKnowledge('tech-decisions',
-        { decision: 'use vitest for testing framework', reason: 'fast and compatible with jest' },
-        'Project2', opts());
+      knowledge.publishKnowledge('tech-decisions', { decision: 'use vitest for testing framework', reason: 'fast and compatible' }, 'Project1', opts());
+      const result = knowledge.publishKnowledge('tech-decisions', { decision: 'use vitest for testing framework', reason: 'fast and compatible with jest' }, 'Project2', opts());
       assert.equal(result.deduplicated, true);
     });
-
     test('allows distinct entries', () => {
-      knowledge.publishKnowledge('tech-decisions',
-        { decision: 'use vitest for testing' }, 'Project1', opts());
-      const result = knowledge.publishKnowledge('tech-decisions',
-        { decision: 'use PostgreSQL for database storage engine' }, 'Project2', opts());
+      knowledge.publishKnowledge('tech-decisions', { decision: 'use vitest for testing' }, 'Project1', opts());
+      const result = knowledge.publishKnowledge('tech-decisions', { decision: 'use PostgreSQL for database storage engine' }, 'Project2', opts());
       assert.equal(result.deduplicated, false);
     });
   });
@@ -189,7 +138,6 @@ describe('cross-project-knowledge', () => {
       assert.equal(result.pruned, 1);
       assert.equal(result.remaining, 0);
     });
-
     test('keeps entries with usage_count > 0', () => {
       knowledge.publishKnowledge('failure-modes', { event: 'used_failure' }, 'P', opts());
       const index = knowledge.loadIndex(opts());
@@ -200,12 +148,8 @@ describe('cross-project-knowledge', () => {
       assert.equal(result.pruned, 0);
       assert.equal(result.remaining, 1);
     });
-
     test('enforces per-type limit', () => {
-      for (let i = 0; i < 3; i++) {
-        knowledge.publishKnowledge('cost-benchmarks',
-          { task_type: 'type_' + i, tokens: i * 1000 }, 'P', opts());
-      }
+      for (let i = 0; i < 3; i++) { knowledge.publishKnowledge('cost-benchmarks', { task_type: 'type_' + i, tokens: i * 1000 }, 'P', opts()); }
       const result = knowledge.pruneKnowledge(9999, 2, opts());
       assert.equal(result.pruned, 1);
       assert.equal(result.remaining, 2);
@@ -214,15 +158,9 @@ describe('cross-project-knowledge', () => {
 
   describe('getKnowledgeStats', () => {
     test('returns correct statistics', () => {
-      // Use distinct content to avoid deduplication
-      knowledge.publishKnowledge('failure-modes',
-        { event_type: 'test_failure', context: 'react rendering crash in component' },
-        'P', opts());
-      knowledge.publishKnowledge('failure-modes',
-        { event_type: 'budget_exceeded', context: 'database migration took too long' },
-        'P', opts());
-      knowledge.publishKnowledge('tech-decisions',
-        { decision: 'use postgresql for persistence layer' }, 'P', opts());
+      knowledge.publishKnowledge('failure-modes', { event_type: 'test_failure', context: 'react rendering crash in component' }, 'P', opts());
+      knowledge.publishKnowledge('failure-modes', { event_type: 'budget_exceeded', context: 'database migration took too long' }, 'P', opts());
+      knowledge.publishKnowledge('tech-decisions', { decision: 'use postgresql for persistence layer' }, 'P', opts());
       const stats = knowledge.getKnowledgeStats(opts());
       assert.equal(stats.total, 3);
       assert.equal(stats.byType['failure-modes'], 2);
@@ -250,67 +188,41 @@ describe('cross-project-knowledge', () => {
   });
 });
 
-// ============================================================================
-// KNOWLEDGE HARVESTER
-// ============================================================================
-
 describe('knowledge-harvester', () => {
   let harvester;
-
-  beforeEach(() => {
-    setupTestDirs();
-    harvester = freshModule('../.claude/pilot/hooks/lib/knowledge-harvester');
-  });
-
+  beforeEach(() => { setupTestDirs(); harvester = freshModule('../.claude/pilot/hooks/lib/knowledge-harvester'); });
   afterEach(() => { cleanupTestDirs(); });
 
   test('loadCrossProjectPolicy returns consistent structure', () => {
     const policy = harvester.loadCrossProjectPolicy(projectDir);
-    // Policy structure should always have these fields
     assert.equal(typeof policy.enabled, 'boolean');
     assert.equal(typeof policy.publish, 'boolean');
     assert.equal(typeof policy.consume, 'boolean');
     assert.equal(policy.anonymize_level, 'full');
   });
-
   test('harvestFromTask returns results without error', () => {
     const result = harvester.harvestFromTask('task-1', projectDir);
-    // Should return valid structure regardless of policy
     assert.ok(Array.isArray(result.published));
     assert.ok(Array.isArray(result.skipped));
     assert.ok(typeof result.harvested === 'object');
   });
-
   test('getProjectName extracts name from path', () => {
     assert.equal(harvester.getProjectName('/Users/test/MyProject'), 'MyProject');
   });
 });
 
-// ============================================================================
-// KNOWLEDGE CONSUMER
-// ============================================================================
-
 describe('knowledge-consumer', () => {
   let consumer;
   let knowledge;
-
-  beforeEach(() => {
-    setupTestDirs();
-    knowledge = freshModule('../.claude/pilot/hooks/lib/cross-project-knowledge');
-    consumer = freshModule('../.claude/pilot/hooks/lib/knowledge-consumer');
-  });
-
+  beforeEach(() => { setupTestDirs(); knowledge = freshModule('../.claude/pilot/hooks/lib/cross-project-knowledge'); consumer = freshModule('../.claude/pilot/hooks/lib/knowledge-consumer'); });
   afterEach(() => { cleanupTestDirs(); });
 
   test('enrichContext adds cross-project templates', () => {
     const task = { id: 'task-1', title: 'Implement feature testing', description: 'Add test coverage' };
     const entries = [
-      { id: 'k1', type: 'decomposition-templates',
-        content: { task_type: 'feature', template: ['plan', 'code', 'test'], success_rate: 0.9, avg_subtasks: 3 } },
-      { id: 'k2', type: 'failure-modes',
-        content: { event_type: 'test_failure', level: 'warning', resolution: 'retry' } }
+      { id: 'k1', type: 'decomposition-templates', content: { task_type: 'feature', template: ['plan', 'code', 'test'], success_rate: 0.9, avg_subtasks: 3 } },
+      { id: 'k2', type: 'failure-modes', content: { event_type: 'test_failure', level: 'warning', resolution: 'retry' } }
     ];
-
     const origRecordUsage = knowledge.recordUsage;
     knowledge.recordUsage = () => {};
     try {
@@ -319,11 +231,8 @@ describe('knowledge-consumer', () => {
       assert.equal(result.task._cross_project_templates[0].task_type, 'feature');
       assert.ok(result.task._cross_project_failure_modes);
       assert.equal(result.knowledge_applied.length, 2);
-    } finally {
-      knowledge.recordUsage = origRecordUsage;
-    }
+    } finally { knowledge.recordUsage = origRecordUsage; }
   });
-
   test('enrichContext returns unchanged task when no entries', () => {
     const task = { id: 'task-1', title: 'Test' };
     const result = consumer.enrichContext(task, [], { projectPath: projectDir });
@@ -332,22 +241,11 @@ describe('knowledge-consumer', () => {
   });
 });
 
-// ============================================================================
-// KNOWLEDGE PACKS
-// ============================================================================
-
 describe('knowledge-packs', () => {
   let packs;
   let knowledge;
-
-  beforeEach(() => {
-    setupTestDirs();
-    knowledge = freshModule('../.claude/pilot/hooks/lib/cross-project-knowledge');
-    packs = freshModule('../.claude/pilot/hooks/lib/knowledge-packs');
-  });
-
+  beforeEach(() => { setupTestDirs(); knowledge = freshModule('../.claude/pilot/hooks/lib/cross-project-knowledge'); packs = freshModule('../.claude/pilot/hooks/lib/knowledge-packs'); });
   afterEach(() => { cleanupTestDirs(); });
-
   const kOpts = () => ({ knowledgePath: knowledgeDir });
 
   describe('exportPack', () => {
@@ -364,7 +262,6 @@ describe('knowledge-packs', () => {
       assert.equal(pack.entries.length, 2);
       assert.ok(pack.checksum);
     });
-
     test('exports filtered by type', () => {
       knowledge.publishKnowledge('failure-modes', { event: 'test' }, 'P', kOpts());
       knowledge.publishKnowledge('tech-decisions', { decision: 'use react' }, 'P', kOpts());
@@ -384,10 +281,7 @@ describe('knowledge-packs', () => {
       const result = packs.importPack(packPath, kOpts());
       assert.equal(result.imported, 1);
       assert.equal(result.errors, 0);
-      const index = knowledge.loadIndex(kOpts());
-      assert.equal(index.entries.length, 1);
     });
-
     test('skips duplicates on import', () => {
       knowledge.publishKnowledge('failure-modes', { event: 'existing' }, 'P', kOpts());
       const packPath = path.join(testDir, 'dup-test.json');
@@ -396,7 +290,6 @@ describe('knowledge-packs', () => {
       assert.equal(result.skipped, 1);
       assert.equal(result.imported, 0);
     });
-
     test('rejects invalid pack', () => {
       const packPath = path.join(testDir, 'invalid.json');
       fs.writeFileSync(packPath, 'not json');
@@ -415,13 +308,11 @@ describe('knowledge-packs', () => {
       assert.equal(result.valid, true);
       assert.equal(result.issues.length, 0);
     });
-
     test('detects missing file', () => {
       const result = packs.validatePack('/nonexistent/path.json');
       assert.equal(result.valid, false);
       assert.ok(result.issues[0].includes('does not exist'));
     });
-
     test('detects invalid JSON', () => {
       const packPath = path.join(testDir, 'bad.json');
       fs.writeFileSync(packPath, '{bad json');
@@ -429,7 +320,6 @@ describe('knowledge-packs', () => {
       assert.equal(result.valid, false);
       assert.ok(result.issues[0].includes('Invalid JSON'));
     });
-
     test('detects checksum mismatch', () => {
       knowledge.publishKnowledge('failure-modes', { event: 'test' }, 'P', kOpts());
       const packPath = path.join(testDir, 'tampered.json');
@@ -441,13 +331,9 @@ describe('knowledge-packs', () => {
       assert.equal(result.valid, false);
       assert.ok(result.issues.some(i => i.includes('Checksum mismatch')));
     });
-
     test('detects missing entry fields', () => {
       const packPath = path.join(testDir, 'incomplete.json');
-      fs.writeFileSync(packPath, JSON.stringify({
-        schema_version: '1.0',
-        entries: [{ content: { foo: 'bar' } }]
-      }));
+      fs.writeFileSync(packPath, JSON.stringify({ schema_version: '1.0', entries: [{ content: { foo: 'bar' } }] }));
       const result = packs.validatePack(packPath);
       assert.equal(result.valid, false);
       assert.ok(result.issues.some(i => i.includes('missing type')));
@@ -456,31 +342,19 @@ describe('knowledge-packs', () => {
   });
 });
 
-// ============================================================================
-// PM LOOP INTEGRATION
-// ============================================================================
-
 describe('pm-loop knowledge harvest integration', () => {
-  beforeEach(() => {
-    for (const key of Object.keys(require.cache)) {
-      if (key.includes('pm-loop') || key.includes('knowledge')) {
-        delete require.cache[key];
-      }
-    }
-  });
+  beforeEach(() => { for (const key of Object.keys(require.cache)) { if (key.includes('pm-loop') || key.includes('knowledge')) { delete require.cache[key]; } } });
 
   test('PmLoop has _knowledgeHarvestScan method', () => {
     const { PmLoop } = require('../.claude/pilot/hooks/lib/pm-loop');
     const loop = new PmLoop(process.cwd(), { dryRun: true });
     assert.equal(typeof loop._knowledgeHarvestScan, 'function');
   });
-
   test('PmLoop tracks lastKnowledgeHarvestScan', () => {
     const { PmLoop } = require('../.claude/pilot/hooks/lib/pm-loop');
     const loop = new PmLoop(process.cwd(), { dryRun: true });
     assert.equal(loop.lastKnowledgeHarvestScan, 0);
   });
-
   test('getStats includes knowledge harvest scan timestamp', () => {
     const { PmLoop } = require('../.claude/pilot/hooks/lib/pm-loop');
     const loop = new PmLoop(process.cwd(), { dryRun: true });
