@@ -812,9 +812,111 @@ Wave 6: 7.9  (needs stable soul format)
 
 ---
 
+## Milestone 8: Autonomous Code Quality & Self-Healing
+
+**Goal**: Fully automated, self-healing, self-improving system. No duplicate code, no legacy hacks, no inconsistent naming — one source of truth for pages, components, APIs, and database collections across every project.
+**Status**: In Progress
+**Target**: v7.0.0
+
+### Wave 1: Auto-Wire M7 (make soul features automatic)
+
+#### Phase 8.1: Soul Auto-Lifecycle
+- Auto-restore soul on session start, auto-backup on task close
+- Auto-snapshot before mutations, wire into hooks
+- AC: Soul survives restarts without manual intervention
+
+#### Phase 8.2: Auto Self-Assessment
+- Auto-record metrics on task close, auto-sync skills to soul
+- Surface skill gaps in agent context on session start
+- AC: Agent metrics update automatically
+
+#### Phase 8.3: Auto Peer Review Gate
+- Block merge without peer review (configurable)
+- Auto-select reviewer, auto-lightweight for small diffs
+- AC: No merge without recorded peer review
+
+### Wave 2: Project Registry — Single Source of Truth
+
+#### Phase 8.4: Project Registry Core
+- Central registry: pages.json, components.json, apis.json, database.json
+- CRUD + lookup + duplicate detection APIs
+- AC: Registry exists, duplicates blocked on register
+
+#### Phase 8.5: Auto-Discovery & Registration
+- Codebase scanner: pages, components, APIs, DB collections
+- Framework detection (Next.js, React Router, Express, Prisma, etc.)
+- Incremental update on file create/edit
+- AC: Scanner produces accurate registry from existing project
+
+#### Phase 8.6: Registry Enforcement in Hooks
+- Pre-tool-use check before new file creation
+- Agent context injection with registry summary
+- AC: Duplicate page/component/API creation blocked
+
+### Wave 3: Code Quality Enforcement
+
+#### Phase 8.7: Canonical Pattern Registry
+- Project-specific pattern definitions, auto-learn from consistent usage
+- Pattern categories: naming, file structure, imports, error handling
+- AC: Patterns registered, conflicts detected
+
+#### Phase 8.8: Duplicate Code Detection
+- Pre-edit scan for similar functions, AST-level similarity
+- Cross-file detection, suggest existing implementations
+- AC: Duplicate function creation caught with suggestion
+
+#### Phase 8.9: Dead Code & Legacy Detector
+- Unused exports, backward-compat shims, stale TODOs
+- Integration with quality score
+- AC: Dead code detected and reported
+
+### Wave 4: Self-Healing
+
+#### Phase 8.10: Auto-Refactor on Detection
+- Generate plans to consolidate duplicates, remove dead code, fix naming
+- Plan approval required, atomic commits
+- AC: Fixes proposed, executed after approval
+
+#### Phase 8.11: Naming Consistency Enforcer
+- Cross-layer consistency: DB → API → Component → Page
+- Name registry mapping concepts to canonical names
+- AC: Naming inconsistencies detected and flagged
+
+#### Phase 8.12: Post-Merge Quality Sweep
+- PM daemon runs quality scan after every merge
+- Quality score tracking, auto-create follow-up tasks
+- AC: Every merge triggers scan, issues become tasks
+
+### Wave 5: Self-Improving Quality
+
+#### Phase 8.13: Quality Metrics → Soul Feedback
+- Quality scores feed into agent self-assessment and soul
+- AC: Quality metrics visible in soul, affect decisions
+
+#### Phase 8.14: Pattern Evolution
+- Superior patterns auto-propagate, old patterns sunset
+- Migration plans with rollback support
+- AC: Better patterns spread, worse patterns retire
+
+#### Phase 8.15: Quality Regression Prevention
+- Quality score floor blocks regressing commits
+- Per-area thresholds, trend alerts
+- AC: Quality only goes up or stays stable
+
+### Dependencies
+```
+Wave 1: 8.1, 8.2, 8.3 (independent, wire existing M7 code)
+Wave 2: 8.4 → 8.5 → 8.6 (registry build-up)
+Wave 3: 8.7, 8.8, 8.9 (independent quality checks, need 8.4 for registry)
+Wave 4: 8.10 (needs 8.8+8.9), 8.11 (needs 8.4+8.6), 8.12 (needs 8.8+8.9)
+Wave 5: 8.13 (needs 8.2+8.7), 8.14 (needs 8.7), 8.15 (needs 8.12+8.13)
+```
+
+---
+
 ## Future Milestones
-- Milestone 8: Cloud Sync — remote agent coordination, team-based workflows, CI/CD integration
-- Milestone 9: Marketplace — shareable agent configs, design systems, governance policies, soul templates
+- Milestone 9: Cloud Sync — remote agent coordination, team-based workflows, CI/CD integration
+- Milestone 10: Marketplace — shareable agent configs, design systems, governance policies, soul templates
 
 ---
 
