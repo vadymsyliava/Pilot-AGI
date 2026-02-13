@@ -1030,7 +1030,7 @@ terminal_orchestration:
   enabled: true
 
   # Provider: 'auto' (iTerm2 → AppleScript), 'iterm2', 'applescript'
-  provider: 'auto'
+  provider: 'iterm2'
 
   # How to spawn agent tabs: 'tab' (recommended), 'window', 'split'
   spawn_mode: 'tab'
