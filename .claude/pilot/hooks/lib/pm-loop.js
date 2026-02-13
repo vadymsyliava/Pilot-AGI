@@ -53,6 +53,9 @@ const PROGRESS_SCAN_INTERVAL_MS = 60000;  // 60s between progress/artifact scans
 const OVERNIGHT_SCAN_INTERVAL_MS = 60000; // 60s between overnight run checks (Phase 4.8)
 const APPROVAL_SCAN_INTERVAL_MS = 120000; // 2min between approval confidence scans (Phase 5.1)
 const TELEGRAM_SCAN_INTERVAL_MS = 10000;  // 10s between telegram inbox scans (Phase 6.6)
+const POOL_SCALING_SCAN_INTERVAL_MS = 60000; // 60s between pool scaling evaluations (Phase 5.4)
+const DRIFT_PREVENTION_SCAN_INTERVAL_MS = 60000; // 60s between drift prevention aggregate scans (Phase 5.6)
+const DECOMP_LEARNING_SCAN_INTERVAL_MS = 300000; // 5min between decomposition learning scans (Phase 5.5)
 const PRESSURE_NUDGE_THRESHOLD_PCT = 70;  // PM nudges agents above this if no auto-checkpoint
 const MAX_ACTIONS_PER_CYCLE = 10;         // Prevent runaway action storms
 const ACTION_LOG_PATH = '.claude/pilot/state/orchestrator/action-log.jsonl';
@@ -80,6 +83,9 @@ class PmLoop {
     this.lastApprovalScan = 0;
     this.lastTelegramScan = 0;
     this.lastNotificationDigestScan = 0;
+    this.lastPoolScalingScan = 0;
+    this.lastDriftPreventionScan = 0;
+    this.lastDecompLearningScan = 0;
     this._telegramConversations = null; // Lazy-initialized in _telegramScan
     this.actionQueue = [];  // Used by pm-queue.js for persistence
     this.opts = {
@@ -94,6 +100,9 @@ class PmLoop {
       overnightScanIntervalMs: opts.overnightScanIntervalMs || OVERNIGHT_SCAN_INTERVAL_MS,
       approvalScanIntervalMs: opts.approvalScanIntervalMs || APPROVAL_SCAN_INTERVAL_MS,
       telegramScanIntervalMs: opts.telegramScanIntervalMs || TELEGRAM_SCAN_INTERVAL_MS,
+      poolScalingScanIntervalMs: opts.poolScalingScanIntervalMs || POOL_SCALING_SCAN_INTERVAL_MS,
+      driftPreventionScanIntervalMs: opts.driftPreventionScanIntervalMs || DRIFT_PREVENTION_SCAN_INTERVAL_MS,
+      decompLearningScanIntervalMs: opts.decompLearningScanIntervalMs || DECOMP_LEARNING_SCAN_INTERVAL_MS,
       maxActionsPerCycle: opts.maxActionsPerCycle || MAX_ACTIONS_PER_CYCLE,
       dryRun: opts.dryRun || false,
       ...opts
@@ -248,6 +257,27 @@ class PmLoop {
       this.lastTelegramScan = now;
       const telegramResults = this._telegramScan();
       results.push(...telegramResults);
+    }
+
+    // Pool scaling scan (Phase 5.4) — evaluate dynamic pool scaling
+    if (now - this.lastPoolScalingScan >= this.opts.poolScalingScanIntervalMs) {
+      this.lastPoolScalingScan = now;
+      const poolResults = this._poolScalingScan();
+      results.push(...poolResults);
+    }
+
+    // Drift prevention scan (Phase 5.6) — aggregate drift scores across agents
+    if (now - this.lastDriftPreventionScan >= this.opts.driftPreventionScanIntervalMs) {
+      this.lastDriftPreventionScan = now;
+      const driftPreventionResults = this._driftPreventionScan();
+      results.push(...driftPreventionResults);
+    }
+
+    // Decomposition learning scan (Phase 5.5) — finalize completed decompositions
+    if (now - this.lastDecompLearningScan >= this.opts.decompLearningScanIntervalMs) {
+      this.lastDecompLearningScan = now;
+      const decompResults = this._decompositionLearningScan();
+      results.push(...decompResults);
     }
 
     return results;
@@ -1571,8 +1601,214 @@ class PmLoop {
       last_drift_scan: this.lastDriftScan ? new Date(this.lastDriftScan).toISOString() : null,
       last_pressure_scan: this.lastPressureScan ? new Date(this.lastPressureScan).toISOString() : null,
       last_cost_scan: this.lastCostScan ? new Date(this.lastCostScan).toISOString() : null,
-      last_telegram_scan: this.lastTelegramScan ? new Date(this.lastTelegramScan).toISOString() : null
+      last_telegram_scan: this.lastTelegramScan ? new Date(this.lastTelegramScan).toISOString() : null,
+      last_pool_scaling_scan: this.lastPoolScalingScan ? new Date(this.lastPoolScalingScan).toISOString() : null
     };
+  }
+
+  // ==========================================================================
+  // POOL SCALING SCAN (Phase 5.4)
+  // ==========================================================================
+
+  /**
+   * Pool scaling scan: evaluate dynamic pool sizing and record decisions.
+   * Uses pool-autoscaler to determine scale-up/scale-down/hold.
+   */
+  _poolScalingScan() {
+    const results = [];
+
+    try {
+      const poolAutoscaler = require('./pool-autoscaler');
+      const poolState = poolAutoscaler.getPoolState({
+        projectRoot: this.projectRoot,
+        pmSessionId: this.pmSessionId
+      });
+
+      // Track when pending tasks are seen (for cooldown calculation)
+      if (poolState.pending > 0) {
+        poolAutoscaler.markPendingTasksSeen(this.projectRoot);
+      }
+
+      const decision = poolAutoscaler.evaluateScaling(poolState, {
+        projectRoot: this.projectRoot
+      });
+
+      // Record all non-hold decisions and periodic hold checks
+      if (decision.action !== 'hold') {
+        poolAutoscaler.recordScalingDecision({
+          ...decision,
+          poolState
+        }, this.projectRoot);
+
+        this.logAction('pool_scaling', {
+          action: decision.action,
+          reason: decision.reason,
+          target_count: decision.targetCount,
+          pool: poolState
+        });
+
+        results.push({
+          action: 'pool_scaling',
+          scaling_action: decision.action,
+          reason: decision.reason,
+          target_count: decision.targetCount,
+          pool: poolState
+        });
+      }
+    } catch (e) {
+      this.logAction('pool_scaling_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  // ==========================================================================
+  // DRIFT PREVENTION SCAN (Phase 5.6)
+  // ==========================================================================
+
+  /**
+   * Drift prevention scan: aggregate drift prediction scores across all
+   * active agents. Escalate if any agent has persistent drift (>3
+   * consecutive redirections).
+   */
+  _driftPreventionScan() {
+    const results = [];
+
+    try {
+      const driftPredictor = require('./drift-predictor');
+      const driftPolicy = driftPredictor.loadDriftPolicy();
+      if (!driftPolicy.enabled) return results;
+
+      const activeSessions = session.getActiveSessions();
+      const escalation = require('./escalation');
+
+      for (const agent of activeSessions) {
+        const sid = agent.session_id;
+        if (!sid || sid === this.pmSessionId) continue;
+
+        const history = driftPredictor.getDriftHistory(sid);
+        if (history.stats.total === 0) continue;
+
+        const consecutiveRedirects = driftPredictor.getConsecutiveRedirects(sid);
+
+        // Escalate if persistent drift (>3 consecutive divergent predictions)
+        if (consecutiveRedirects > 3) {
+          const taskId = agent.claimed_task;
+
+          this.logAction('drift_prevention_persistent', {
+            agent: sid,
+            task_id: taskId,
+            consecutive_redirects: consecutiveRedirects,
+            stats: history.stats
+          });
+
+          // Trigger escalation for persistent drift
+          const esc = escalation.triggerEscalation(
+            escalation.EVENT_TYPES.DRIFT, sid, taskId,
+            {
+              consecutive_redirects: consecutiveRedirects,
+              drift_stats: history.stats,
+              source: 'drift_prevention_scan'
+            }
+          );
+
+          if (esc.action !== 'noop' && !this.opts.dryRun) {
+            escalation.executeAction(esc.action, {
+              eventType: escalation.EVENT_TYPES.DRIFT,
+              sessionId: sid,
+              taskId,
+              pmSessionId: this.pmSessionId,
+              context: {
+                consecutive_redirects: consecutiveRedirects,
+                source: 'drift_prevention'
+              },
+              dryRun: this.opts.dryRun
+            });
+          }
+
+          results.push({
+            action: 'drift_prevention_scan',
+            agent: sid,
+            consecutive_redirects: consecutiveRedirects,
+            escalation_level: esc.level,
+            stats: history.stats
+          });
+        }
+      }
+
+      // Log aggregate accuracy
+      const accuracy = driftPredictor.getAccuracy();
+      if (accuracy.total_sessions > 0) {
+        this.logAction('drift_prevention_accuracy', accuracy);
+      }
+    } catch (e) {
+      this.logAction('drift_prevention_scan_error', { error: e.message });
+    }
+
+    return results;
+  }
+
+  // ==========================================================================
+  // DECOMPOSITION LEARNING SCAN (Phase 5.5)
+  // ==========================================================================
+
+  /**
+   * Decomposition learning scan: check completed parent tasks and finalize
+   * their decomposition outcomes (record patterns, update sizing).
+   */
+  _decompositionLearningScan() {
+    const results = [];
+
+    try {
+      const decompositionOutcomes = require('./decomposition-outcomes');
+
+      // Scan outcomes dir for tasks with predictions
+      const outcomesDir = path.join(this.projectRoot, decompositionOutcomes.OUTCOMES_DIR);
+      if (!fs.existsSync(outcomesDir)) return results;
+
+      const files = fs.readdirSync(outcomesDir)
+        .filter(f => f.endsWith('.json') && f !== 'sizing.json');
+
+      for (const f of files) {
+        try {
+          const filePath = path.join(outcomesDir, f);
+          const state = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+          if (!state || !state.prediction || state.finalized) continue;
+
+          // Check if all predicted subtasks have outcomes
+          if (decompositionOutcomes.isDecompositionComplete(state.task_id)) {
+            // Finalize: record patterns and update sizing
+            decomposition.finalizeDecomposition(state.task_id);
+
+            // Mark as finalized
+            state.finalized = true;
+            state.finalized_at = new Date().toISOString();
+            const tmpPath = filePath + '.tmp.' + process.pid;
+            fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2));
+            fs.renameSync(tmpPath, filePath);
+
+            this.logAction('decomposition_finalized', {
+              task_id: state.task_id,
+              task_type: state.prediction.task_type,
+              predicted_count: state.prediction.subtask_count,
+              actual_count: Object.keys(state.outcomes || {}).length
+            });
+
+            results.push({
+              action: 'decomposition_learning',
+              task_id: state.task_id,
+              finalized: true
+            });
+          }
+        } catch (e) {
+          // Skip corrupted files
+        }
+      }
+    } catch (e) {
+      this.logAction('decomposition_learning_error', { error: e.message });
+    }
+
+    return results;
   }
 
   // ==========================================================================

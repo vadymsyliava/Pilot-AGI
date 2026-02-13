@@ -576,6 +576,24 @@ orchestrator:
         auto_deescalate: false      # Agent must actively recover
 
 # =============================================================================
+# DECOMPOSITION FEEDBACK LOOP (Phase 5.5)
+# Self-improving task decomposition via outcome tracking and pattern matching
+# =============================================================================
+decomposition:
+  feedback_loop:
+    # Master switch for feedback loop
+    enabled: true
+
+    # Minimum pattern success rate to use as template (0.0 - 1.0)
+    min_confidence: 0.7
+
+    # Minimum keyword match score to consider a pattern (0.0 - 1.0)
+    pattern_match_threshold: 0.5
+
+    # Maximum patterns stored per task type before pruning
+    max_patterns_per_type: 50
+
+# =============================================================================
 # ADAPTIVE PLAN APPROVAL (Phase 5.1)
 # Confidence-based tiered approval: auto, notify, require
 # =============================================================================
@@ -1051,3 +1069,66 @@ terminal_orchestration:
     max_restarts_per_task: 3
     # Escalate to human when restart limit exceeded
     escalate_on_exceed: true
+
+# =============================================================================
+# DRIFT PREVENTION (Phase 5.6)
+# Predictive pre-action drift detection and course correction
+# =============================================================================
+drift_prevention:
+  # Master switch
+  enabled: true
+
+  # Similarity score thresholds
+  thresholds:
+    aligned: 0.6        # score >= 0.6: no intervention
+    monitor: 0.3        # 0.3 <= score < 0.6: warn + log
+    divergent: 0.3      # score < 0.3: redirect or refresh
+
+  # Guardrail behavior
+  guardrails:
+    warn_on_monitor: true        # Log warning on monitor-level drift
+    block_on_divergent: true     # Block tool execution on divergent drift
+    auto_refresh: true           # Refresh context on confusion before blocking
+
+  # Tools exempt from drift check (read-only tools)
+  excluded_tools:
+    - Read
+    - Glob
+    - Grep
+    - WebSearch
+    - WebFetch
+
+  # Check every N tool invocations (1 = every tool call)
+  evaluation_interval_steps: 1
+
+# =============================================================================
+# POOL AUTOSCALING (Phase 5.4)
+# Dynamic agent pool sizing based on queue depth, resources, and budget
+# =============================================================================
+pool:
+  # Pool size bounds
+  min: 1
+  max: 12
+
+  # Scale-up triggers
+  scale_up:
+    # Scale up when queue_depth / active_agents >= this ratio
+    queue_ratio: 2.0
+    # Scale up if idle agents <= this threshold and tasks are pending
+    priority_idle_threshold: 0
+    # Scale up if a task deadline is within N hours
+    deadline_hours: 2
+
+  # Scale-down triggers
+  scale_down:
+    # Minutes with no pending tasks before scaling down
+    idle_cooldown_minutes: 5
+    # Scale down when daily budget usage exceeds this percentage
+    budget_threshold_pct: 90
+    # Scale down when CPU exceeds this percentage
+    cpu_threshold_pct: 80
+    # Scale down when memory exceeds this percentage
+    memory_threshold_pct: 85
+
+  # How often to evaluate scaling decisions (seconds)
+  evaluation_interval_seconds: 60
