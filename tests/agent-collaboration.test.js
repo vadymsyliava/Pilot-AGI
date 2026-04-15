@@ -391,9 +391,10 @@ test('discoverAgentByCap finds agents with matching capability', () => {
   const ctx = freshAgentContext();
   const sess = freshSession();
 
-  // Register two sessions with roles
-  sess.registerSession('S-fe-1', { role: 'frontend' });
-  sess.registerSession('S-be-1', { role: 'backend' });
+  // Register two sessions with roles — distinct parent_pids simulate
+  // two separate Claude terminals (registerSession dedupes by parent_pid)
+  sess.registerSession('S-fe-1', { role: 'frontend', parent_pid: 90001 });
+  sess.registerSession('S-be-1', { role: 'backend', parent_pid: 90002 });
 
   // Search for react capability (frontend has it)
   const found = ctx.discoverAgentByCap('react');

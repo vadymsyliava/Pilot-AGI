@@ -1,0 +1,22 @@
+#!/usr/bin/env sh
+# =============================================================================
+# Design Token Enforcement
+# =============================================================================
+# If design token source files under design/tokens/ have been staged,
+# verify the published outputs are in sync. Runs detect-drift.js and
+# refuses the commit if drift is detected; users can run export-all.js
+# to regenerate outputs.
+
+STAGED_TOKEN_CHANGES=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^design/tokens/' || true)
+
+if [ -n "$STAGED_TOKEN_CHANGES" ]; then
+  echo "[pre-commit] design token source changes detected — checking drift..."
+  if [ -f design/scripts/detect-drift.js ]; then
+    if ! node design/scripts/detect-drift.js; then
+      echo ""
+      echo "[pre-commit] drift detected. Regenerate outputs with:"
+      echo "  node design/scripts/export-all.js"
+      exit 1
+    fi
+  fi
+fi

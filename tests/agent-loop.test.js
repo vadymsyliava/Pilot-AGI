@@ -104,10 +104,13 @@ function freshAgentActions() { return freshModule('agent-actions.js'); }
 function freshMessaging() { return freshModule('messaging.js'); }
 function freshSession() { return freshModule('session.js'); }
 
-// Register a test session with role
+// Register a test session with role. Supplies a unique synthetic
+// parent_pid per call so the session-dedupe logic (one active session
+// per parent_pid) doesn't end prior test sessions sharing this process.
+let _nextTestPpid = 90000;
 function registerSession(sessionId, role) {
   const session = freshSession();
-  session.registerSession(sessionId, { role });
+  session.registerSession(sessionId, { role, parent_pid: _nextTestPpid++ });
   return session;
 }
 

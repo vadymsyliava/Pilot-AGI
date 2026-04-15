@@ -41,8 +41,12 @@ test('loadIndex returns valid index', () => {
 // 2. List channels
 test('listChannels returns all channels', () => {
   const channels = memory.listChannels();
-  assert(channels.length === 4, 'should have 4 channels (including pm-decisions)');
+  // Seeded channels: design-tokens, api-types, component-registry, pm-decisions,
+  // research-findings, task-decompositions. New channels may be added over time;
+  // assert the baseline set is present rather than a fixed count.
+  assert(channels.length >= 4, 'should have at least 4 channels (including pm-decisions)');
   assert(channels.includes('design-tokens'), 'should include design-tokens');
+  assert(channels.includes('pm-decisions'), 'should include pm-decisions');
 });
 
 // 3. Channel info
@@ -158,12 +162,17 @@ test('publish emits memory_published event to sessions.jsonl', () => {
   if (fs.existsSync(eventFile)) {
     const content = fs.readFileSync(eventFile, 'utf8');
     const lines = content.trim().split('\n');
-    const lastEvents = lines.slice(-10).map(l => {
+    // Scan a larger window so interleaved events from other channels
+    // don't crowd out design-tokens events from earlier in this test run.
+    const recent = lines.slice(-50).map(l => {
       try { return JSON.parse(l); } catch (e) { return null; }
     }).filter(Boolean);
-    const memEvents = lastEvents.filter(e => e.type === 'memory_published');
+    const memEvents = recent.filter(e => e.type === 'memory_published');
     assert(memEvents.length > 0, 'should have memory_published events');
-    assert(memEvents[0].channel === 'design-tokens', 'event should reference design-tokens channel');
+    assert(
+      memEvents.some(e => e.channel === 'design-tokens'),
+      'some recent event should reference design-tokens channel'
+    );
   }
 });
 
