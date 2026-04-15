@@ -140,7 +140,11 @@ function writeChannelObject(channel, dataObj, publishedAt) {
 }
 
 // Fixed timestamps for deterministic tests
-const NOW = new Date('2026-02-01T12:00:00.000Z').getTime();
+// Anchor NOW to real current time so tests that check "freshness" against
+// Date.now() internally (e.g. getRelevantMemory) don't silently rot as the
+// calendar moves past a hardcoded date. All other usages are relative
+// offsets (NOW - N * ONE_DAY_MS) and stay consistent.
+const NOW = Date.now();
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const SEVEN_DAYS_MS = 7 * ONE_DAY_MS;
 

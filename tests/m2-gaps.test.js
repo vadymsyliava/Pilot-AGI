@@ -240,7 +240,11 @@ test('dashboard.getAlerts fires critical for block threshold (from real project)
 console.log('\n=== Pre-commit Hook ===');
 
 test('pre-commit hook contains token enforcement section', () => {
-  const hookPath = path.join(ORIG_CWD, '.git/hooks/pre-commit');
+  // Prefer the committed husky source; fall back to the installed git hook
+  // so the test still passes on dev machines where husky has set up shims.
+  const huskyPath = path.join(ORIG_CWD, '.husky/pre-commit');
+  const installedPath = path.join(ORIG_CWD, '.git/hooks/pre-commit');
+  const hookPath = fs.existsSync(huskyPath) ? huskyPath : installedPath;
   const content = fs.readFileSync(hookPath, 'utf8');
   assert(content.includes('Design Token Enforcement'), 'has enforcement section');
   assert(content.includes('detect-drift.js'), 'references detect-drift');

@@ -218,6 +218,18 @@ function spawnAgent(task, options = {}) {
       prompt_length: truncatedPrompt.length
     });
 
+    // When the binary is missing (CI without `claude` in PATH), spawn
+    // still returns a child object but pid is undefined and an async
+    // 'error' event fires. Report that as failure so callers don't
+    // treat a no-op spawn as successful.
+    if (!child.pid) {
+      return {
+        success: false,
+        error: 'spawn produced no PID (binary missing or not executable)',
+        contextFile: contextFilePath
+      };
+    }
+
     return {
       success: true,
       pid: child.pid,

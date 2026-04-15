@@ -48,9 +48,15 @@ orchestrator:
 `);
   fs.writeFileSync(path.join(testDir, '.claude/pilot/messages/bus.jsonl'), '');
 
-  // Init git repo for git-dependent tests
+  // Init git repo for git-dependent tests. Fresh runners (GitHub Actions)
+  // have no git user configured, so a bare `git commit` fails, which
+  // leaves no HEAD and makes later `git stash push` fail too. Set repo-
+  // local identity so commit/stash work regardless of host config.
   try {
     execFileSync('git', ['init'], { cwd: testDir, stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.email', 'test@pilot-agi.local'], { cwd: testDir, stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.name', 'Pilot Test'], { cwd: testDir, stdio: 'pipe' });
+    execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: testDir, stdio: 'pipe' });
     execFileSync('git', ['checkout', '-b', 'main'], { cwd: testDir, stdio: 'pipe' });
     fs.writeFileSync(path.join(testDir, 'README.md'), '# Test');
     // Commit everything including .claude/ so git status starts clean
