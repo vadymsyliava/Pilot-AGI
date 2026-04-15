@@ -92,7 +92,17 @@ fs.writeFileSync(path.join(TMP_DIR, '.claude/pilot/config/skill-registry.json'),
   }
 }, null, 2));
 
-// Helper: create a session state file
+// Helper: create a session state file.
+// Two constraints pull against each other:
+// 1. Sessions must pass isSessionAlive — so parent_pid has to be a real
+//    process that exists right now (process.kill(ppid, 0) must succeed).
+// 2. Sessions must NOT collide on parent_pid — _reapZombies Phase 2
+//    dedupes active sessions by parent_pid and ends all but the newest.
+// Round-robin across the two real PIDs we have: this node process and
+// its parent shell. Tests only create 2-3 agents at a time, so two
+// distinct live PIDs is enough to avoid dedup collision.
+const LIVE_PIDS = [process.pid, process.ppid || process.pid];
+let _pidIdx = 0;
 function createSession(id, opts = {}) {
   const data = {
     session_id: id,
@@ -107,7 +117,7 @@ function createSession(id, opts = {}) {
     locked_files: [],
     cwd: TMP_DIR,
     pid: opts.pid || process.pid + Math.floor(Math.random() * 10000),
-    parent_pid: opts.parent_pid || process.ppid
+    parent_pid: opts.parent_pid || LIVE_PIDS[_pidIdx++ % LIVE_PIDS.length]
   };
   fs.writeFileSync(
     path.join(TMP_DIR, '.claude/pilot/state/sessions', id + '.json'),
