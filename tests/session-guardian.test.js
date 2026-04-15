@@ -418,7 +418,12 @@ test('resolveCurrentSession resurrects ended session matching parent_pid', () =>
 
 test('resolveCurrentSession prefers active session over ended', () => {
   const stateDir = path.join(cwd, '.claude/pilot/state/sessions');
-  const parentPid = session.getParentClaudePID();
+  // resolveCurrentSession tries process.ppid first, then walks to a
+  // claude parent. In CI runners there is no claude ancestor, so
+  // getParentClaudePID falls back to process.pid, which the lookup
+  // then excludes. Pin parent_pid to process.ppid so the match
+  // succeeds on both local (claude present) and CI (runner shell).
+  const parentPid = process.ppid;
   const now = Date.now();
 
   // Create an active session
