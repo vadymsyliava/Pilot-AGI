@@ -137,7 +137,10 @@ class RemoteLogStreamer extends EventEmitter {
       entry.process.kill('SIGTERM');
     } catch (e) { /* already dead */ }
 
-    entry.stream.push(null);
+    // Use destroy() instead of push(null) — destroy is immediate and
+    // prevents the ERR_STREAM_PUSH_AFTER_EOF that happens when the
+    // killed process races the EOF signal and pushes more data.
+    try { entry.stream.destroy(); } catch (e) { /* already closed */ }
     this._streams.delete(agentId);
     return { success: true };
   }
