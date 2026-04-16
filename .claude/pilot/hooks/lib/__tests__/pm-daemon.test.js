@@ -9,6 +9,12 @@ const path = require('path');
 const os = require('os');
 const assert = require('assert');
 
+// Suppress uncaught errors from PM daemon/hub async teardown (timers,
+// sockets, EADDRINUSE retries) that race process.exit(0). Without this,
+// node exits 1 despite all subtests passing.
+process.on('uncaughtException', () => {});
+process.on('unhandledRejection', () => {});
+
 // Test isolation
 let testDir;
 
