@@ -1030,7 +1030,7 @@ terminal_orchestration:
   enabled: true
 
   # Provider: 'auto' (iTerm2 → AppleScript), 'iterm2', 'applescript'
-  provider: 'iterm2'
+  provider: 'applescript'
 
   # How to spawn agent tabs: 'tab' (recommended), 'window', 'split'
   spawn_mode: 'tab'
@@ -1127,8 +1127,8 @@ pool:
     budget_threshold_pct: 90
     # Scale down when CPU exceeds this percentage
     cpu_threshold_pct: 80
-    # Scale down when memory exceeds this percentage
-    memory_threshold_pct: 85
+    # Scale down when memory exceeds this percentage (disabled — macOS memory pressure is unreliable)
+    memory_threshold_pct: 100
 
   # How often to evaluate scaling decisions (seconds)
   evaluation_interval_seconds: 60

@@ -528,7 +528,7 @@ function assignTask(taskId, targetSessionId, pmSessionId, opts = {}) {
   }
 
   // Send task delegation message
-  const msgResult = messaging.sendTaskDelegate(
+  const msgResult = messaging.delegateTask(
     pmSessionId,
     targetSessionId,
     taskData,
