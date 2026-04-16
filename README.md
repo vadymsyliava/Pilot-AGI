@@ -79,8 +79,32 @@ When a task is complete, Pilot AGI can automatically:
 - Auto-merge when all checks pass
 - Clean up branches after merge
 
+### Autonomous Code Quality
+Every merge triggers a full quality sweep:
+- **Duplicate detection** — token-based similarity analysis, blocks >70%, warns >50%
+- **Dead code detection** — AST-based analysis finds unreachable code
+- **Naming consistency** — enforces project conventions across the codebase
+- **Pattern compliance** — canonical pattern registry with evolution tracking
+- **Quality regression prevention** — per-area score floors block regressing commits, with grace periods for new features
+- **Quality-to-Soul feedback** — quality metrics feed into agent learning so the same mistakes aren't repeated
+
 ### Agent Identity & Learning (SOUL.md)
-Each agent maintains a persistent identity with lessons learned from post-mortems, user corrections, and peer reviews. Agents improve over time, developing best practices specific to your codebase.
+Each agent maintains a persistent identity with lessons learned from post-mortems, user corrections, and peer reviews. Seven role-specific personalities (frontend, backend, testing, security, design, review, PM) with configurable traits like risk tolerance, testing preference, and decision style. Agents improve over time, developing best practices specific to your codebase.
+
+### Terminal Orchestration
+Native macOS terminal control for spawning and monitoring agent sessions:
+- **Dual provider** — AppleScript (Terminal.app) and iTerm2 with auto-detection
+- **Tab management** — create, select, inject text, read output, detect state (working/idle/stalled)
+- **Daemon-spawned agents** — PM Daemon launches headless `claude -p` sessions with full context injection
+- **Telegram bridge** — async notifications for off-hours monitoring
+
+### Adaptive Plan Approval
+Not every plan needs human review. A confidence scorer evaluates risk:
+- **Auto-approve** (>85% confidence) — routine, low-risk, familiar code areas
+- **Notify & proceed** (60-85%) — medium risk, logs for review
+- **Require approval** (<60%) — high risk, blocks until human confirms
+
+Scoring factors: scope (files/lines), code area familiarity, historical success rate, risk tags (auth, data loss, security), novelty.
 
 ### Overnight Mode
 Queue up a sprint's worth of tasks, walk away, and come back to completed work. The PM Daemon keeps agents running, respawning them as needed, handling failures, and escalating only what truly requires human attention.
@@ -126,7 +150,9 @@ The main difference: new projects get the full structured workflow generated aut
 | **Planning** | Creates PROJECT_BRIEF.md, ROADMAP.md, and sprint tasks |
 | **Execution** | Builds features with plan → approve → execute → verify |
 | **Coordination** | Runs 2-6 agent sessions in parallel without conflicts |
-| **Quality** | Enforces policies, prevents duplicates, maintains consistency |
+| **Quality** | Post-merge sweep detects duplicates, dead code, naming issues, pattern drift |
+| **Learning** | Agent souls capture lessons, post-mortems feed improvements, quality scores trend upward |
+| **Shipping** | PR automation pushes, creates PRs, monitors CI, auto-merges when green |
 
 ---
 
@@ -314,9 +340,14 @@ your-project/
 ├── .beads/              # Git-backed task database
 ├── .claude/pilot/
 │   ├── policy.yaml      # Your governance rules
-│   ├── hooks/           # Automatic enforcement
+│   ├── hooks/           # Automatic enforcement (4 hooks + 6 gates)
+│   │   └── lib/         # Core modules (50+ files)
+│   ├── agent-registry.json  # 7 agent roles + orchestration patterns
+│   ├── souls/           # Agent identity files (per-role SOUL.md)
 │   ├── kb/              # Knowledge base (auto-generated)
-│   └── state/           # Session coordination
+│   ├── memory/          # Shared agent memory (channels + schemas)
+│   ├── messages/        # Inter-agent event bus
+│   └── state/           # Sessions, costs, escalations, artifacts
 ├── work/
 │   ├── PROJECT_BRIEF.md # Your product vision
 │   ├── ROADMAP.md       # Milestones and phases
