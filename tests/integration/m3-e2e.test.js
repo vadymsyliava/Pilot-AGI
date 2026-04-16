@@ -980,7 +980,7 @@ console.log('\n=== SCENARIO 7: PM Loop Integration ===\n');
     assert(Array.isArray(results), 'recovery scan should return array');
   });
 
-  test('7f. runPeriodicScans executes all scan types', () => {
+  test('7f. runPeriodicScans executes all scan types', async () => {
     clearModuleCache();
     const freshPmLoop = freshModule('pm-loop');
     const loop = new freshPmLoop.PmLoop(TMP_DIR, {
@@ -988,7 +988,7 @@ console.log('\n=== SCENARIO 7: PM Loop Integration ===\n');
       dryRun: true,
     });
     loop.initialize('S-pm-loop');
-    const results = loop.runPeriodicScans();
+    const results = await loop.runPeriodicScans();
     assert(Array.isArray(results), 'periodic scans should return array');
     // Should have results from multiple scan types
     assert(results.length >= 1, 'should produce scan results');

@@ -304,6 +304,8 @@ function buildSpawnPrompt(capsule) {
   const lines = [];
 
   lines.push('You are an autonomous agent spawned by the PM daemon.');
+  lines.push('CRITICAL: Execute the task below immediately. Do NOT ask questions, offer choices, or wait for input.');
+  lines.push('Do NOT list ready tasks. Do NOT suggest options. Just execute.');
   lines.push('');
 
   // Task info
@@ -397,17 +399,29 @@ function buildSpawnPrompt(capsule) {
 
   // Instructions
   lines.push('## Instructions');
+  lines.push(`YOU MUST work on task ${capsule.task.id} ONLY. Ignore any other tasks or ready tasks.`);
+  lines.push('');
   if (capsule.resume) {
     lines.push('This is a RESUME spawn. Use /pilot-exec to continue from the last completed step.');
     lines.push('Do NOT re-plan — the plan is already approved.');
   } else if (capsule.plan) {
     lines.push('A plan is already approved. Use /pilot-exec to execute steps.');
-    lines.push('Claim the task first, then start executing.');
+    lines.push(`First claim: bd update ${capsule.task.id} --status in_progress`);
+    lines.push('Then execute all plan steps with /pilot-exec repeatedly until done.');
   } else {
-    lines.push('Run the full canonical loop: claim the task, plan, execute all steps, commit, and close.');
-    lines.push('Use /pilot-next if you need to pick up the task, then /pilot-plan, /pilot-exec, /pilot-commit, /pilot-close.');
+    lines.push('Run the full canonical loop:');
+    lines.push(`1. Claim: bd update ${capsule.task.id} --status in_progress`);
+    lines.push('2. Plan: /pilot-plan');
+    lines.push('3. Execute all steps: /pilot-exec (repeat until done)');
+    lines.push('4. Commit: /pilot-commit');
+    lines.push('5. Close: /pilot-close');
   }
-  lines.push('Work autonomously — do not ask questions. If blocked, log the issue and move on.');
+  lines.push('');
+  lines.push('RULES:');
+  lines.push('- Work autonomously — NEVER ask questions or offer choices');
+  lines.push('- If blocked, log the issue and continue with what you can');
+  lines.push('- Do NOT list other tasks, suggest alternatives, or request preferences');
+  lines.push('- Start executing IMMEDIATELY');
 
   return lines.join('\n');
 }

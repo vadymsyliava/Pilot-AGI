@@ -473,6 +473,19 @@ class AgentLoop {
       });
     } catch (e) { /* best effort */ }
 
+    // Phase 7.2: Trigger post-mortem if task had errors
+    if (this.errors.length > 0 && this.role) {
+      try {
+        const postMortem = require('./post-mortem');
+        postMortem.triggerPostMortem(this.role, taskId, {
+          errors: this.errors,
+          steps_completed: this.execStep,
+          total_steps: this.totalSteps,
+          exit_reason: null
+        });
+      } catch (e) { /* best effort */ }
+    }
+
     this.currentTaskId = null;
     this.currentTaskTitle = null;
     this.planRequestId = null;
@@ -547,6 +560,17 @@ class AgentLoop {
             context: `${MAX_ERRORS} consecutive errors on task ${this.currentTaskId}`,
             resolution: 'escalated_to_pm',
             task_id: this.currentTaskId
+          });
+        } catch (e) { /* best effort */ }
+
+        // Phase 7.2: Trigger post-mortem for max errors
+        try {
+          const postMortem = require('./post-mortem');
+          postMortem.triggerPostMortem(this.role, this.currentTaskId, {
+            errors: this.errors,
+            steps_completed: this.execStep,
+            total_steps: this.totalSteps,
+            exit_reason: 'max_errors'
           });
         } catch (e) { /* best effort */ }
       }

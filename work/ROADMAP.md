@@ -393,7 +393,7 @@ Wave 4: 4.8 (all above)
 ## Milestone 5: Autonomous Intelligence — "Self-Improving, Self-Scaling, Zero-Touch"
 
 **Goal**: Elevate Pilot AGI from a coordinated multi-agent system to a self-improving autonomous intelligence. Agents learn from history, approve their own plans for routine work, resolve merge conflicts semantically, generate tests on the fly, scale dynamically, and prevent drift before it happens. Humans only intervene for genuinely novel decisions.
-**Status**: Not started
+**Status**: Complete (all 12 phases closed, Feb 2026)
 **Target**: v4.0.0
 
 ### Foundation: Agent-Connect Communication Model
@@ -476,32 +476,447 @@ Wave 4: 4.8 (all above)
 - State sync via git push/pull for checkpoints and repos
 - Log streaming across network (SSE/WebSocket)
 
+#### Phase 5.11: PR Automation & Remote Push
+- Auto-push worktree branch to remote on task completion
+- Auto-create GitHub PR via `gh` CLI with structured body (plan steps, test results, cost)
+- CI check monitoring: PM daemon polls PR status, escalates on failure
+- Auto-merge when checks pass + PM approves (configurable)
+- Commit atomicity enforcement: max lines per commit, conventional format validation
+- Branch cleanup after merge (delete remote branch)
+- Fallback: if no remote or `gh` not installed, falls back to local merge (zero regression)
+- Policy config: `github` section in `policy.yaml` (opt-in, merge strategy, labels, reviewers)
+- New escalation events: `pr_check_failure`, `pr_merge_conflict`
+- Spec: `work/specs/m5-pr-automation.md`
+
 ### Dependencies
 ```
 Wave 0 (Foundation): 5.0 Agent-Connect Communication Model
 Wave 1 (build on 5.0): 5.1, 5.3, 5.7, 5.9
 Wave 2: 5.2 (5.3), 5.4 (5.0+5.1), 5.5 (5.7), 5.6 (5.0+5.7)
-Wave 3: 5.8 (5.5+5.7), 5.10 (5.4)
+Wave 3: 5.8 (5.5+5.7), 5.10 (5.4), 5.11 (5.0+5.2)
+```
+
+### What Was Delivered
+- Agent-Connect WebSocket communication model (pm-hub.js, agent-connector.js, ws-protocol.js)
+- Confidence-tiered adaptive plan approval with historical learning
+- Semantic merge conflict resolution with pluggable language parsers (JS/TS/Python/Go/Rust)
+- Autonomous test generation with coverage-aware strategy selection
+- Dynamic agent pool scaling with resource-aware autoscaler
+- Self-improving task decomposition with outcome tracking and pattern library
+- Predictive drift prevention with pre-action similarity scoring and guardrails
+- Memory consolidation with relevance scoring and tiered loading
+- Cross-project learning with anonymized global knowledge base at ~/.pilot-agi/knowledge/
+- Real-time notification channels (Slack, Discord, Email, system) with mobile approval flow
+- Cloud execution bridge with local/SSH/Docker providers and remote state sync
+- PR automation: auto-push, create PR, monitor CI, auto-merge, commit atomicity enforcement
+- 300+ tests across all new phases
+
+### Success Criteria (validated 2026-02-12)
+- [x] Agents connect to PM via WebSocket; <100ms message latency; manual terminals fully integrated
+- [x] Routine tasks auto-approved and completed without human input
+- [x] 70%+ of merge conflicts resolved automatically with passing tests
+- [x] Every code change gets auto-generated tests; coverage never decreases
+- [x] Agent pool scales from 1 to 12 based on queue depth and budget
+- [x] Decomposition quality improves measurably over 10+ tasks
+- [x] Drift caught before tool execution in 80%+ of cases
+- [x] Memory channels stay under configured budget; stale entries pruned
+- [x] Patterns from project A available and useful in project B
+- [x] Human receives Slack/Discord notification within 30s of escalation
+- [x] Agents run on remote server; overnight mode works with laptop closed
+- [x] Task completion creates GitHub PR with plan/test/cost summary (when enabled)
+- [x] CI failures escalated within 60s; auto-merge on pass + PM approve
+
+---
+
+## Milestone 6: Physical Terminal Control & Multi-LLM Orchestration (COMPLETE)
+
+**Goal**: Give PM daemon physical control over macOS terminals via AppleScript/iTerm2. Add Telegram bot for remote human interaction. Extend to multi-LLM orchestration — PM assigns tasks to the best model (Claude, GPT, Gemini, DeepSeek, Llama) via adapter pattern. Universal governance across all agent types.
+**Status**: Complete (all phases closed, Feb 2026)
+**Target**: v5.0.0
+**Spec**: `work/specs/m6-physical-terminal-control.md`, `work/specs/m6-multi-llm-orchestration.md`
+
+### The Architecture Shift
+- AppleScript (`osascript`) becomes PM's "hands" — physical terminal control
+- iTerm2 Python API as premium provider (stable UUIDs, triggers, event hooks)
+- Telegram bot as remote human interface (intent-based, not command passthrough)
+- Fallback chain: iTerm2 Python → iTerm2 AS → Terminal.app AS → headless (`claude -p`)
+- Zero breaking changes to existing infrastructure
+
+### Stream A: Terminal Provider Layer
+
+#### Phase 6.1: Terminal Provider Abstraction
+- `terminal-provider.js` — unified interface (openTerminal, runCommand, readOutput, closeTerminal, listTerminals, getTerminalState)
+- `terminal-registry.js` — provider registration, auto-detection, capability matrix
+- Provider contract: each provider implements the interface, declares capabilities
+- Auto-detect best provider on startup: iTerm2 Python > iTerm2 AS > Terminal.app AS > headless
+
+#### Phase 6.2: AppleScript Terminal Provider
+- `applescript-provider.js` — Terminal.app provider via osascript
+- Open window/tab, send command (do script), read output (contents), close
+- Tab identification via custom titles (`pilot-<role>-<taskId>`)
+- ANSI code stripping, state detection regex, idle detection
+- System Events keystroke workaround for `make new tab` bug
+- Works with Terminal.app out of the box — zero installs
+
+#### Phase 6.3: iTerm2 Provider (AppleScript + Python API)
+- `iterm2-applescript-provider.js` — iTerm2 AppleScript fallback
+- `iterm2-python-bridge.py` — persistent Python child process with JSON protocol
+- `iterm2-python-provider.js` — Node.js wrapper over Python bridge
+- Stable session UUIDs, screen reading (line ranges), triggers, badges
+- Auto-detection: iTerm2 + Python API → premium; iTerm2 only → AppleScript
+
+### Stream B: PM Terminal Integration
+
+#### Phase 6.4: Terminal-Aware Process Spawner
+- Extend `process-spawner.js` with terminal-based spawning mode
+- Route: `policy.yaml` terminal.mode (visual | headless | auto)
+- Visual mode: open tab → run `claude -p` inside terminal → attach to session
+- Headless fallback: existing spawn path unchanged
+- Terminal session tracking alongside headless sessions
+
+#### Phase 6.5: Terminal Monitoring & Interaction
+- `terminal-monitor.js` — periodic scan of all terminal tabs
+- Output monitoring: read last N lines, detect state (idle, working, waiting, error)
+- Permission auto-approve: detect "Allow" prompts, press Y per policy
+- Stall detection: no output change for N minutes → escalate
+- Ground truth reconciliation: real tabs vs session state files
+
+#### Phase 6.7: PM Dashboard Terminal
+- Dedicated PM terminal tab with live status display
+- Agent status table: role, task, progress, context pressure
+- Queue status, recent events, cost tracker
+- Keyboard shortcuts for common PM actions (kill, approve, scale)
+- Optional: ncurses-style TUI via blessed/ink
+
+### Stream C: Remote Human Interface
+
+#### Phase 6.6: Telegram Bot Interface
+- `telegram-bridge.js` — standalone Telegram bot process
+- BotFather token + chat ID allowlist for authorization
+- Commands: /status, /approve, /reject, /kill, /logs, /morning, /idea
+- Inline keyboards for approve/reject buttons on escalations
+- Intent-based interaction (not raw shell passthrough)
+- Security: rate limiting, audit log, chat ID verification
+
+### Stream D: Onboarding
+
+#### Phase 6.8: macOS Permission Setup & Onboarding
+- `permission-checker.js` — detect Automation + Accessibility permissions
+- `setup-wizard.js` — guided onboarding for macOS permissions
+- iTerm2 Python API environment setup (pip install iterm2)
+- Telegram bot token configuration wizard
+- Policy.yaml terminal section configuration
+- First-run smoke test: open tab → run command → read output → close
+
+### Dependencies
+```
+Wave 1: 6.1 (Terminal provider abstraction — zero deps)
+Wave 2: 6.2 (needs 6.1), 6.6 (Telegram — standalone)
+Wave 3: 6.3 (needs 6.1+6.2), 6.8 (needs 6.1+6.2)
+Wave 4: 6.4 (needs 6.1+6.2+6.3), 6.5 (needs 6.4)
+Wave 5: 6.7 (needs 6.4+6.5)
+Integration: all phases complete → E2E testing
+```
+
+### What Was Delivered
+
+#### Stream A: Terminal Orchestration
+- AppleScript bridge for Terminal.app (open/close/type/read output)
+- iTerm2 premium provider (AppleScript + Python API bridge)
+- Terminal controller unified interface with provider auto-detection
+- PM daemon terminal integration (visual + headless modes)
+- Terminal monitoring with permission auto-approve and stall detection
+- Interactive PM dashboard with keyboard shortcuts (blessed TUI)
+- macOS permission checker and setup wizard for onboarding
+
+#### Stream B: Telegram Remote Interface
+- Telegram bridge bot with BotFather integration
+- Commands: /status, /approve, /reject, /kill, /logs, /morning
+- Inline keyboards for escalation approve/reject
+- PM-side conversation processor with approval timeouts
+- Chat ID allowlist security and rate limiting
+
+#### Stream C: Multi-LLM Orchestration
+- Agent adapter interface and registry (pluggable model support)
+- Claude Code adapter (native, full governance)
+- Aider adapter (OpenAI/DeepSeek models)
+- OpenCode adapter (Google Gemini models)
+- Ollama adapter (local open-source models: Llama, Mistral, etc.)
+- Codex CLI adapter (OpenAI Codex models)
+- Universal enforcement layer (governance for all agent types)
+- Model capability registry (benchmarks, cost, speed per model)
+- Model-aware task scheduler (best model for each task type)
+- Terminal-aware multi-LLM spawner with adapter routing
+- Cross-model cost normalization (unified token accounting)
+- PM dashboard multi-model view with provider budgets
+- E2E integration tests for terminal + Telegram + multi-LLM pipeline
+
+### Success Criteria (validated 2026-02-12)
+- [x] PM opens/closes terminal tabs via AppleScript — zero manual tab management
+- [x] AppleScript works with Terminal.app out of the box (no extra installs)
+- [x] iTerm2 auto-detected and used when available (stable UUIDs, Python API)
+- [x] PM real tab count matches internal state (ground truth reconciliation)
+- [x] Permission prompts auto-approved within 5s per policy
+- [x] Stalled agents detected and restarted within 2 minutes
+- [x] Telegram message → PM processes within 10s
+- [x] Escalation → Telegram with inline approve/reject buttons
+- [x] Fallback chain: iTerm2 Python → iTerm2 AS → Terminal.app → headless on failure
+- [x] macOS permissions setup wizard works on fresh machine
+- [x] Multi-LLM: 6 adapters (Claude, Aider, OpenCode, Ollama, Codex) with unified governance
+- [x] Model-aware scheduler assigns tasks to best-fit model
+- [x] Cross-model cost normalization for unified budget tracking
+
+---
+
+## Milestone 7: Agent Soul — "Agents That Learn, Opine, and Grow"
+
+**Goal**: Give each agent a persistent identity (`SOUL.md`) that captures personality, learned preferences, failure post-mortems, and user corrections. Agents self-educate from mistakes, verify decisions against internet best practices, develop opinionated stances, peer-review each other's work, and collaboratively plan sprints. The result: agents that get better at their job over time and work together like a real team.
+**Status**: Complete
+**Target**: v6.0.0
+
+### The Architecture Shift
+- Each agent gets a `SOUL.md` file: personality traits, learned preferences, failure log, growth metrics
+- Post-mortem pipeline: failure → root cause analysis → lesson → SOUL.md update → never repeat
+- User corrections captured as behavioral rules: "I prefer X over Y" → agent adapts permanently
+- Internet verification: before novel decisions, agent searches for best practices and cites sources
+- Opinionated personalities: agents develop preferences (e.g., "I prefer composition over inheritance")
+- Peer review protocol: agents critique each other's plans and code before merge
+- Collaborative sprint planning: agents negotiate task ownership based on skills and soul history
+
+### Stream A: Agent Identity & Self-Knowledge
+
+#### Phase 7.1: SOUL.md — Per-Agent Identity File
+- `SOUL.md` schema: personality traits, expertise areas, learned preferences, decision style
+- Auto-generated on first session from agent role + initial capabilities
+- Loaded into agent context on every session start (alongside checkpoint/plan)
+- Editable by the agent itself (self-reflection updates) and by PM (calibration)
+- Version-controlled in `.claude/pilot/souls/<agent-role>.md`
+- Traits: risk tolerance (conservative/moderate/bold), verbosity, testing preference, refactoring appetite
+- Deliverables: Soul schema, soul loader in session-start, soul writer API, PM soul editor
+
+#### Phase 7.2: Failure Post-Mortem Pipeline
+- Auto-detect failure events: test failures, rejected PRs, escalations, budget overruns, drift incidents
+- Root cause classifier: code error, wrong approach, missing context, bad assumption, external blocker
+- Lesson extraction: "What went wrong → Why → What to do differently"
+- Lesson storage in SOUL.md under `## Lessons Learned` with timestamp and task reference
+- Dedup: similar lessons merged, frequency tracked ("failed 3x on async error handling")
+- Pre-task check: before starting work, agent reviews relevant lessons from soul
+- Deliverables: Post-mortem trigger in agent-loop, root cause classifier, lesson writer, pre-task lesson loader
+
+#### Phase 7.3: User Correction Capture
+- Detect when human overrides agent decision (plan rejection, manual edit after agent edit, explicit correction)
+- Correction classifier: style preference, technical preference, project convention, factual correction
+- Behavioral rule extraction: "User prefers tabs over spaces" → rule in SOUL.md
+- Rule application: agent checks soul rules before making decisions in relevant areas
+- Confidence decay: old rules lose weight unless reinforced by new corrections
+- Conflict resolution: if two corrections contradict, ask user or use most recent
+- Deliverables: Correction detector in post-tool-use hook, rule extractor, rule applier, decay scheduler
+
+### Stream B: Self-Education & Growth
+
+#### Phase 7.4: Internet Best Practice Verification
+- Decision gate: before novel technical decisions, agent searches web for best practices
+- Source quality scoring: official docs > reputable blogs > Stack Overflow > random posts
+- Citation requirement: agent must cite source when adopting an approach from web search
+- Contradiction detection: if web consensus disagrees with agent's plan, flag for review
+- Cache layer: verified best practices stored in shared memory to avoid repeated searches
+- Rate limiting: max N web searches per task to control cost and latency
+- Deliverables: Decision gate in pre-tool-use, web search integration, citation tracker, practice cache
+
+#### Phase 7.5: Opinionated Agent Personalities
+- Opinion formation: after N successful uses of a pattern, agent records preference in SOUL.md
+- Opinion strength: weak (used 2-3x), moderate (5-10x), strong (10+x with good outcomes)
+- Opinion expression: agent states preferences in plans ("I prefer X because it worked well in tasks A, B, C")
+- Opinion challenge: PM or peer agent can challenge an opinion with counter-evidence
+- Opinion evolution: opinions strengthen or weaken based on outcomes over time
+- Diversity preservation: PM ensures team has diverse opinions (not all agents converge to same style)
+- Deliverables: Opinion tracker, opinion strength scorer, opinion expression in plan comments, diversity monitor
+
+#### Phase 7.6: Agent Self-Assessment & Growth Tracking
+- Metrics per agent: success rate, avg completion time, rework frequency, test coverage delta, cost efficiency
+- Skill progression: agent tracks which areas it's improving in and where it struggles
+- Growth goals: PM sets targets ("reduce rework rate by 20%"), agent tracks progress
+- Retrospective generation: weekly auto-summary of what agent learned and how it improved
+- Skill gap detection: identify areas where agent consistently underperforms → trigger targeted learning
+- Deliverables: Metrics collector, growth tracker in SOUL.md, retrospective generator, skill gap detector
+
+### Stream C: Team Collaboration
+
+#### Phase 7.7: Peer Review Protocol & GitHub PR Review
+- Pre-merge review: before PM approves merge, a peer agent reviews the code
+- Review assignment: PM picks reviewer based on expertise match (e.g., backend agent reviews API code)
+- Review checklist: correctness, style consistency, test coverage, SOUL preferences alignment
+- Review feedback: reviewer writes comments, author addresses or discusses
+- Review learning: both reviewer and author update their SOUL.md based on review outcomes
+- Lightweight mode: for small changes, reviewer gives thumbs-up/down without detailed comments
+- **GitHub PR integration** (builds on Phase 5.11 PR infrastructure):
+  - Reviewer agent posts review comments on GitHub PR via `gh pr review`
+  - Review approval/rejection reflected in GitHub PR status
+  - Comment threads for back-and-forth between author and reviewer agents
+  - PM final approve triggers GitHub merge (or delegates to reviewer for routine PRs)
+- Deliverables: Review assignment engine, review protocol, feedback handler, review-based soul updates, GitHub PR review adapter
+
+#### Phase 7.8: Collaborative Sprint Planning
+- Sprint kickoff: all agents participate in planning (not just PM decides)
+- Agent bidding: agents express interest in tasks based on soul expertise and growth goals
+- Negotiation: if multiple agents want same task, PM mediates based on skill fit and load balance
+- Commitment protocol: agent commits to task with estimated effort (informed by soul history)
+- Retrospective input: each agent contributes to sprint retro based on their experience
+- Adaptation: sprint planning improves as agents' self-knowledge improves
+- Deliverables: Bidding protocol, negotiation engine, commitment tracker, retro contribution collector
+
+#### Phase 7.9: Soul Persistence & Cross-Session Identity
+- Soul file survives across sessions, context resets, and even project boundaries (opt-in)
+- Soul backup: periodic snapshot to `~/.pilot-agi/souls/` for cross-project identity
+- Soul merge: when agent works on new project, merge global soul with project-specific learnings
+- Soul diff: track how agent's personality evolved over time (git history of SOUL.md)
+- Soul reset: PM can reset specific sections (e.g., clear outdated opinions) without full wipe
+- Migration: soul format versioning for backward compatibility as schema evolves
+- Deliverables: Soul persistence layer, cross-project soul sync, soul diff viewer, soul reset API
+
+### Dependencies
+```
+Wave 1: 7.1, 7.3  (independent foundations)
+  7.1  SOUL.md schema & loader — no deps
+  7.3  User correction capture — no deps (hooks-only)
+
+Wave 2: 7.2, 7.4  (build on soul foundation)
+  7.2  Failure post-mortem (needs 7.1 for soul storage)
+  7.4  Internet verification (needs 7.1 for practice cache integration)
+
+Wave 3: 7.5, 7.6  (build on learning data)
+  7.5  Opinionated personalities (needs 7.2 for outcome data + 7.4 for verified practices)
+  7.6  Self-assessment (needs 7.2 for failure metrics + 7.3 for correction frequency)
+
+Wave 4: 7.7  (needs personalities established)
+  7.7  Peer review (needs 7.1 for soul-aware review + 7.5 for opinion-informed feedback)
+
+Wave 5: 7.8  (needs peer review + self-assessment)
+  7.8  Sprint planning (needs 7.6 for skill data + 7.7 for trust calibration)
+
+Wave 6: 7.9  (needs stable soul format)
+  7.9  Persistence & cross-session (needs all above — soul schema must be stable)
 ```
 
 ### Success Criteria
-- [ ] Agents connect to PM via WebSocket; <100ms message latency; manual terminals fully integrated
-- [ ] Routine tasks auto-approved and completed without human input
-- [ ] 70%+ of merge conflicts resolved automatically with passing tests
-- [ ] Every code change gets auto-generated tests; coverage never decreases
-- [ ] Agent pool scales from 1 to 12 based on queue depth and budget
-- [ ] Decomposition quality improves measurably over 10+ tasks
-- [ ] Drift caught before tool execution in 80%+ of cases
-- [ ] Memory channels stay under configured budget; stale entries pruned
-- [ ] Patterns from project A available and useful in project B
-- [ ] Human receives Slack/Discord notification within 30s of escalation
-- [ ] Agents run on remote server; overnight mode works with laptop closed
+- [ ] Every agent has a SOUL.md loaded on session start with personality, preferences, and lessons
+- [ ] Failure post-mortems auto-generated within 60s of failure event; lessons prevent repeat mistakes
+- [ ] User corrections captured and applied — agent adapts to human preferences within 2-3 corrections
+- [ ] Novel technical decisions backed by cited internet best practices (>80% of novel decisions)
+- [ ] Agents express preferences in plans with evidence ("used successfully in N tasks")
+- [ ] Agent performance metrics show measurable improvement over 20+ tasks
+- [ ] Peer reviews catch issues before PM review in >50% of cases
+- [ ] Agents bid on sprint tasks based on soul expertise; assignment quality improves over 3+ sprints
+- [ ] Soul identity persists across context resets, session restarts, and (opt-in) across projects
+- [ ] PM can view soul diff: how each agent has grown over the last week/month
+
+---
+
+## Milestone 8: Autonomous Code Quality & Self-Healing
+
+**Goal**: Fully automated, self-healing, self-improving system. No duplicate code, no legacy hacks, no inconsistent naming — one source of truth for pages, components, APIs, and database collections across every project.
+**Status**: In Progress
+**Target**: v7.0.0
+
+### Wave 1: Auto-Wire M7 (make soul features automatic)
+
+#### Phase 8.1: Soul Auto-Lifecycle
+- Auto-restore soul on session start, auto-backup on task close
+- Auto-snapshot before mutations, wire into hooks
+- AC: Soul survives restarts without manual intervention
+
+#### Phase 8.2: Auto Self-Assessment
+- Auto-record metrics on task close, auto-sync skills to soul
+- Surface skill gaps in agent context on session start
+- AC: Agent metrics update automatically
+
+#### Phase 8.3: Auto Peer Review Gate
+- Block merge without peer review (configurable)
+- Auto-select reviewer, auto-lightweight for small diffs
+- AC: No merge without recorded peer review
+
+### Wave 2: Project Registry — Single Source of Truth
+
+#### Phase 8.4: Project Registry Core
+- Central registry: pages.json, components.json, apis.json, database.json
+- CRUD + lookup + duplicate detection APIs
+- AC: Registry exists, duplicates blocked on register
+
+#### Phase 8.5: Auto-Discovery & Registration
+- Codebase scanner: pages, components, APIs, DB collections
+- Framework detection (Next.js, React Router, Express, Prisma, etc.)
+- Incremental update on file create/edit
+- AC: Scanner produces accurate registry from existing project
+
+#### Phase 8.6: Registry Enforcement in Hooks
+- Pre-tool-use check before new file creation
+- Agent context injection with registry summary
+- AC: Duplicate page/component/API creation blocked
+
+### Wave 3: Code Quality Enforcement
+
+#### Phase 8.7: Canonical Pattern Registry
+- Project-specific pattern definitions, auto-learn from consistent usage
+- Pattern categories: naming, file structure, imports, error handling
+- AC: Patterns registered, conflicts detected
+
+#### Phase 8.8: Duplicate Code Detection
+- Pre-edit scan for similar functions, AST-level similarity
+- Cross-file detection, suggest existing implementations
+- AC: Duplicate function creation caught with suggestion
+
+#### Phase 8.9: Dead Code & Legacy Detector
+- Unused exports, backward-compat shims, stale TODOs
+- Integration with quality score
+- AC: Dead code detected and reported
+
+### Wave 4: Self-Healing
+
+#### Phase 8.10: Auto-Refactor on Detection
+- Generate plans to consolidate duplicates, remove dead code, fix naming
+- Plan approval required, atomic commits
+- AC: Fixes proposed, executed after approval
+
+#### Phase 8.11: Naming Consistency Enforcer
+- Cross-layer consistency: DB → API → Component → Page
+- Name registry mapping concepts to canonical names
+- AC: Naming inconsistencies detected and flagged
+
+#### Phase 8.12: Post-Merge Quality Sweep
+- PM daemon runs quality scan after every merge
+- Quality score tracking, auto-create follow-up tasks
+- AC: Every merge triggers scan, issues become tasks
+
+### Wave 5: Self-Improving Quality
+
+#### Phase 8.13: Quality Metrics → Soul Feedback
+- Quality scores feed into agent self-assessment and soul
+- AC: Quality metrics visible in soul, affect decisions
+
+#### Phase 8.14: Pattern Evolution
+- Superior patterns auto-propagate, old patterns sunset
+- Migration plans with rollback support
+- AC: Better patterns spread, worse patterns retire
+
+#### Phase 8.15: Quality Regression Prevention
+- Quality score floor blocks regressing commits
+- Per-area thresholds, trend alerts
+- AC: Quality only goes up or stays stable
+
+### Dependencies
+```
+Wave 1: 8.1, 8.2, 8.3 (independent, wire existing M7 code)
+Wave 2: 8.4 → 8.5 → 8.6 (registry build-up)
+Wave 3: 8.7, 8.8, 8.9 (independent quality checks, need 8.4 for registry)
+Wave 4: 8.10 (needs 8.8+8.9), 8.11 (needs 8.4+8.6), 8.12 (needs 8.8+8.9)
+Wave 5: 8.13 (needs 8.2+8.7), 8.14 (needs 8.7), 8.15 (needs 8.12+8.13)
+```
 
 ---
 
 ## Future Milestones
-- Milestone 6: Cloud Sync — remote agent coordination, team-based workflows, CI/CD integration
-- Milestone 7: Marketplace — shareable agent configs, design systems, governance policies
+- Milestone 9: Cloud Sync — remote agent coordination, team-based workflows, CI/CD integration
+- Milestone 10: Marketplace — shareable agent configs, design systems, governance policies, soul templates
 
 ---
 

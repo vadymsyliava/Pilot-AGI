@@ -14,14 +14,24 @@ const os = require('os');
 let passed = 0;
 let failed = 0;
 
+// Queue of test functions (supports async)
+const _testQueue = [];
+
 function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log('  PASS: ' + name);
-  } catch (e) {
-    failed++;
-    console.log('  FAIL: ' + name + ' - ' + e.message);
+  _testQueue.push({ name, fn });
+}
+
+// Run all queued tests sequentially (supports async test functions)
+async function runTests() {
+  for (const { name, fn } of _testQueue) {
+    try {
+      await fn();
+      passed++;
+      console.log('  PASS: ' + name);
+    } catch (e) {
+      failed++;
+      console.log('  FAIL: ' + name + ' - ' + e.message);
+    }
   }
 }
 
@@ -109,41 +119,41 @@ test('saveWatcherState persists and loads correctly', () => {
   assertEqual(loaded.processed_count, 5, 'processed_count persisted');
 });
 
-test('readNewBusEvents returns empty for empty bus', () => {
+test('readNewBusEvents returns empty for empty bus', async () => {
   const state = { byte_offset: 0 };
-  const { events, newOffset } = readNewBusEvents(TMP_DIR, state);
+  const { events, newOffset } = await readNewBusEvents(TMP_DIR, state);
   assertEqual(events.length, 0, 'no events');
   assertEqual(newOffset, 0, 'offset stays 0');
 });
 
-test('readNewBusEvents reads new events from bus.jsonl', () => {
+test('readNewBusEvents reads new events from bus.jsonl', async () => {
   const busPath = path.join(TMP_DIR, '.claude/pilot/messages/bus.jsonl');
   const event1 = { id: 'E-test1', ts: new Date().toISOString(), type: 'notify', from: 'S-test', to: 'PM', topic: 'task_complete', priority: 'normal', ttl_ms: 300000, payload: { data: { task_id: 'T-1' } } };
   const event2 = { id: 'E-test2', ts: new Date().toISOString(), type: 'broadcast', from: 'S-test', topic: 'session_announced', priority: 'fyi', ttl_ms: 300000, payload: {} };
   fs.writeFileSync(busPath, JSON.stringify(event1) + '\n' + JSON.stringify(event2) + '\n');
 
   const state = { byte_offset: 0 };
-  const { events, newOffset } = readNewBusEvents(TMP_DIR, state);
+  const { events, newOffset } = await readNewBusEvents(TMP_DIR, state);
   assertEqual(events.length, 2, 'reads both events');
   assert(newOffset > 0, 'offset advances');
   assertEqual(events[0].id, 'E-test1', 'first event');
   assertEqual(events[1].id, 'E-test2', 'second event');
 });
 
-test('readNewBusEvents respects byte offset', () => {
+test('readNewBusEvents respects byte offset', async () => {
   const busPath = path.join(TMP_DIR, '.claude/pilot/messages/bus.jsonl');
   const content = fs.readFileSync(busPath, 'utf8');
   const state = { byte_offset: Buffer.byteLength(content, 'utf8') };
 
   // No new events
-  const { events } = readNewBusEvents(TMP_DIR, state);
+  const { events } = await readNewBusEvents(TMP_DIR, state);
   assertEqual(events.length, 0, 'no new events after offset');
 
   // Add a new event
   const event3 = { id: 'E-test3', ts: new Date().toISOString(), type: 'notify', from: 'S-test', to: 'PM', topic: 'step_complete', priority: 'normal', ttl_ms: 300000, payload: {} };
   fs.appendFileSync(busPath, JSON.stringify(event3) + '\n');
 
-  const { events: newEvents } = readNewBusEvents(TMP_DIR, state);
+  const { events: newEvents } = await readNewBusEvents(TMP_DIR, state);
   assertEqual(newEvents.length, 1, 'reads only new event');
   assertEqual(newEvents[0].id, 'E-test3', 'correct event');
 });
@@ -197,7 +207,7 @@ test('PmLoop initializes with PM session', () => {
   assertEqual(loop.pmSessionId, 'S-pm-test', 'PM session set');
 });
 
-test('PmLoop processes events in dry-run mode', () => {
+test('PmLoop processes events in dry-run mode', async () => {
   const loop = new PmLoop(TMP_DIR, { dryRun: true });
   loop.initialize('S-pm-test');
 
@@ -212,13 +222,13 @@ test('PmLoop processes events in dry-run mode', () => {
     classification: { action: 'track_claim', priority: 'low' }
   }];
 
-  const results = loop.processEvents(events);
+  const results = await loop.processEvents(events);
   assertEqual(results.length, 1, 'one result');
   assertEqual(results[0].action, 'track_claim', 'action matches');
   assert(results[0].result.tracked, 'tracked flag set');
 });
 
-test('PmLoop respects max actions per cycle', () => {
+test('PmLoop respects max actions per cycle', async () => {
   const loop = new PmLoop(TMP_DIR, { dryRun: true, maxActionsPerCycle: 2 });
   loop.initialize('S-pm-test');
 
@@ -227,11 +237,11 @@ test('PmLoop respects max actions per cycle', () => {
     classification: { action: 'track_progress', priority: 'low' }
   }));
 
-  const results = loop.processEvents(events);
+  const results = await loop.processEvents(events);
   assertEqual(results.length, 2, 'capped at maxActionsPerCycle');
 });
 
-test('PmLoop handles unknown action gracefully', () => {
+test('PmLoop handles unknown action gracefully', async () => {
   const loop = new PmLoop(TMP_DIR, { dryRun: true });
   loop.initialize('S-pm-test');
 
@@ -240,11 +250,11 @@ test('PmLoop handles unknown action gracefully', () => {
     classification: { action: 'nonexistent_action', priority: 'low' }
   }];
 
-  const results = loop.processEvents(events);
+  const results = await loop.processEvents(events);
   assertEqual(results.length, 0, 'unknown action produces no result');
 });
 
-test('PmLoop stop prevents further processing', () => {
+test('PmLoop stop prevents further processing', async () => {
   const loop = new PmLoop(TMP_DIR, { dryRun: true });
   loop.initialize('S-pm-test');
   loop.stop('test');
@@ -254,7 +264,7 @@ test('PmLoop stop prevents further processing', () => {
     classification: { action: 'track_claim', priority: 'low' }
   }];
 
-  const results = loop.processEvents(events);
+  const results = await loop.processEvents(events);
   assertEqual(results.length, 0, 'no results after stop');
 });
 
@@ -460,24 +470,25 @@ test('test failure detection regex works', () => {
 });
 
 // =============================================================================
-// CLEANUP
+// RUN ALL TESTS (async-aware runner)
 // =============================================================================
 
-process.chdir(ORIG_CWD);
-try {
-  fs.rmSync(TMP_DIR, { recursive: true, force: true });
-} catch (e) {
-  // Best effort cleanup
-}
+runTests().then(() => {
+  process.chdir(ORIG_CWD);
+  try {
+    fs.rmSync(TMP_DIR, { recursive: true, force: true });
+  } catch (e) {
+    // Best effort cleanup
+  }
 
-// =============================================================================
-// SUMMARY
-// =============================================================================
+  console.log(`\n════════════════════════════════════════`);
+  console.log(`  Results: ${passed} passed, ${failed} failed`);
+  console.log(`════════════════════════════════════════\n`);
 
-console.log(`\n════════════════════════════════════════`);
-console.log(`  Results: ${passed} passed, ${failed} failed`);
-console.log(`════════════════════════════════════════\n`);
-
-if (failed > 0 && require.main === module) {
+  if (failed > 0 && require.main === module) {
+    process.exit(1);
+  }
+}).catch(e => {
+  console.error('Test runner error:', e);
   process.exit(1);
-}
+});

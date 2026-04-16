@@ -1,0 +1,20 @@
+{
+  "session_id": "S-mlir9rw9-c21c",
+  "days": {
+    "2026-02-12": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 91
+    }
+  },
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 91,
+  "tasks_worked": [
+    "Pilot AGI-wra.1",
+    "Pilot AGI-wra.2",
+    "Pilot AGI-sny"
+  ],
+  "created_at": "2026-02-12T05:55:51.759Z",
+  "updated_at": "2026-02-12T07:08:11.990Z"
+}

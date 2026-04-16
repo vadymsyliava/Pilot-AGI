@@ -1,0 +1,18 @@
+{
+  "session_id": "S-mlht50wb-701e",
+  "days": {
+    "2026-02-11": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 8
+    }
+  },
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 8,
+  "tasks_worked": [
+    "Pilot AGI-0qt"
+  ],
+  "created_at": "2026-02-11T09:18:25.522Z",
+  "updated_at": "2026-02-11T09:19:16.261Z"
+}

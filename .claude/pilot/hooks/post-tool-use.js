@@ -77,10 +77,24 @@ function emitStatusEvents(sessionId, hookInput) {
       // bd close <id> or bd update <id> --status closed
       if (/bd\s+close\b/.test(cmd) || /bd\s+update\b.*--status\s+closed/.test(cmd)) {
         const idMatch = cmd.match(/bd\s+(?:close|update)\s+["']?([^\s"']+)/);
+        const taskId = idMatch ? idMatch[1] : 'unknown';
         emitBusEvent(sessionId, 'task_complete', {
-          task_id: idMatch ? idMatch[1] : 'unknown',
+          task_id: taskId,
           completed_by: sessionId
         });
+
+        // Phase 8.1: Auto-backup soul + record assessment on task close
+        try {
+          const sessFile = require('path').join(process.cwd(), '.claude/pilot/state/sessions', `${sessionId}.json`);
+          if (require('fs').existsSync(sessFile)) {
+            const sess = JSON.parse(require('fs').readFileSync(sessFile, 'utf8'));
+            const role = sess.role;
+            if (role) {
+              const soulLifecycle = require('./lib/soul-auto-lifecycle');
+              soulLifecycle.onTaskClose(role, taskId);
+            }
+          }
+        } catch (e) { /* best effort */ }
         return;
       }
 
@@ -395,6 +409,7 @@ function enqueueCompactRequest(sessionId, stats) {
 /**
  * Check if this is a daemon-spawned agent that should exit on checkpoint.
  * Only daemon-spawned agents exit; interactive sessions compact instead.
+ * PM sessions are ALWAYS exempt — they compact, never exit.
  *
  * @returns {boolean}
  */
@@ -402,12 +417,50 @@ function shouldExitOnCheckpoint() {
   // Only daemon-spawned agents do exit-on-checkpoint
   if (process.env.PILOT_DAEMON_SPAWNED !== '1') return false;
 
+  // PM sessions are exempt — they must stay alive for orchestration
+  if (isPmSession()) return false;
+
   try {
     const respawnTracker = require('./lib/respawn-tracker');
     return respawnTracker.isRespawnEnabled();
   } catch (e) {
     return false;
   }
+}
+
+/**
+ * Check if the current session is the PM orchestrator.
+ * PM sessions must never exit-on-checkpoint — they compact instead.
+ *
+ * @returns {boolean}
+ */
+function isPmSession() {
+  // Explicit env var set by PM daemon when spawning PM terminal
+  if (process.env.PILOT_PM_SESSION === '1') return true;
+  if (process.env.PILOT_AGENT_TYPE === 'pm') return true;
+
+  // Check session state for PM role
+  try {
+    const sessionId = getCurrentSessionId();
+    if (!sessionId) return false;
+
+    const sessFile = path.join(process.cwd(), '.claude/pilot/state/sessions', `${sessionId}.json`);
+    if (fs.existsSync(sessFile)) {
+      const data = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
+      if (data.role === 'pm' || data.role === 'pm-daemon') return true;
+    }
+
+    // Check if this session matches the PM session in orchestrator state
+    const pmStatePath = path.join(process.cwd(), '.claude/pilot/state/orchestrator/pm-state.json');
+    if (fs.existsSync(pmStatePath)) {
+      const pmState = JSON.parse(fs.readFileSync(pmStatePath, 'utf8'));
+      if (pmState.pm_session_id === sessionId) return true;
+    }
+  } catch (e) {
+    // Best effort — if we can't determine, assume not PM
+  }
+
+  return false;
 }
 
 /**
