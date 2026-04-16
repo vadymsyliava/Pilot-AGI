@@ -18,8 +18,8 @@
     </array>
 
     <key>WorkingDirectory</key>
-    <!-- UPDATE: Set this to your project root -->
-    <string>/Users/YOU/your-project</string>
+    <!-- UPDATE: Replace PILOT_PROJECT_ROOT with your project root path -->
+    <string>PILOT_PROJECT_ROOT</string>
 
     <key>RunAtLoad</key>
     <true/>

@@ -614,3 +614,10 @@ console.log(`  ${passed} passed, ${failed} failed`);
 console.log('═'.repeat(60) + '\n');
 
 if (failed > 0) process.exit(1);
+
+// PM daemon / PM hub leaves async handles (timers, sockets, file watchers)
+// open even after all tests finish and daemons have been stopped. Without
+// this explicit exit, node keeps the event loop alive and the node:test
+// runner eventually times out and reports ERR_TEST_FAILURE despite every
+// subtest having passed. Exit cleanly once we know failed === 0.
+process.exit(0);
