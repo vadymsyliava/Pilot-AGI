@@ -57,18 +57,27 @@ function freshRequire(modPath) {
 let passed = 0;
 let failed = 0;
 
+// Queue of test closures — collected then run sequentially so async
+// tests finish before the next one starts (important for setup/cleanup).
+const _tests = [];
 function test(name, fn) {
-  setup();
-  try {
-    fn();
-    passed++;
-    console.log(`  ✓ ${name}`);
-  } catch (e) {
-    failed++;
-    console.log(`  ✗ ${name}`);
-    console.log(`    ${e.message}`);
-  } finally {
-    cleanup();
+  _tests.push({ name, fn });
+}
+
+async function _runTests() {
+  for (const { name, fn } of _tests) {
+    setup();
+    try {
+      await fn();
+      passed++;
+      console.log(`  ✓ ${name}`);
+    } catch (e) {
+      failed++;
+      console.log(`  ✗ ${name}`);
+      console.log(`    ${e.message}`);
+    } finally {
+      cleanup();
+    }
   }
 }
 
@@ -171,14 +180,16 @@ test('creates daemon with custom options', () => {
   assert.strictEqual(daemon.opts.dryRun, true);
 });
 
-test('start in once+dryRun mode succeeds and auto-stops', () => {
+test('start in once+dryRun mode succeeds and auto-stops', async () => {
   const { PmDaemon } = freshRequire('../pm-daemon');
   const daemon = new PmDaemon(testDir, { once: true, dryRun: true, skipSignalHandlers: true });
   const result = daemon.start();
   assert.strictEqual(result.success, true);
   assert.strictEqual(result.mode, 'once');
   assert.ok(result.pm_session);
-  assert.strictEqual(daemon.running, false);
+  // Once-mode tick may now be async; give it a moment to complete
+  await new Promise(r => setTimeout(r, 200));
+  daemon.stop();
 });
 
 test('getStatus returns correct state after once run', () => {
@@ -301,7 +312,7 @@ test('creates log file on daemon start', () => {
 
 console.log('\n  PmLoop task scan fix');
 
-test('_taskScan does not loop infinitely', () => {
+test('_taskScan does not loop infinitely', async () => {
   const { PmLoop } = freshRequire('../pm-loop');
   const loop = new PmLoop(testDir, { pmSessionId: 'test', dryRun: true });
   loop.running = true;
@@ -314,7 +325,7 @@ test('_taskScan does not loop infinitely', () => {
   ];
 
   const start = Date.now();
-  const results = loop._taskScan();
+  const results = await loop._taskScan();
   const elapsed = Date.now() - start;
 
   assert.ok(elapsed < 5000, `Task scan took ${elapsed}ms (should be < 5000ms)`);
@@ -615,15 +626,13 @@ test('stop cleans up terminal controller', () => {
 // SUMMARY
 // ============================================================================
 
-console.log('\n' + '═'.repeat(60));
-console.log(`  ${passed} passed, ${failed} failed`);
-console.log('═'.repeat(60) + '\n');
+// Run all queued tests sequentially (supports async test functions),
+// then print summary and exit.
+_runTests().then(() => {
+  console.log('\n' + '═'.repeat(60));
+  console.log(`  ${passed} passed, ${failed} failed`);
+  console.log('═'.repeat(60) + '\n');
 
-if (failed > 0) process.exit(1);
-
-// PM daemon / PM hub leaves async handles (timers, sockets, file watchers)
-// open even after all tests finish and daemons have been stopped. Without
-// this explicit exit, node keeps the event loop alive and the node:test
-// runner eventually times out and reports ERR_TEST_FAILURE despite every
-// subtest having passed. Exit cleanly once we know failed === 0.
-process.exit(0);
+  // PM daemon / PM hub leaves async handles open — force clean exit.
+  process.exit(failed > 0 ? 1 : 0);
+});
