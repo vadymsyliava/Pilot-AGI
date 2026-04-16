@@ -59,9 +59,13 @@ function writePolicy(dir, githubSection) {
 }
 
 function initGitRepo(dir) {
-  execSync('git init', { cwd: dir, stdio: 'pipe' });
+  // Use -b main so the default branch is 'main' regardless of the git
+  // version's init.defaultBranch setting. Git 2.52+ defaults to 'master';
+  // validateCommits expects 'main' as the base branch.
+  execSync('git init -b main', { cwd: dir, stdio: 'pipe' });
   execSync('git config user.email "test@test.com"', { cwd: dir, stdio: 'pipe' });
   execSync('git config user.name "Test"', { cwd: dir, stdio: 'pipe' });
+  execSync('git config commit.gpgsign false', { cwd: dir, stdio: 'pipe' });
   fs.writeFileSync(path.join(dir, 'README.md'), '# Test\n');
   execSync('git add . && git commit -m "init"', { cwd: dir, stdio: 'pipe' });
 }
