@@ -1,0 +1,20 @@
+{
+  "task_id": "Pilot AGI-l5u",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 37,
+  "sessions": {
+    "S-mlhsdgyi-828d": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 14
+    },
+    "S-mlhsdn18-3ab3": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 23
+    }
+  },
+  "created_at": "2026-02-11T08:47:37.320Z",
+  "updated_at": "2026-02-11T08:49:12.551Z"
+}

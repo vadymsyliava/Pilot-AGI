@@ -1,0 +1,15 @@
+{
+  "task_id": "Pilot AGI-j0o",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 11,
+  "sessions": {
+    "S-mlhhfux6-4358": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 11
+    }
+  },
+  "created_at": "2026-02-11T06:22:57.088Z",
+  "updated_at": "2026-02-11T06:30:07.692Z"
+}

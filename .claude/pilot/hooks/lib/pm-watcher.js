@@ -14,6 +14,7 @@
  */
 
 const fs = require('fs');
+const fsp = fs.promises;
 const path = require('path');
 const { EventEmitter } = require('events');
 
@@ -165,15 +166,20 @@ function isWatcherRunning(projectRoot) {
 /**
  * Read new lines from bus.jsonl since last byte offset.
  * Returns parsed messages relevant to PM.
+ * Async to avoid blocking the event loop on large files.
  */
-function readNewBusEvents(projectRoot, state) {
+async function readNewBusEvents(projectRoot, state) {
   const busPath = resolveFromRoot(projectRoot, BUS_PATH);
 
-  if (!fs.existsSync(busPath)) {
-    return { events: [], newOffset: state.byte_offset };
+  let stats;
+  try {
+    stats = await fsp.stat(busPath);
+  } catch (e) {
+    if (e.code === 'ENOENT') {
+      return { events: [], newOffset: state.byte_offset };
+    }
+    throw e;
   }
-
-  const stats = fs.statSync(busPath);
 
   // Bus was truncated or compacted — reset offset
   if (stats.size < state.byte_offset) {
@@ -184,12 +190,15 @@ function readNewBusEvents(projectRoot, state) {
     return { events: [], newOffset: state.byte_offset };
   }
 
-  // Read new bytes
-  const fd = fs.openSync(busPath, 'r');
+  // Read new bytes (async to avoid blocking event loop)
   const bufferSize = Math.min(stats.size - state.byte_offset, 1024 * 256); // Max 256KB batch
   const buffer = Buffer.alloc(bufferSize);
-  fs.readSync(fd, buffer, 0, bufferSize, state.byte_offset);
-  fs.closeSync(fd);
+  const fh = await fsp.open(busPath, 'r');
+  try {
+    await fh.read(buffer, 0, bufferSize, state.byte_offset);
+  } finally {
+    await fh.close();
+  }
 
   const content = buffer.toString('utf8');
   const lines = content.split('\n').filter(l => l.trim());
@@ -299,11 +308,11 @@ class PmWatcher extends EventEmitter {
 
     // Secondary: polling fallback (catches events fs.watch might miss)
     this.pollTimer = setInterval(() => {
-      this._processNewEvents();
+      this._processNewEvents().catch(e => this.emit('error', e));
     }, this.opts.pollIntervalMs);
 
     // Process any pending events immediately
-    this._processNewEvents();
+    this._processNewEvents().catch(e => this.emit('error', e));
 
     this.emit('started', { pid: process.pid, projectRoot: this.projectRoot });
   }
@@ -348,18 +357,18 @@ class PmWatcher extends EventEmitter {
       clearTimeout(this.debounceTimer);
     }
     this.debounceTimer = setTimeout(() => {
-      this._processNewEvents();
+      this._processNewEvents().catch(e => this.emit('error', e));
     }, this.opts.debounceMs);
   }
 
   /**
-   * Read and process new bus events
+   * Read and process new bus events (async to avoid blocking event loop)
    */
-  _processNewEvents() {
+  async _processNewEvents() {
     if (!this.running) return;
 
     try {
-      const { events, newOffset } = readNewBusEvents(this.projectRoot, this.state);
+      const { events, newOffset } = await readNewBusEvents(this.projectRoot, this.state);
 
       if (events.length > 0) {
         this.state.byte_offset = newOffset;
