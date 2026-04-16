@@ -1,7 +1,8 @@
 /**
  * AppleScript Bridge Foundation (Phase 6.1)
  *
- * Core OS-level terminal controller using osascript for Terminal.app.
+ * Core OS-level terminal controller using osascript for Terminal.app and iTerm2.
+ * Auto-detects running terminal app — prefers iTerm2 when available.
  * Provides operations: openTab, sendToTab, readTab, listTabs,
  * closeTab, detectState, showDialog, preventSleep.
  *
@@ -46,6 +47,49 @@ const STATE_PATTERNS = {
   plan_approval: /Waiting for plan approval|Approve this plan\?/,
   complete: /All plan steps complete|Task complete/,
 };
+
+// ============================================================================
+// TARGET APP DETECTION
+// ============================================================================
+
+/** @type {'iTerm2'|'Terminal'|null} Cached detected terminal app */
+let _detectedApp = null;
+
+/**
+ * Detect the active terminal application.
+ * Prefers iTerm2 if running, falls back to Terminal.app.
+ * Result is cached for the process lifetime.
+ *
+ * @returns {Promise<'iTerm2'|'Terminal'>}
+ */
+async function detectTargetApp() {
+  if (_detectedApp) return _detectedApp;
+
+  // Check if iTerm2 is running
+  try {
+    const result = await runAppleScript(
+      'tell application "System Events" to return (name of processes) contains "iTerm2"',
+      { timeout: 5000 }
+    );
+    if (result === 'true') {
+      _detectedApp = 'iTerm2';
+      return _detectedApp;
+    }
+  } catch (e) {
+    // System Events not available, fall through
+  }
+
+  _detectedApp = 'Terminal';
+  return _detectedApp;
+}
+
+/**
+ * Force a specific target app (for testing or policy override).
+ * @param {'iTerm2'|'Terminal'|null} app
+ */
+function setTargetApp(app) {
+  _detectedApp = app;
+}
 
 // ============================================================================
 // HELPERS
@@ -133,11 +177,7 @@ function titleEscape(title) {
 // ============================================================================
 
 /**
- * Open a new tab in Terminal.app and run a command.
- *
- * Terminal.app's `make new tab` is unreliable, so we use
- * System Events Cmd+T keystroke as the primary method with
- * a direct `do script` fallback for new windows.
+ * Open a new tab and run a command. Auto-detects iTerm2 or Terminal.app.
  *
  * @param {object} opts
  * @param {string} opts.command - Command to execute in the new tab
@@ -147,10 +187,14 @@ function titleEscape(title) {
  * @returns {Promise<{tabId: string, title: string}>}
  */
 async function openTab(opts = {}) {
+  const app = await detectTargetApp();
+  if (app === 'iTerm2') return _openTabITerm2(opts);
+  return _openTabTerminal(opts);
+}
+
+function _buildFullCommand(opts) {
   const { command, title, cwd, env } = opts;
   const tabTitle = title || `${TAB_TITLE_PREFIX}${Date.now()}`;
-
-  // Build the full command: cd + env + title + actual command
   const parts = [];
   if (cwd) parts.push(`cd "${escapeAppleScript(cwd)}"`);
   if (env && typeof env === 'object') {
@@ -160,8 +204,11 @@ async function openTab(opts = {}) {
   }
   parts.push(titleEscape(tabTitle));
   if (command) parts.push(command);
+  return { fullCommand: parts.join(' && '), tabTitle };
+}
 
-  const fullCommand = parts.join(' && ');
+async function _openTabTerminal(opts) {
+  const { fullCommand, tabTitle } = _buildFullCommand(opts);
 
   const script = `
     tell application "Terminal"
@@ -173,26 +220,46 @@ async function openTab(opts = {}) {
   `;
 
   const windowId = await withRetry(() => runAppleScript(script));
+  return { tabId: `terminal:${windowId}:${tabTitle}`, title: tabTitle };
+}
 
-  return {
-    tabId: `terminal:${windowId}:${tabTitle}`,
-    title: tabTitle,
-  };
+async function _openTabITerm2(opts) {
+  const { fullCommand, tabTitle } = _buildFullCommand(opts);
+
+  const script = `
+    tell application "iTerm2"
+      activate
+      tell current window
+        create tab with default profile
+        tell current session of current tab
+          write text "${escapeAppleScript(fullCommand)}"
+        end tell
+        return id
+      end tell
+    end tell
+  `;
+
+  const windowId = await withRetry(() => runAppleScript(script));
+  return { tabId: `iterm2:${windowId}:${tabTitle}`, title: tabTitle };
 }
 
 /**
- * Send a command to an existing Terminal.app tab identified by title.
+ * Send a command to an existing tab identified by title.
  *
- * Finds the tab by scanning window names/tab titles for the pilot-prefixed title,
- * then executes the command in that tab via `do script ... in`.
- *
- * @param {string} tabId - Tab identifier (terminal:windowId:title)
+ * @param {string} tabId - Tab identifier (provider:windowId:title)
  * @param {string} command - Command to send
  * @returns {Promise<void>}
  */
 async function sendToTab(tabId, command) {
-  const { title } = parseTabId(tabId);
+  const { provider, title } = parseTabId(tabId);
 
+  if (provider === 'iterm2') {
+    return _sendToTabITerm2(title, command);
+  }
+  return _sendToTabTerminal(title, command);
+}
+
+async function _sendToTabTerminal(title, command) {
   const script = `
     tell application "Terminal"
       repeat with w in windows
@@ -206,28 +273,57 @@ async function sendToTab(tabId, command) {
       return "not_found"
     end tell
   `;
-
   const result = await withRetry(() => runAppleScript(script));
-  if (result === 'not_found') {
-    throw new Error(`Tab not found: ${tabId}`);
-  }
+  if (result === 'not_found') throw new Error(`Tab not found: ${title}`);
+}
+
+async function _sendToTabITerm2(title, command) {
+  const script = `
+    tell application "iTerm2"
+      repeat with w in windows
+        repeat with t in tabs of w
+          repeat with s in sessions of t
+            if name of s contains "${escapeAppleScript(title)}" then
+              tell s to write text "${escapeAppleScript(command)}"
+              return "sent"
+            end if
+          end repeat
+        end repeat
+      end repeat
+      return "not_found"
+    end tell
+  `;
+  const result = await withRetry(() => runAppleScript(script));
+  if (result === 'not_found') throw new Error(`Tab not found: ${title}`);
 }
 
 /**
- * Read the contents of a Terminal.app tab identified by title.
+ * Read the contents of a terminal tab identified by title.
  *
- * Returns the last N lines with ANSI sequences stripped.
- *
- * @param {string} tabId - Tab identifier (terminal:windowId:title)
+ * @param {string} tabId - Tab identifier (provider:windowId:title)
  * @param {object} [opts]
  * @param {number} [opts.lines] - Number of trailing lines (default 50)
  * @param {boolean} [opts.raw] - If true, don't strip ANSI (default false)
  * @returns {Promise<string>}
  */
 async function readTab(tabId, opts = {}) {
-  const { title } = parseTabId(tabId);
+  const { provider, title } = parseTabId(tabId);
   const lines = opts.lines || 50;
 
+  let raw;
+  if (provider === 'iterm2') {
+    raw = await _readTabITerm2(title);
+  } else {
+    raw = await _readTabTerminal(title);
+  }
+
+  if (!raw) return '';
+  const cleaned = opts.raw ? raw : stripAnsi(raw);
+  const allLines = cleaned.split('\n');
+  return allLines.slice(-lines).join('\n');
+}
+
+async function _readTabTerminal(title) {
   const script = `
     tell application "Terminal"
       repeat with w in windows
@@ -240,24 +336,39 @@ async function readTab(tabId, opts = {}) {
       return ""
     end tell
   `;
+  return withRetry(() => runAppleScript(script));
+}
 
-  const raw = await withRetry(() => runAppleScript(script));
-
-  if (!raw) return '';
-
-  const cleaned = opts.raw ? raw : stripAnsi(raw);
-  const allLines = cleaned.split('\n');
-  return allLines.slice(-lines).join('\n');
+async function _readTabITerm2(title) {
+  const script = `
+    tell application "iTerm2"
+      repeat with w in windows
+        repeat with t in tabs of w
+          repeat with s in sessions of t
+            if name of s contains "${escapeAppleScript(title)}" then
+              return contents of s
+            end if
+          end repeat
+        end repeat
+      end repeat
+      return ""
+    end tell
+  `;
+  return withRetry(() => runAppleScript(script));
 }
 
 /**
- * List all Terminal.app tabs managed by Pilot AGI.
- *
- * Scans all windows/tabs for the pilot- title prefix.
+ * List all terminal tabs managed by Pilot AGI.
  *
  * @returns {Promise<Array<{tabId: string, title: string, windowId: string}>>}
  */
 async function listTabs() {
+  const app = await detectTargetApp();
+  if (app === 'iTerm2') return _listTabsITerm2();
+  return _listTabsTerminal();
+}
+
+async function _listTabsTerminal() {
   const script = `
     tell application "Terminal"
       set results to ""
@@ -275,38 +386,59 @@ async function listTabs() {
       return results
     end tell
   `;
-
   const raw = await runAppleScript(script);
   if (!raw) return [];
+  return raw.split('\n').filter(Boolean).map(line => {
+    const colonIdx = line.indexOf(':');
+    const windowId = line.slice(0, colonIdx);
+    const title = line.slice(colonIdx + 1);
+    return { tabId: `terminal:${windowId}:${title}`, title, windowId };
+  });
+}
 
-  return raw
-    .split('\n')
-    .filter(Boolean)
-    .map(line => {
-      const colonIdx = line.indexOf(':');
-      const windowId = line.slice(0, colonIdx);
-      const title = line.slice(colonIdx + 1);
-      return {
-        tabId: `terminal:${windowId}:${title}`,
-        title,
-        windowId,
-      };
-    });
+async function _listTabsITerm2() {
+  const script = `
+    tell application "iTerm2"
+      set results to ""
+      repeat with w in windows
+        set wId to id of w
+        repeat with t in tabs of w
+          repeat with s in sessions of t
+            try
+              set sName to name of s
+              if sName contains "${TAB_TITLE_PREFIX}" then
+                set results to results & wId & ":" & sName & linefeed
+              end if
+            end try
+          end repeat
+        end repeat
+      end repeat
+      return results
+    end tell
+  `;
+  const raw = await runAppleScript(script);
+  if (!raw) return [];
+  return raw.split('\n').filter(Boolean).map(line => {
+    const colonIdx = line.indexOf(':');
+    const windowId = line.slice(0, colonIdx);
+    const title = line.slice(colonIdx + 1);
+    return { tabId: `iterm2:${windowId}:${title}`, title, windowId };
+  });
 }
 
 /**
- * Close a Terminal.app tab identified by title.
+ * Close a terminal tab identified by title.
  *
- * Sends Cmd+W to close the tab after selecting it. Uses System Events
- * because Terminal.app doesn't expose a direct close-tab command.
- *
- * @param {string} tabId - Tab identifier (terminal:windowId:title)
+ * @param {string} tabId - Tab identifier (provider:windowId:title)
  * @returns {Promise<boolean>} true if closed, false if not found
  */
 async function closeTab(tabId) {
-  const { title } = parseTabId(tabId);
+  const { provider, title } = parseTabId(tabId);
+  if (provider === 'iterm2') return _closeTabITerm2(title);
+  return _closeTabTerminal(title);
+}
 
-  // First find and select the tab, then close it
+async function _closeTabTerminal(title) {
   const script = `
     tell application "Terminal"
       repeat with w in windows
@@ -327,16 +459,32 @@ async function closeTab(tabId) {
       return "not_found"
     end tell
   `;
+  const result = await withRetry(() => runAppleScript(script));
+  return result === 'closed';
+}
 
+async function _closeTabITerm2(title) {
+  const script = `
+    tell application "iTerm2"
+      repeat with w in windows
+        repeat with t in tabs of w
+          repeat with s in sessions of t
+            if name of s contains "${escapeAppleScript(title)}" then
+              tell s to close
+              return "closed"
+            end if
+          end repeat
+        end repeat
+      end repeat
+      return "not_found"
+    end tell
+  `;
   const result = await withRetry(() => runAppleScript(script));
   return result === 'closed';
 }
 
 /**
  * Detect the state of a Claude Code session in a terminal tab.
- *
- * Reads the last N lines and matches against known state patterns.
- * Returns the most specific match found.
  *
  * @param {string} tabId - Tab identifier
  * @param {object} [opts]
@@ -350,7 +498,6 @@ async function detectState(tabId, opts = {}) {
     return { state: 'unknown', match: null };
   }
 
-  // Check patterns in priority order (most specific first)
   const priorityOrder = [
     'error',
     'checkpoint',
@@ -375,8 +522,6 @@ async function detectState(tabId, opts = {}) {
 /**
  * Show a macOS dialog via osascript.
  *
- * Useful for local notifications when Telegram is not configured.
- *
  * @param {object} opts
  * @param {string} opts.message - Dialog message
  * @param {string} [opts.title] - Dialog title (default "Pilot AGI")
@@ -399,9 +544,6 @@ async function showDialog(opts = {}) {
 
 /**
  * Prevent macOS from sleeping using caffeinate.
- *
- * Spawns a caffeinate process that keeps the system awake.
- * Returns a handle to stop the prevention.
  *
  * @param {object} [opts]
  * @param {number} [opts.durationSeconds] - Duration in seconds (0 = indefinite)
@@ -436,7 +578,7 @@ async function preventSleep(opts = {}) {
 
 /**
  * Parse a tab identifier string.
- * Format: terminal:windowId:title
+ * Format: provider:windowId:title
  *
  * @param {string} tabId
  * @returns {{provider: string, windowId: string, title: string}}
@@ -444,7 +586,7 @@ async function preventSleep(opts = {}) {
 function parseTabId(tabId) {
   const parts = tabId.split(':');
   if (parts.length < 3) {
-    throw new Error(`Invalid tabId format: ${tabId}. Expected terminal:windowId:title`);
+    throw new Error(`Invalid tabId format: ${tabId}. Expected provider:windowId:title`);
   }
   return {
     provider: parts[0],
@@ -468,17 +610,25 @@ function buildTabId(windowId, title) {
 // ============================================================================
 
 /**
- * Check if AppleScript automation is available for Terminal.app.
- * Tests by running a simple osascript command.
+ * Check if AppleScript automation is available.
+ * Tests iTerm2 first, falls back to Terminal.app.
  *
  * @returns {Promise<boolean>}
  */
 async function isAvailable() {
   try {
-    await runAppleScript('tell application "Terminal" to return name', { timeout: 5000 });
+    // Try iTerm2 first
+    await runAppleScript('tell application "iTerm2" to return name', { timeout: 5000 });
+    _detectedApp = 'iTerm2';
     return true;
   } catch (err) {
-    // Permission denied or Terminal not available
+    // Fall through to Terminal.app
+  }
+  try {
+    await runAppleScript('tell application "Terminal" to return name', { timeout: 5000 });
+    _detectedApp = 'Terminal';
+    return true;
+  } catch (err) {
     return false;
   }
 }
@@ -503,6 +653,8 @@ module.exports = {
   isAvailable,
   parseTabId,
   buildTabId,
+  detectTargetApp,
+  setTargetApp,
 
   // Exposed for testing
   _internals: {
@@ -514,5 +666,7 @@ module.exports = {
     STATE_PATTERNS,
     ANSI_REGEX,
     TAB_TITLE_PREFIX,
+    _openTabTerminal,
+    _openTabITerm2,
   },
 };

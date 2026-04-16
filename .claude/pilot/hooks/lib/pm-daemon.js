@@ -400,11 +400,12 @@ class PmDaemon {
       this.log.debug('Terminal orchestration not configured', { error: e.message });
     }
 
-    // Initialize PmLoop
+    // Initialize PmLoop — pass daemon ref for agent spawning
     this.loop = new PmLoop(this.projectRoot, {
       pmSessionId: this.pmSessionId,
       dryRun: this.opts.dryRun
     });
+    this.loop.daemon = this;
     this.loop.initialize(this.pmSessionId);
 
     // Initialize PmWatcher
@@ -1610,19 +1611,26 @@ class PmDaemon {
       const promptFile = path.join(promptDir, `${task.id}.prompt`);
       fs.writeFileSync(promptFile, truncatedPrompt, 'utf8');
 
-      const args = ['--agent', '--permission-mode', 'acceptEdits'];
+      // Use -p (print mode) with acceptEdits permission mode.
+      // acceptEdits allows file writes without prompts while keeping hooks active.
+      // Hooks provide: session registration, soul loading, bus events, heartbeat,
+      // ask-interceptor (blocks questions), and post-tool-use observability.
+      // The -p flag processes the prompt non-interactively and exits.
+      const args = ['-p', '--permission-mode', 'acceptEdits'];
       if (this.opts.budgetPerAgentUsd) {
         args.push('--max-budget-usd', String(this.opts.budgetPerAgentUsd));
       }
       const escapedPath = promptFile.replace(/'/g, "'\\''");
-      command = `claude ${args.join(' ')} -p "$(cat '${escapedPath}')"`;
+      command = `claude ${args.join(' ')} "$(cat '${escapedPath}')"; exit`;
     }
 
-    // Set up environment
+    // Set up environment — resolved agent type enables soul, memory, identity
+    const resolvedRole = agentType || 'general';
     const env = {
       PILOT_DAEMON_SPAWNED: '1',
       PILOT_TASK_ID: task.id,
-      PILOT_AGENT_TYPE: agentType || 'general',
+      PILOT_AGENT_TYPE: resolvedRole,
+      PILOT_AGENT_ROLE: resolvedRole,
     };
 
     if (modelId) env.PILOT_MODEL = modelId;
@@ -1732,6 +1740,13 @@ class PmDaemon {
     process.on('SIGHUP', () => shutdown('SIGHUP'));
 
     process.on('uncaughtException', (err) => {
+      // EPIPE errors from terminal bridges are non-fatal — log and continue
+      if (err.code === 'EPIPE' || err.message.includes('EPIPE')) {
+        this.log.warn('EPIPE error (bridge pipe broken, recovering)', { error: err.message });
+        this.state.errors++;
+        this.state.last_error = `EPIPE: ${err.message}`;
+        return; // Don't crash
+      }
       this.log.error('Uncaught exception', { error: err.message, stack: err.stack });
       this.stop('uncaught_exception');
       process.exit(1);

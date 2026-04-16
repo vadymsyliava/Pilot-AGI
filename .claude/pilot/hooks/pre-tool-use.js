@@ -474,6 +474,28 @@ async function main() {
     process.exit(0);
   }
 
+  // Phase 8.6: Registry duplicate check (warning only, does not block)
+  try {
+    const registryEnforcer = require('./lib/registry-enforcer');
+    const regCheck = registryEnforcer.checkBeforeWrite(filePath, {
+      isNewFile: toolName === 'Write'
+    });
+    if (regCheck.warning) {
+      const output = {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          registryWarning: regCheck.warning,
+          registrySuggestion: regCheck.suggestion
+        }
+      };
+      console.log(JSON.stringify(output));
+      process.exit(0);
+    }
+  } catch (e) {
+    // Registry check failure should not block work
+  }
+
   // Allow the edit
   process.exit(0);
 }

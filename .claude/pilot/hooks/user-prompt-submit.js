@@ -214,6 +214,12 @@ async function main() {
     // Best effort - don't block on heartbeat failure
   }
 
+  // Skip entirely for daemon-spawned agents — they have full context
+  // from the spawn prompt and should not receive guardian/task-list injection
+  if (process.env.PILOT_DAEMON_SPAWNED === '1') {
+    process.exit(0);
+  }
+
   // Skip if empty prompt
   if (!prompt.trim()) {
     process.exit(0);

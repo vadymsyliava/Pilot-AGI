@@ -779,8 +779,44 @@ class PmLoop {
         }
       }
 
-      // Log unassigned tasks for visibility
+      // Spawn agents for unassigned tasks that have no available agents
+      // Use a persistent set to track tasks we've already spawned agents for
+      if (!this._spawnedTaskIds) this._spawnedTaskIds = new Set();
+
       for (const unassigned of schedule.unassigned_tasks) {
+        if (unassigned.reason === 'no_agents_available' && unassigned.task) {
+          // Skip if we already spawned an agent for this task
+          if (this._spawnedTaskIds.has(unassigned.task.id)) continue;
+          // Skip if task is already in_progress or closed (another agent got it)
+          try {
+            const { execFileSync } = require('child_process');
+            const showOut = execFileSync('bd', ['show', unassigned.task.id, '--json'], {
+              encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe']
+            });
+            const taskData = JSON.parse(showOut);
+            const status = (taskData.status || '').toLowerCase();
+            if (status === 'in_progress' || status === 'closed') continue;
+          } catch (e) { /* bd failed — proceed with spawn */ }
+
+          // Direct spawn via PM daemon — creates a new agent for the task
+          try {
+            const spawnResult = this.daemon._spawnAgent(unassigned.task);
+            if (spawnResult && spawnResult.success) {
+              this._spawnedTaskIds.add(unassigned.task.id);
+              this.logAction('auto_spawned_for_task', {
+                task_id: unassigned.task.id,
+                terminal: !!spawnResult.terminal
+              });
+              results.push({
+                action: 'agent_spawned',
+                task_id: unassigned.task.id
+              });
+              continue; // Don't log as unassigned
+            }
+          } catch (e) {
+            this.logAction('spawn_error', { task_id: unassigned.task.id, error: e.message });
+          }
+        }
         this.logAction('task_unassigned', {
           task_id: unassigned.task?.id,
           reason: unassigned.reason,

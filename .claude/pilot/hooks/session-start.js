@@ -195,6 +195,129 @@ async function main() {
   const context = {};
 
   // -------------------------------------------------------------------------
+  // 0. Daemon-Spawned Agent Detection
+  // -------------------------------------------------------------------------
+  // When PILOT_DAEMON_SPAWNED=1, this agent was spawned by the PM daemon.
+  // Skip most context injection to avoid overriding the spawn prompt.
+  // The spawn prompt already contains task, research, and plan context.
+  const isDaemonSpawned = process.env.PILOT_DAEMON_SPAWNED === '1';
+  const daemonTaskId = process.env.PILOT_TASK_ID || null;
+
+  if (isDaemonSpawned) {
+    // Daemon-spawned agent: register identity + soul + PM link, but skip
+    // task lists, ready tasks, and recoverable tasks (spawn prompt has all context)
+    const agentRole = process.env.PILOT_AGENT_ROLE || process.env.PILOT_AGENT_TYPE || 'general';
+    const sessionId = session.generateSessionId();
+    try {
+      session.registerSession(sessionId, {
+        hook_session_id: hookInput.session_id,
+        role: agentRole,
+        daemon_spawned: true,
+        claimed_task: daemonTaskId
+      });
+      // Set proper agent name based on role
+      session.setSessionRole(sessionId, agentRole);
+    } catch (e) { /* best effort */ }
+
+    context.session_id = sessionId;
+    context.daemon_spawned = true;
+    context.daemon_task_id = daemonTaskId;
+    context.role = agentRole;
+
+    messages.push(`DAEMON AGENT [${agentRole}]: assigned to ${daemonTaskId || 'unknown'}`);
+
+    // Load soul for this agent role (personality, expertise, preferences)
+    try {
+      const souls = require('./lib/souls');
+      try {
+        const soulLifecycle = require('./lib/soul-auto-lifecycle');
+        const lifecycleResult = soulLifecycle.onSessionStart(agentRole);
+        if (lifecycleResult.restored) {
+          messages.push(`Soul [${agentRole}]: restored from backup`);
+        }
+      } catch (e) {
+        if (!souls.soulExists(agentRole)) souls.initializeSoul(agentRole);
+      }
+      const soulCtx = souls.loadSoulContext(agentRole);
+      if (soulCtx) {
+        context.agent_soul = soulCtx;
+        messages.push(`Soul [${agentRole}]: loaded`);
+      }
+    } catch (e) { /* soul not available */ }
+
+    // Load agent persistent memory (decisions, discoveries, errors)
+    try {
+      const agentMemory = require('./lib/memory');
+      const discoveries = agentMemory.getDiscoveries(agentRole).slice(-5);
+      const decisions = agentMemory.getDecisions(agentRole, { limit: 5 });
+      const errors = agentMemory.getErrors(agentRole, { limit: 3 });
+      if (discoveries.length || decisions.length || errors.length) {
+        context.agent_memory = { discoveries, decisions, errors };
+        messages.push(`Memory: ${discoveries.length}d/${decisions.length}dec/${errors.length}err`);
+      }
+    } catch (e) { /* memory not available */ }
+
+    // Connect to PM hub for real-time communication
+    try {
+      const { AgentConnector } = require('./lib/agent-connector');
+      const agentCaps = session.getAgentCapabilities(agentRole) || [];
+      const connector = new AgentConnector(sessionId, {
+        projectRoot: process.cwd(),
+        role: agentRole,
+        capabilities: agentCaps,
+        autoReconnect: true
+      });
+      const connectResult = connector.connect();
+      if (connectResult.connected) {
+        context.pm_connected = true;
+        messages.push(`PM Hub: connected (${connectResult.mode})`);
+      }
+      // Save connector state for cross-hook access
+      try {
+        const stateDir = path.join(process.cwd(), '.claude/pilot/state/connectors');
+        if (!fs.existsSync(stateDir)) fs.mkdirSync(stateDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(stateDir, sessionId + '.json'),
+          JSON.stringify({ session_id: sessionId, port: connector.port, pm_connected: connectResult.connected, mode: connectResult.mode || 'file_bus', pid: process.pid, started_at: new Date().toISOString() }, null, 2)
+        );
+      } catch (e) { /* best effort */ }
+    } catch (e) { /* connector not available */ }
+
+    // Announce on message bus
+    try {
+      const messaging = require('./lib/messaging');
+      messaging.initializeCursor(sessionId);
+      messaging.sendBroadcast(sessionId, 'agent_introduced', {
+        session_id: sessionId,
+        agent_name: `${agentRole}-${sessionId.slice(-4)}`,
+        role: agentRole,
+        daemon_spawned: true,
+        task_id: daemonTaskId
+      });
+    } catch (e) { /* best effort */ }
+
+    // Load PM state for agent→PM routing
+    try {
+      const orchestrator = require('./lib/orchestrator');
+      const pmState = orchestrator.loadPmState();
+      if (pmState) {
+        context.pm_active = true;
+        context.pm_session = pmState.pm_session_id;
+      }
+    } catch (e) { /* pm not available */ }
+
+    messages.push('Work autonomously. Do NOT ask questions. Execute the task from your spawn prompt.');
+
+    output.systemMessage = messages.join(' | ');
+    output.hookSpecificOutput = {
+      hookEventName: 'SessionStart',
+      context
+    };
+    console.log(JSON.stringify(output));
+    return;
+  }
+
+  // -------------------------------------------------------------------------
   // 1. Session Management (new in v2)
   // -------------------------------------------------------------------------
 
@@ -560,6 +683,21 @@ async function main() {
     }
   } catch (e) {
     // Shared memory not available, continue without
+  }
+
+  // -------------------------------------------------------------------------
+  // 8a. Project Registry Context (Phase 8.6)
+  // -------------------------------------------------------------------------
+
+  try {
+    const registryEnforcer = require('./lib/registry-enforcer');
+    const regCtx = registryEnforcer.buildRegistryContext();
+    if (regCtx) {
+      context.project_registry = regCtx;
+      messages.push(`Registry: ${regCtx.total_entries} entries`);
+    }
+  } catch (e) {
+    // Registry not available, continue without
   }
 
   // -------------------------------------------------------------------------

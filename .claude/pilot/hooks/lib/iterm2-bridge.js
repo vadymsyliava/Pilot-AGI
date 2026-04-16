@@ -88,6 +88,16 @@ class ITerm2Bridge {
       if (this._onExit) this._onExit(code, signal);
     });
 
+    // Catch stdin EPIPE — bridge process may die unexpectedly
+    this.process.stdin.on('error', (err) => {
+      // Reject all pending requests on pipe error
+      for (const [id, pending] of this._pendingRequests) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error(`Bridge stdin error (${err.code || err.message})`));
+      }
+      this._pendingRequests.clear();
+    });
+
     // Collect stderr for debugging
     this.process.stderr.on('data', (data) => {
       // Silently consume stderr — could add logging here
@@ -320,7 +330,13 @@ class ITerm2Bridge {
       this._pendingRequests.set(id, { resolve, reject, timer });
 
       const line = JSON.stringify(cmd) + '\n';
-      this.process.stdin.write(line);
+      try {
+        this.process.stdin.write(line);
+      } catch (e) {
+        clearTimeout(timer);
+        this._pendingRequests.delete(id);
+        reject(new Error(`Bridge write failed (${e.code || e.message})`));
+      }
     });
   }
 
