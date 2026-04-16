@@ -106,8 +106,10 @@ function getSystemResources() {
  * @returns {boolean}
  */
 function isUnderPressure(thresholds = {}) {
-  const cpuThreshold = thresholds.cpuThresholdPct || 80;
-  const memThreshold = thresholds.memoryThresholdPct || 85;
+  // Use ?? so threshold 0 means "always under pressure" instead of
+  // falling through to the default (0 is falsy, || treats it as unset).
+  const cpuThreshold = thresholds.cpuThresholdPct ?? 80;
+  const memThreshold = thresholds.memoryThresholdPct ?? 85;
 
   const resources = getSystemResources();
   return resources.cpuPct >= cpuThreshold || resources.memPct >= memThreshold;
