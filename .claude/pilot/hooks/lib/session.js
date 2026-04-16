@@ -398,8 +398,12 @@ function registerSession(sessionId, context = {}) {
     fs.mkdirSync(stateDir, { recursive: true });
   }
 
-  // Resolve parent claude PID for accurate liveness checks
-  const parentPid = getParentClaudePID();
+  // Resolve parent claude PID for accurate liveness checks.
+  // Context may supply parent_pid explicitly (tests that simulate
+  // multiple distinct terminals in a single node process).
+  const parentPid = context.parent_pid !== undefined
+    ? context.parent_pid
+    : getParentClaudePID();
 
   // --- Session Dedup + Resurrection ---
   // Enforce: ONE active session per parent_pid (one Claude terminal = one session).

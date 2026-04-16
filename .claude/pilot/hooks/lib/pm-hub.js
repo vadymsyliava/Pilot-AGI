@@ -296,7 +296,11 @@ class PmHub extends EventEmitter {
       });
 
       this.server.on('error', (err) => {
+        // Error can fire after stop() has nulled this.server (e.g. EADDRINUSE
+        // racing with a stop during test teardown). Guard so the async retry
+        // doesn't dereference a null server and crash the process.
         if (err.code === 'EADDRINUSE') {
+          if (!this.server) return;
           this.port++;
           this.server.listen(this.port, '127.0.0.1');
         } else {
