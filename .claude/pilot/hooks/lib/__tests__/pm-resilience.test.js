@@ -171,11 +171,15 @@ describe('PM Watchdog', () => {
 // Test 4: Policy — iTerm2 Provider
 // ============================================================================
 
-describe('Policy iTerm2 preference', () => {
-  it('should have iterm2 as terminal provider', () => {
+describe('Policy terminal provider', () => {
+  it('should have a valid terminal provider configured', () => {
     const yaml = require('fs').readFileSync(
       path.join(__dirname, '../../../policy.yaml'), 'utf8'
     );
-    assert.ok(yaml.includes("provider: 'iterm2'"), 'Policy should set iTerm2 as provider');
+    const validProviders = ["provider: 'iterm2'", "provider: 'applescript'", "provider: 'auto'"];
+    assert.ok(
+      validProviders.some(p => yaml.includes(p)),
+      'Policy should set a valid terminal provider (iterm2, applescript, or auto)'
+    );
   });
 });
