@@ -611,6 +611,56 @@ function sendTaskToAgent(role, task, pmSessionId, opts = {}) {
 }
 
 /**
+ * After a task completes, route the output to a review agent.
+ *
+ * Sprint 4 T2 of M1.5. Used by the pm-loop task_complete handler so
+ * PM auto-reviews work before marking final-done. Tracks review
+ * outcomes per agent in the pm-decisions channel for future ranking.
+ *
+ * @param {string} taskId        Original task id (the one that completed)
+ * @param {string} reviewerRole  Role to route the review to (default: 'review')
+ * @param {string} pmSessionId
+ * @param {object} [opts]
+ * @param {string} [opts.completedBy]   sessionId that completed the task
+ * @param {object} [opts.context]       Extra context (PR url, diff stats, …)
+ * @param {object} [opts._session]      Test seam
+ */
+function delegateForReview(taskId, reviewerRole, pmSessionId, opts = {}) {
+  if (!taskId) {
+    return { success: false, error: 'taskId is required' };
+  }
+  const role = reviewerRole || 'review';
+  const reviewTaskId = `${taskId}.review`;
+  const reviewTask = {
+    id: reviewTaskId,
+    title: `Review: ${taskId}`,
+    description:
+      `Review work completed for task ${taskId}` +
+      (opts.completedBy ? ` by ${opts.completedBy}` : '') +
+      `. Approve or request changes.`,
+    priority: 'high'
+  };
+  const result = sendTaskToAgent(role, reviewTask, pmSessionId, {
+    context: { ...(opts.context || {}), original_task: taskId, completed_by: opts.completedBy },
+    reason: `Auto-review delegation for ${taskId}`,
+    _session: opts._session
+  });
+
+  // Record the review delegation as a PM decision so the cockpit
+  // surfaces it and Sprint 5 can show review history per agent.
+  publishDecision('review_delegated', {
+    original_task: taskId,
+    review_task: reviewTaskId,
+    reviewer_role: role,
+    completed_by: opts.completedBy,
+    success: !!result.success,
+    error: result.success ? null : result.error
+  });
+
+  return result;
+}
+
+/**
  * Reassign a task from one agent to another.
  */
 function reassignTask(taskId, fromSessionId, toSessionId, pmSessionId, reason) {
@@ -1401,6 +1451,7 @@ module.exports = {
   routeTaskToAgent,
   assignTask,
   sendTaskToAgent,
+  delegateForReview,
   reassignTask,
 
   // Agent control
