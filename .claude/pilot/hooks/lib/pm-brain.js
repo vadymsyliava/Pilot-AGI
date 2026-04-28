@@ -239,17 +239,34 @@ class PmBrain {
 
   _buildPrompt(knowledge, thread, question, context) {
     const sections = [];
+    // M1.5 Sprint 5 — branch on audience. The PM responds very differently
+    // to a human user typing in a chat ("hi", "what should I work on?") vs
+    // a backend agent requesting a structured decomposition decision.
+    const isUser = context.audience === 'user' || context.audience === 'human';
 
-    // Priority 0 (must include): The question
-    sections.push({
-      priority: 0,
-      content: `## Agent's Question\nAgent ${context.agentName || context.agentId || 'unknown'} (working on ${context.taskId || 'unknown'}):\n\n${question}\n\n## Your Response\nRespond as the PM. Be specific, actionable, and authoritative. Return JSON:\n{\n  "guidance": "your detailed response",\n  "decision": { "type": "...", "action": "...", "reason": "..." },\n  "follow_up": "any question back to the agent (optional)"\n}`
-    });
+    if (isUser) {
+      // Conversational mode — no JSON requirement, no "be authoritative"
+      // lecturing, no contract clauses. PM is a helpful product manager
+      // talking to its founder/operator.
+      sections.push({
+        priority: 0,
+        content: `## User's Message\n${question}\n\n## Your Response\nRespond as the PM, conversationally and concisely (1-3 short paragraphs max). The user is a human chatting with you, not a backend agent — do not return JSON, do not lecture about bd contracts or canonical loops, do not list "concrete unblock criteria". Greet greetings warmly. Answer questions plainly. Suggest concrete next steps when useful, citing project state if relevant. If you genuinely need to refuse a request, explain why in plain English in one sentence and offer an alternative.`
+      });
+    } else {
+      // Agent mode (existing): structured JSON decision for orchestration.
+      sections.push({
+        priority: 0,
+        content: `## Agent's Question\nAgent ${context.agentName || context.agentId || 'unknown'} (working on ${context.taskId || 'unknown'}):\n\n${question}\n\n## Your Response\nRespond as the PM. Be specific, actionable, and authoritative. Return JSON:\n{\n  "guidance": "your detailed response",\n  "decision": { "type": "...", "action": "...", "reason": "..." },\n  "follow_up": "any question back to the agent (optional)"\n}`
+      });
+    }
 
     // Priority 1: PM persona + product brief
+    const personaRole = isUser
+      ? `## Your Role\nYou are the user's product manager — friendly, succinct, opinionated. You know the project's state intimately and can suggest the next concrete step. Match the user's energy: short greetings get short replies, complex questions get thoughtful but not bloated answers.`
+      : `## Your Role\nYou are the Project Manager. You make decisions about task prioritization, code review, architecture guidance, conflict resolution, agent coordination, and risk assessment.\nYou have full knowledge of the project state. Respond with actionable guidance.`;
     sections.push({
       priority: 1,
-      content: `# You are the PM Agent for "${knowledge.projectName}"\n\n${knowledge.productBrief}\n\n## Your Role\nYou are the Project Manager. You make decisions about task prioritization, code review, architecture guidance, conflict resolution, agent coordination, and risk assessment.\nYou have full knowledge of the project state. Respond with actionable guidance.`
+      content: `# You are the PM Agent for "${knowledge.projectName}"\n\n${knowledge.productBrief}\n\n${personaRole}`
     });
 
     // Priority 2: Project state
