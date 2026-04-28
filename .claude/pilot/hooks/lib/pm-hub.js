@@ -741,6 +741,12 @@ class PmHub extends EventEmitter {
     if (method === 'POST' && pathname === '/api/dispatch') {
       return this._handleDispatch(req, res);
     }
+    if (method === 'GET' && pathname === '/api/pm-mode') {
+      return this._handleGetPmMode(req, res);
+    }
+    if (method === 'POST' && pathname === '/api/pm-mode') {
+      return this._handleSetPmMode(req, res);
+    }
     if (method === 'POST' && pathname === '/api/report') {
       return this._handleReport(req, res);
     }
@@ -866,6 +872,47 @@ class PmHub extends EventEmitter {
         res.writeHead(500);
         res.end(JSON.stringify({ error: e.message }));
       });
+    });
+  }
+
+  /**
+   * GET /api/pm-mode — read the current PM mode flag.
+   * Returns { mode } where mode ∈ {strict_rules, free_chat, off}.
+   * Sprint 4 T4 of M1.5.
+   */
+  _handleGetPmMode(req, res) {
+    let pmMode;
+    try { pmMode = require('./pm-mode'); }
+    catch (e) {
+      res.writeHead(503);
+      return res.end(JSON.stringify({ error: 'pm-mode unavailable: ' + e.message }));
+    }
+    const mode = pmMode.getPmMode(this.projectRoot);
+    res.writeHead(200);
+    res.end(JSON.stringify({ mode, valid_modes: pmMode.VALID_MODES }));
+  }
+
+  /**
+   * POST /api/pm-mode — set the PM mode flag.
+   * Body: { mode }. Returns { success, mode } | { success:false, error }.
+   * Sprint 4 T4 of M1.5.
+   */
+  _handleSetPmMode(req, res) {
+    let pmMode;
+    try { pmMode = require('./pm-mode'); }
+    catch (e) {
+      res.writeHead(503);
+      return res.end(JSON.stringify({ error: 'pm-mode unavailable: ' + e.message }));
+    }
+    this._readBody(req, (body) => {
+      if (!body || typeof body.mode !== 'string') {
+        res.writeHead(400);
+        return res.end(JSON.stringify({ error: 'mode (string) required' }));
+      }
+      const result = pmMode.setPmMode(this.projectRoot, body.mode);
+      const status = result.success ? 200 : 400;
+      res.writeHead(status);
+      res.end(JSON.stringify(result));
     });
   }
 
