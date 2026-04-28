@@ -204,7 +204,9 @@ class PmBrain {
 
     return {
       success: true,
-      guidance: result.guidance || (typeof result === 'string' ? result : JSON.stringify(result)),
+      guidance: result.guidance
+        || result.raw_text
+        || (typeof result === 'string' ? result : JSON.stringify(result)),
       decision: result.decision || null,
       follow_up: result.follow_up || null
     };
@@ -247,17 +249,20 @@ class PmBrain {
     if (isUser) {
       // Conversational mode — minimal scaffolding. Loading the
       // productBrief or project-state sections poisons the response
-      // with contract language ("agents must claim via bd ready") and
-      // makes PM lecture the user. For human chat, give the LLM ONLY:
-      //   1. who PM is supposed to be (one paragraph),
-      //   2. what the user just said.
-      // Everything else (productBrief / decisions / agent matrix) is
-      // routing memory aimed at backend agents, suppressed here.
+      // with contract language. For human chat, give the LLM ONLY
+      // persona + the user's message. Critically, instruct the LLM
+      // to RETURN PLAIN TEXT (not JSON, not markdown code blocks) so
+      // Studio renders it directly without unwrapping.
+      const proactiveHints = `## Pilot AGI quick reference\nIf it would help the user, you can suggest these commands by name:\n- /pilot-init — initialize a project (creates work/PROJECT_BRIEF.md + ROADMAP.md)\n- /pilot-sprint — plan a new sprint of bd tasks\n- /pilot-plan — write an implementation plan for the current task\n- /pilot-exec — execute one approved plan step\n- /pilot-commit — commit current work\n- /pilot-review — review the diff\n- /pilot-close — close the current bd task\n- /pilot-next — pick the top ready task\nbd is the source of truth for tasks. \`bd ready\` shows what's actionable. Suggest the next concrete step in the canonical loop when the user is ambiguous about what to do.`;
       sections.push({
         priority: 0,
         content: `# You are the PM for the project "${knowledge.projectName}"\n\n` +
-          `Talk like a friendly senior product manager chatting with the founder/operator. Be warm, concise, opinionated. Match the user's energy: short greetings get short replies (1 sentence), complex questions get thoughtful but tight answers (1-3 short paragraphs). DO NOT return JSON. DO NOT lecture about bd, agents, contracts, canonical loops, or "non-compliant pings". DO NOT treat the user as a deregistered agent. The user is a HUMAN, not a backend agent. If they greet you, greet them back and offer a useful next step.\n\n` +
-          `## User's Message\n${question}\n\n## Your Reply\n`
+          `You are a friendly, proactive senior product manager chatting directly with the founder/operator (a HUMAN). Be warm, concise, opinionated. Match energy: greetings get one-sentence replies; real questions get 1-3 short paragraphs.\n\n` +
+          `**Output format:** plain text only. No JSON. No code-block wrappers. No "raw_text" key. Just write the reply as if texting a colleague.\n\n` +
+          `**Be proactive.** When the user is vague ("hi", "what now", "where are we"), don't just say "what do you want to work on" — suggest a concrete next step from the Pilot AGI loop below, citing the most relevant command. Frame it as a question they can say yes to.\n\n` +
+          `**Don't lecture.** No talk about "non-compliant pings", "deregistered agents", "contracts", or "canonical loop violations". The user is a person, not a backend agent.\n\n` +
+          `${proactiveHints}\n\n` +
+          `## User's Message\n${question}\n\n## Your Reply (plain text)\n`
       });
       // No other priorities for user mode — return early.
       return this._fitToLimit(sections);
