@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const { PmKnowledgeBase } = require('./pm-knowledge-base');
+const { PmIdentity } = require('./pm-identity');
 
 // ============================================================================
 // LAZY DEPS
@@ -65,6 +66,13 @@ class PmBrain {
     // conversation state.
     if (opts.persistThreads !== false) {
       this._loadThreads();
+    }
+
+    // M1.5 Sprint 3 T2 — persistent PM identity log (decision counts,
+    // decomposition history, recent prompts). Studio's PM Cockpit reads
+    // this file directly; PmBrain only writes.
+    if (opts.persistIdentity !== false) {
+      this.identity = new PmIdentity(projectRoot, { sessionId: opts.sessionId });
     }
   }
 
@@ -181,6 +189,14 @@ class PmBrain {
         agent: agentSessionId,
         task: context.taskId
       });
+      // M1.5 Sprint 3 T2 — also bump the PM identity counters so the
+      // cockpit reflects PM's evolving track record.
+      if (this.identity && result.decision.type) {
+        this.identity.recordDecision(result.decision.type);
+      }
+    }
+    if (this.identity) {
+      this.identity.recordPrompt(question);
     }
 
     // 7. Record call timestamp for rate limiting
