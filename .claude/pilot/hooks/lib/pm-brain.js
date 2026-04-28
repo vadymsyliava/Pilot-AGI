@@ -245,28 +245,34 @@ class PmBrain {
     const isUser = context.audience === 'user' || context.audience === 'human';
 
     if (isUser) {
-      // Conversational mode — no JSON requirement, no "be authoritative"
-      // lecturing, no contract clauses. PM is a helpful product manager
-      // talking to its founder/operator.
+      // Conversational mode — minimal scaffolding. Loading the
+      // productBrief or project-state sections poisons the response
+      // with contract language ("agents must claim via bd ready") and
+      // makes PM lecture the user. For human chat, give the LLM ONLY:
+      //   1. who PM is supposed to be (one paragraph),
+      //   2. what the user just said.
+      // Everything else (productBrief / decisions / agent matrix) is
+      // routing memory aimed at backend agents, suppressed here.
       sections.push({
         priority: 0,
-        content: `## User's Message\n${question}\n\n## Your Response\nRespond as the PM, conversationally and concisely (1-3 short paragraphs max). The user is a human chatting with you, not a backend agent — do not return JSON, do not lecture about bd contracts or canonical loops, do not list "concrete unblock criteria". Greet greetings warmly. Answer questions plainly. Suggest concrete next steps when useful, citing project state if relevant. If you genuinely need to refuse a request, explain why in plain English in one sentence and offer an alternative.`
+        content: `# You are the PM for the project "${knowledge.projectName}"\n\n` +
+          `Talk like a friendly senior product manager chatting with the founder/operator. Be warm, concise, opinionated. Match the user's energy: short greetings get short replies (1 sentence), complex questions get thoughtful but tight answers (1-3 short paragraphs). DO NOT return JSON. DO NOT lecture about bd, agents, contracts, canonical loops, or "non-compliant pings". DO NOT treat the user as a deregistered agent. The user is a HUMAN, not a backend agent. If they greet you, greet them back and offer a useful next step.\n\n` +
+          `## User's Message\n${question}\n\n## Your Reply\n`
       });
-    } else {
-      // Agent mode (existing): structured JSON decision for orchestration.
-      sections.push({
-        priority: 0,
-        content: `## Agent's Question\nAgent ${context.agentName || context.agentId || 'unknown'} (working on ${context.taskId || 'unknown'}):\n\n${question}\n\n## Your Response\nRespond as the PM. Be specific, actionable, and authoritative. Return JSON:\n{\n  "guidance": "your detailed response",\n  "decision": { "type": "...", "action": "...", "reason": "..." },\n  "follow_up": "any question back to the agent (optional)"\n}`
-      });
+      // No other priorities for user mode — return early.
+      return this._fitToLimit(sections);
     }
 
-    // Priority 1: PM persona + product brief
-    const personaRole = isUser
-      ? `## Your Role\nYou are the user's product manager — friendly, succinct, opinionated. You know the project's state intimately and can suggest the next concrete step. Match the user's energy: short greetings get short replies, complex questions get thoughtful but not bloated answers.`
-      : `## Your Role\nYou are the Project Manager. You make decisions about task prioritization, code review, architecture guidance, conflict resolution, agent coordination, and risk assessment.\nYou have full knowledge of the project state. Respond with actionable guidance.`;
+    // ------ Agent mode (existing): structured JSON decision ------
+    sections.push({
+      priority: 0,
+      content: `## Agent's Question\nAgent ${context.agentName || context.agentId || 'unknown'} (working on ${context.taskId || 'unknown'}):\n\n${question}\n\n## Your Response\nRespond as the PM. Be specific, actionable, and authoritative. Return JSON:\n{\n  "guidance": "your detailed response",\n  "decision": { "type": "...", "action": "...", "reason": "..." },\n  "follow_up": "any question back to the agent (optional)"\n}`
+    });
+
+    // Priority 1: PM persona + product brief (agent mode only)
     sections.push({
       priority: 1,
-      content: `# You are the PM Agent for "${knowledge.projectName}"\n\n${knowledge.productBrief}\n\n${personaRole}`
+      content: `# You are the PM Agent for "${knowledge.projectName}"\n\n${knowledge.productBrief}\n\n## Your Role\nYou are the Project Manager. You make decisions about task prioritization, code review, architecture guidance, conflict resolution, agent coordination, and risk assessment.\nYou have full knowledge of the project state. Respond with actionable guidance.`
     });
 
     // Priority 2: Project state
@@ -278,29 +284,31 @@ class PmBrain {
       content: `## Current Project State\n- Milestone: ${knowledge.currentMilestone || 'Unknown'}\n- Phase: ${knowledge.currentPhase || 'Unknown'}\n- Active Agents: ${agents.length}\n- Tasks In Progress: ${inProgress.map(t => `${t.id}: ${t.title || t.summary || ''}`).join(', ') || 'none'}\n- Tasks Blocked: ${blocked.length}\n- Budget Used: ${knowledge.budgetUsedToday || 'N/A'}`
     });
 
-    // Priority 3: Recent decisions
-    const decisions = Array.isArray(knowledge.recentDecisions) ? knowledge.recentDecisions : [];
-    if (decisions.length > 0) {
-      sections.push({
-        priority: 3,
-        content: `## Recent PM Decisions\n${decisions.map(d => `- [${d.ts}] ${d.type}: ${d.summary || d.action || ''} (outcome: ${d.outcome || 'pending'})`).join('\n')}`
-      });
-    }
-
-    // Priority 4: Agent states
-    if (agents.length > 0) {
-      sections.push({
-        priority: 4,
-        content: `## Active Agent States\n${agents.map(a => `- ${a.agent_name || a.session_id} (${a.role || 'general'}): task=${a.claimed_task || 'idle'}, pressure=${a.pressure || 'unknown'}`).join('\n')}`
-      });
-    }
-
-    // Priority 5: Task graph
-    if (knowledge.taskSummary) {
-      sections.push({
-        priority: 5,
-        content: `## Task Graph\n${knowledge.taskSummary}`
-      });
+    // Priorities 3-5 (recent decisions, agent states, task graph) are
+    // routing/orchestration memory aimed at backend agents. Including
+    // them in user-mode poisons the conversation: a single prior
+    // 'drop-message' decision in the channel makes the LLM treat the
+    // human user as the deregistered agent. Skip them for user mode.
+    if (!isUser) {
+      const decisions = Array.isArray(knowledge.recentDecisions) ? knowledge.recentDecisions : [];
+      if (decisions.length > 0) {
+        sections.push({
+          priority: 3,
+          content: `## Recent PM Decisions\n${decisions.map(d => `- [${d.ts}] ${d.type}: ${d.summary || d.action || ''} (outcome: ${d.outcome || 'pending'})`).join('\n')}`
+        });
+      }
+      if (agents.length > 0) {
+        sections.push({
+          priority: 4,
+          content: `## Active Agent States\n${agents.map(a => `- ${a.agent_name || a.session_id} (${a.role || 'general'}): task=${a.claimed_task || 'idle'}, pressure=${a.pressure || 'unknown'}`).join('\n')}`
+        });
+      }
+      if (knowledge.taskSummary) {
+        sections.push({
+          priority: 5,
+          content: `## Task Graph\n${knowledge.taskSummary}`
+        });
+      }
     }
 
     // Priority 6: Research
