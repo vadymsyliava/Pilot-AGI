@@ -567,6 +567,50 @@ function assignTask(taskId, targetSessionId, pmSessionId, opts = {}) {
 }
 
 /**
+ * Directed dispatch — pick an idle agent of the requested role and
+ * assign a task to it. Replaces the "mark ready, hope an agent claims"
+ * pattern for cases where the PM knows which specialization should
+ * own the work (e.g. "frontend" handoff after backend ships an API).
+ *
+ * Sprint 3 T3 of M1.5.
+ *
+ * @param {string} role          Agent role from agent-registry.json
+ * @param {object} task          { id, title, description, priority? }
+ * @param {string} pmSessionId   PM's session id (sender)
+ * @param {object} [opts]
+ * @param {object} [opts.context]  Free-form context bag passed to agent
+ * @param {object} [opts._session] Test seam — overrides session module
+ * @returns { success, error? } | { success: true, assigned_to, ... }
+ */
+function sendTaskToAgent(role, task, pmSessionId, opts = {}) {
+  if (!role || typeof role !== 'string') {
+    return { success: false, error: 'role is required' };
+  }
+  if (!task || !task.id) {
+    return { success: false, error: 'task.id is required' };
+  }
+  const sess = opts._session || session;
+  const candidates = sess.getAvailableAgents().filter(a => a.role === role);
+  if (candidates.length === 0) {
+    return {
+      success: false,
+      error: `No idle agent with role "${role}" — try /pilot-spawn ${role} or wait`,
+      role
+    };
+  }
+  // Pick the first idle agent of the role. Future: rank by affinity /
+  // task-completion-rate / load.
+  const target = candidates[0];
+  return assignTask(task.id, target.session_id, pmSessionId, {
+    title: task.title,
+    description: task.description,
+    priority: task.priority,
+    research_context: opts.context,
+    reason: opts.reason || `Directed dispatch to ${role}`
+  });
+}
+
+/**
  * Reassign a task from one agent to another.
  */
 function reassignTask(taskId, fromSessionId, toSessionId, pmSessionId, reason) {
@@ -1356,6 +1400,7 @@ module.exports = {
   scoreAgentForTask,
   routeTaskToAgent,
   assignTask,
+  sendTaskToAgent,
   reassignTask,
 
   // Agent control
