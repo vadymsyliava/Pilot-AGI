@@ -738,6 +738,9 @@ class PmHub extends EventEmitter {
     if (method === 'POST' && pathname === '/api/ask-pm') {
       return this._handleAskPm(req, res);
     }
+    if (method === 'POST' && pathname === '/api/dispatch') {
+      return this._handleDispatch(req, res);
+    }
     if (method === 'POST' && pathname === '/api/report') {
       return this._handleReport(req, res);
     }
@@ -863,6 +866,46 @@ class PmHub extends EventEmitter {
         res.writeHead(500);
         res.end(JSON.stringify({ error: e.message }));
       });
+    });
+  }
+
+  /**
+   * POST /api/dispatch — directed task assignment to an agent of a
+   * given role. Body: { role, task: { id, title?, description?,
+   * priority? }, pmSessionId, context? }. Returns the orchestrator's
+   * assignment record on success, 4xx on validation, 503 if the
+   * orchestrator module isn't loadable.
+   *
+   * Sprint 3 T4 of M1.5.
+   */
+  _handleDispatch(req, res) {
+    this._readBody(req, (body) => {
+      if (!body || !body.role) {
+        res.writeHead(400);
+        return res.end(JSON.stringify({ error: 'role required' }));
+      }
+      if (!body.task || !body.task.id) {
+        res.writeHead(400);
+        return res.end(JSON.stringify({ error: 'task.id required' }));
+      }
+
+      let orchestrator;
+      try {
+        orchestrator = require('./orchestrator');
+      } catch (e) {
+        res.writeHead(503);
+        return res.end(JSON.stringify({ error: 'orchestrator unavailable: ' + e.message }));
+      }
+
+      const result = orchestrator.sendTaskToAgent(
+        body.role,
+        body.task,
+        body.pmSessionId || 'pm-daemon',
+        { context: body.context, reason: body.reason }
+      );
+      const status = result.success ? 200 : 409;
+      res.writeHead(status);
+      res.end(JSON.stringify(result));
     });
   }
 
