@@ -7,6 +7,8 @@
  * Part of Phase 5.0 (Pilot AGI-adl)
  */
 
+const fs = require('fs');
+const path = require('path');
 const { PmKnowledgeBase } = require('./pm-knowledge-base');
 
 // ============================================================================
@@ -56,6 +58,67 @@ class PmBrain {
 
     // Rate limiting
     this._callTimestamps = [];
+
+    // M1.5 Sprint 3 — restore persisted conversation threads so PM
+    // identity carries across daemon restarts. Failures are non-fatal:
+    // a missing or malformed file just means we start with an empty
+    // conversation state.
+    if (opts.persistThreads !== false) {
+      this._loadThreads();
+    }
+  }
+
+  /**
+   * Path on disk where conversation threads are persisted.
+   */
+  _threadsPath() {
+    return path.join(
+      this.projectRoot,
+      '.claude/pilot/state/orchestrator/pm-threads.json'
+    );
+  }
+
+  /**
+   * Read pm-threads.json into `this.conversations`. Tolerates missing
+   * file, malformed JSON, and unexpected shapes — caller should never
+   * see a throw.
+   */
+  _loadThreads() {
+    try {
+      const raw = fs.readFileSync(this._threadsPath(), 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && parsed.conversations) {
+        for (const [sessionId, thread] of Object.entries(parsed.conversations)) {
+          if (Array.isArray(thread)) {
+            this.conversations.set(sessionId, thread.slice(-MAX_THREAD_TURNS));
+          }
+        }
+      }
+    } catch (e) {
+      // ENOENT / SyntaxError / etc. — start clean.
+    }
+  }
+
+  /**
+   * Atomically write `this.conversations` to disk. Atomic = write to a
+   * sibling tmp file, then rename. Best-effort; failures are swallowed
+   * (the in-memory state remains correct, persistence just lags).
+   */
+  _saveThreads() {
+    try {
+      const filePath = this._threadsPath();
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      const obj = {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        conversations: Object.fromEntries(this.conversations.entries())
+      };
+      const tmp = filePath + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+      fs.renameSync(tmp, filePath);
+    } catch (e) {
+      // Disk full / permission denied — leave in-memory state intact.
+    }
   }
 
   /**
@@ -108,6 +171,7 @@ class PmBrain {
     thread.push({ role: 'agent', content: question, ts: Date.now() });
     thread.push({ role: 'pm', content: response.result, ts: Date.now() });
     this.conversations.set(agentSessionId, thread.slice(-MAX_THREAD_TURNS));
+    this._saveThreads();
 
     // 6. Extract and persist decisions
     const result = response.result || {};
@@ -138,17 +202,19 @@ class PmBrain {
   }
 
   /**
-   * Clear conversation thread for an agent.
+   * Clear conversation thread for an agent. Persists.
    */
   clearThread(agentSessionId) {
     this.conversations.delete(agentSessionId);
+    this._saveThreads();
   }
 
   /**
-   * Clear all threads (e.g. on daemon restart).
+   * Clear all threads (e.g. on daemon restart). Persists.
    */
   clearAllThreads() {
     this.conversations.clear();
+    this._saveThreads();
   }
 
   // ==========================================================================
