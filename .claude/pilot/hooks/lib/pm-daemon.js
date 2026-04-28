@@ -1204,6 +1204,35 @@ class PmDaemon {
       if (review.approved) {
         this.log.info('Auto-review passed', { task_id: taskId, checks: review.checks });
 
+        // M1.5 Sprint 4 T3 — also delegate to a review agent for LLM-
+        // quality review. Fire-and-forget; don't block auto-close.
+        // Failures (no reviewer available, etc) are logged at debug
+        // level — they don't escalate the task.
+        try {
+          const sessionId = event.payload?.data?.session_id || event.session_id;
+          const reviewerRole = this.policy?.review?.reviewer_role || 'review';
+          const delegation = orchestrator.delegateForReview(
+            taskId,
+            reviewerRole,
+            this.pmSessionId || 'pm-daemon',
+            { completedBy: sessionId }
+          );
+          if (delegation && delegation.success) {
+            this.log.info('Review delegated', {
+              task_id: taskId,
+              review_task: `${taskId}.review`,
+              reviewer: delegation.assigned_to
+            });
+          } else {
+            this.log.debug('Review delegation skipped', {
+              task_id: taskId,
+              reason: delegation?.error
+            });
+          }
+        } catch (delErr) {
+          this.log.debug('delegateForReview threw', { task_id: taskId, error: delErr.message });
+        }
+
         // Auto-close the task (async to avoid blocking)
         if (!this.opts.dryRun) {
           bdAsync(['close', taskId], this.projectRoot).then(() => {
