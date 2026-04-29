@@ -202,12 +202,70 @@ class PmBrain {
     // 7. Record call timestamp for rate limiting
     this._callTimestamps.push(Date.now());
 
+    // R1 (2026-04-28) — single response envelope. Replaces the
+    // || result.raw_text || JSON.stringify(result) fallback chain. The
+    // mode dictates the expected shape; the normalizer enforces it.
+    const mode = (context.audience === 'user' || context.audience === 'human')
+      ? 'user' : 'agent';
+    return this._normalizeResponse(result, mode);
+  }
+
+  /**
+   * Coerce whatever the LLM returned into the canonical PM response
+   * envelope. R1 of the architectural-debt audit (2026-04-28).
+   *
+   * Envelope:
+   *   {
+   *     success: true,
+   *     mode: "user" | "agent",
+   *     guidance: string,        // ALWAYS plain text the client can render
+   *     decision: { type, action?, reason? } | null,
+   *     subtasks: [{ title, role? }] | null,
+   *     follow_up: string | null
+   *   }
+   *
+   * User mode: LLM should return plain text. If it ignored that and
+   * wrapped in JSON anyway, we unwrap once.
+   * Agent mode: LLM should return JSON. We accept the structured fields,
+   * fall back to stringification only as a last resort with a flag.
+   */
+  _normalizeResponse(result, mode) {
+    // Plain string from claude — common in user mode.
+    if (typeof result === 'string') {
+      return {
+        success: true, mode,
+        guidance: result.trim(),
+        decision: null, subtasks: null, follow_up: null
+      };
+    }
+    if (!result || typeof result !== 'object') {
+      return {
+        success: true, mode,
+        guidance: '', decision: null, subtasks: null, follow_up: null
+      };
+    }
+
+    // Some claude versions wrap their plain reply in {"raw_text": "..."}.
+    // Unwrap once so user-mode clients see clean text.
+    let guidance = result.guidance;
+    if (!guidance && typeof result.raw_text === 'string') {
+      guidance = result.raw_text;
+    }
+    if (!guidance && typeof result.reply === 'string') {
+      guidance = result.reply;
+    }
+    if (!guidance) {
+      // Last resort. Don't dump JSON onto user-mode chats.
+      guidance = mode === 'user' ? '' : JSON.stringify(result);
+    }
+    guidance = String(guidance).trim();
+
     return {
       success: true,
-      guidance: result.guidance
-        || result.raw_text
-        || (typeof result === 'string' ? result : JSON.stringify(result)),
+      mode,
+      guidance,
       decision: result.decision || null,
+      subtasks: Array.isArray(result.subtasks) ? result.subtasks : null,
       follow_up: result.follow_up || null
     };
   }
@@ -239,84 +297,120 @@ class PmBrain {
   // PROMPT BUILDER
   // ==========================================================================
 
+  /**
+   * R1 (2026-04-28) — entry point keeps its existing signature for
+   * backward compatibility, but routes to one of two cleanly-separated
+   * builders. Each is responsible for its own scaffolding; nothing is
+   * shared except `knowledge`. Adding a third audience later (e.g.
+   * "supervisor", "auditor") is a new builder, not a third branch in
+   * an if-else.
+   */
   _buildPrompt(knowledge, thread, question, context) {
+    const audience = context.audience === 'user' || context.audience === 'human'
+      ? 'user' : 'agent';
+    return audience === 'user'
+      ? this._buildUserPrompt(knowledge, question)
+      : this._buildAgentPrompt(knowledge, thread, question, context);
+  }
+
+  /**
+   * User-mode prompt. Minimal scaffolding — the LLM sees ONLY persona
+   * + question. No productBrief, no project-state matrix, no agent
+   * registry, no decisions log. Those sections are routing memory
+   * meant for backend agents and they poison user-mode chats by
+   * triggering deregistration / contract language.
+   *
+   * R1 of architectural-debt audit (2026-04-28).
+   */
+  _buildUserPrompt(knowledge, question) {
+    const proactiveHints = `## Pilot AGI quick reference\n` +
+      `If it would help the user, you can suggest these commands by name:\n` +
+      `- /pilot-init — initialize a project (creates work/PROJECT_BRIEF.md + ROADMAP.md)\n` +
+      `- /pilot-sprint — plan a new sprint of bd tasks\n` +
+      `- /pilot-plan — write an implementation plan for the current task\n` +
+      `- /pilot-exec — execute one approved plan step\n` +
+      `- /pilot-commit — commit current work\n` +
+      `- /pilot-review — review the diff\n` +
+      `- /pilot-close — close the current bd task\n` +
+      `- /pilot-next — pick the top ready task\n` +
+      `bd is the source of truth for tasks. \`bd ready\` shows what's actionable.`;
+
+    return [
+      `# You are the PM for the project "${knowledge.projectName}"`,
+      ``,
+      `You are a friendly, proactive senior product manager chatting directly with the founder/operator (a HUMAN). Be warm, concise, opinionated. Match energy: greetings get one-sentence replies; real questions get 1-3 short paragraphs.`,
+      ``,
+      `**Output format:** plain text only. No JSON. No code-block wrappers. No "raw_text" key. Just write the reply as if texting a colleague.`,
+      ``,
+      `**You cannot execute commands yourself.** You are advisory. Tell the user the command to run; do not offer to run it. "Run \`/pilot-next\` to grab the top task" — not "want me to run /pilot-next?".`,
+      ``,
+      `**Be proactive but decisive.** When the user is vague ("hi", "what now"), pick the single most useful next command and recommend it. Don't list 3 options. The user can push back if they want something else.`,
+      ``,
+      `**Don't lecture.** Skip "non-compliant pings", "deregistered agents", "contracts", "canonical loop violations". The user is a person, not a backend agent.`,
+      ``,
+      proactiveHints,
+      ``,
+      `## User's Message`,
+      question,
+      ``,
+      `## Your Reply (plain text)`,
+      ``
+    ].join('\n');
+  }
+
+  /**
+   * Agent-mode prompt. Full project context (productBrief, project
+   * state, recent decisions, agent registry, task graph), structured
+   * JSON output enforced, conversation thread included for continuity.
+   *
+   * R1 of architectural-debt audit (2026-04-28). The fitToLimit logic
+   * is preserved — only the layered priority sections moved here.
+   */
+  _buildAgentPrompt(knowledge, thread, question, context) {
     const sections = [];
-    // M1.5 Sprint 5 — branch on audience. The PM responds very differently
-    // to a human user typing in a chat ("hi", "what should I work on?") vs
-    // a backend agent requesting a structured decomposition decision.
-    const isUser = context.audience === 'user' || context.audience === 'human';
+    const inProgress = Array.isArray(knowledge.tasksInProgress) ? knowledge.tasksInProgress : [];
+    const blocked = Array.isArray(knowledge.tasksBlocked) ? knowledge.tasksBlocked : [];
+    const agents = Array.isArray(knowledge.activeAgents) ? knowledge.activeAgents : [];
 
-    if (isUser) {
-      // Conversational mode — minimal scaffolding. Loading the
-      // productBrief or project-state sections poisons the response
-      // with contract language. For human chat, give the LLM ONLY
-      // persona + the user's message. Critically, instruct the LLM
-      // to RETURN PLAIN TEXT (not JSON, not markdown code blocks) so
-      // Studio renders it directly without unwrapping.
-      const proactiveHints = `## Pilot AGI quick reference\nIf it would help the user, you can suggest these commands by name:\n- /pilot-init — initialize a project (creates work/PROJECT_BRIEF.md + ROADMAP.md)\n- /pilot-sprint — plan a new sprint of bd tasks\n- /pilot-plan — write an implementation plan for the current task\n- /pilot-exec — execute one approved plan step\n- /pilot-commit — commit current work\n- /pilot-review — review the diff\n- /pilot-close — close the current bd task\n- /pilot-next — pick the top ready task\nbd is the source of truth for tasks. \`bd ready\` shows what's actionable. Suggest the next concrete step in the canonical loop when the user is ambiguous about what to do.`;
-      sections.push({
-        priority: 0,
-        content: `# You are the PM for the project "${knowledge.projectName}"\n\n` +
-          `You are a friendly, proactive senior product manager chatting directly with the founder/operator (a HUMAN). Be warm, concise, opinionated. Match energy: greetings get one-sentence replies; real questions get 1-3 short paragraphs.\n\n` +
-          `**Output format:** plain text only. No JSON. No code-block wrappers. No "raw_text" key. Just write the reply as if texting a colleague.\n\n` +
-          `**You cannot execute commands yourself.** You are advisory. NEVER say "want me to run /pilot-next?" or "I'll grab the top task" — you can't. Instead, TELL THE USER WHAT TO DO: "Run \`/pilot-next\` to grab the top task" or "Try \`bd ready\` to see what's actionable." Frame as direct instructions, not offers.\n\n` +
-          `**Be proactive but decisive.** When the user is vague ("hi", "what now", "where are we"), pick the single most useful next command and tell them to run it. Don't list 3 options every time. Don't ask "or X or Y?". Pick one and recommend it. The user can push back if they want something else.\n\n` +
-          `**No loops.** If you've already recommended /pilot-next twice and the user keeps saying "yes", they probably already ran it — ask what they're seeing instead of repeating yourself.\n\n` +
-          `**Don't lecture.** No talk about "non-compliant pings", "deregistered agents", "contracts", or "canonical loop violations". The user is a person, not a backend agent.\n\n` +
-          `${proactiveHints}\n\n` +
-          `## User's Message\n${question}\n\n## Your Reply (plain text)\n`
-      });
-      // No other priorities for user mode — return early.
-      return this._fitToLimit(sections);
-    }
-
-    // ------ Agent mode (existing): structured JSON decision ------
     sections.push({
       priority: 0,
-      content: `## Agent's Question\nAgent ${context.agentName || context.agentId || 'unknown'} (working on ${context.taskId || 'unknown'}):\n\n${question}\n\n## Your Response\nRespond as the PM. Be specific, actionable, and authoritative. Return JSON:\n{\n  "guidance": "your detailed response",\n  "decision": { "type": "...", "action": "...", "reason": "..." },\n  "follow_up": "any question back to the agent (optional)"\n}`
+      content: `## Agent's Question\nAgent ${context.agentName || context.agentId || 'unknown'} (working on ${context.taskId || 'unknown'}):\n\n${question}\n\n## Your Response\nRespond as the PM. Be specific, actionable, and authoritative. Return JSON matching this exact shape:\n{\n  "guidance": "human-readable response",\n  "decision": { "type": "decompose|answer|defer|hold", "action": "...", "reason": "..." },\n  "subtasks": [{ "title": "...", "role": "..." }],\n  "follow_up": "optional question back to the agent"\n}\n"subtasks" is required ONLY when decision.type=="decompose"; otherwise omit or set null. "follow_up" is optional everywhere.`
     });
 
-    // Priority 1: PM persona + product brief (agent mode only)
     sections.push({
       priority: 1,
       content: `# You are the PM Agent for "${knowledge.projectName}"\n\n${knowledge.productBrief}\n\n## Your Role\nYou are the Project Manager. You make decisions about task prioritization, code review, architecture guidance, conflict resolution, agent coordination, and risk assessment.\nYou have full knowledge of the project state. Respond with actionable guidance.`
     });
 
-    // Priority 2: Project state
-    const inProgress = Array.isArray(knowledge.tasksInProgress) ? knowledge.tasksInProgress : [];
-    const blocked = Array.isArray(knowledge.tasksBlocked) ? knowledge.tasksBlocked : [];
-    const agents = Array.isArray(knowledge.activeAgents) ? knowledge.activeAgents : [];
     sections.push({
       priority: 2,
       content: `## Current Project State\n- Milestone: ${knowledge.currentMilestone || 'Unknown'}\n- Phase: ${knowledge.currentPhase || 'Unknown'}\n- Active Agents: ${agents.length}\n- Tasks In Progress: ${inProgress.map(t => `${t.id}: ${t.title || t.summary || ''}`).join(', ') || 'none'}\n- Tasks Blocked: ${blocked.length}\n- Budget Used: ${knowledge.budgetUsedToday || 'N/A'}`
     });
 
-    // Priorities 3-5 (recent decisions, agent states, task graph) are
-    // routing/orchestration memory aimed at backend agents. Including
-    // them in user-mode poisons the conversation: a single prior
-    // 'drop-message' decision in the channel makes the LLM treat the
-    // human user as the deregistered agent. Skip them for user mode.
-    if (!isUser) {
-      const decisions = Array.isArray(knowledge.recentDecisions) ? knowledge.recentDecisions : [];
-      if (decisions.length > 0) {
-        sections.push({
-          priority: 3,
-          content: `## Recent PM Decisions\n${decisions.map(d => `- [${d.ts}] ${d.type}: ${d.summary || d.action || ''} (outcome: ${d.outcome || 'pending'})`).join('\n')}`
-        });
-      }
-      if (agents.length > 0) {
-        sections.push({
-          priority: 4,
-          content: `## Active Agent States\n${agents.map(a => `- ${a.agent_name || a.session_id} (${a.role || 'general'}): task=${a.claimed_task || 'idle'}, pressure=${a.pressure || 'unknown'}`).join('\n')}`
-        });
-      }
-      if (knowledge.taskSummary) {
-        sections.push({
-          priority: 5,
-          content: `## Task Graph\n${knowledge.taskSummary}`
-        });
-      }
+    const decisions = Array.isArray(knowledge.recentDecisions) ? knowledge.recentDecisions : [];
+    if (decisions.length > 0) {
+      sections.push({
+        priority: 3,
+        content: `## Recent PM Decisions\n${decisions.map(d => `- [${d.ts}] ${d.type}: ${d.summary || d.action || ''} (outcome: ${d.outcome || 'pending'})`).join('\n')}`
+      });
     }
+    if (agents.length > 0) {
+      sections.push({
+        priority: 4,
+        content: `## Active Agent States\n${agents.map(a => `- ${a.agent_name || a.session_id} (${a.role || 'general'}): task=${a.claimed_task || 'idle'}, pressure=${a.pressure || 'unknown'}`).join('\n')}`
+      });
+    }
+    if (knowledge.taskSummary) {
+      sections.push({
+        priority: 5,
+        content: `## Task Graph\n${knowledge.taskSummary}`
+      });
+    }
+    return this._appendAgentTail(sections, knowledge, thread);
+  }
+
+  /** Tail sections shared by agent mode (research, agent plan, thread). */
+  _appendAgentTail(sections, knowledge, thread) {
 
     // Priority 6: Research
     if (knowledge.relevantResearch) {
