@@ -311,6 +311,7 @@ class PmHub extends EventEmitter {
 
       this.server.on('listening', () => {
         this.listening = true;
+        this._startedAtMs = Date.now();
         this._writePortFile();
 
         // Reconcile any events from file bus that happened while hub was down
@@ -729,6 +730,9 @@ class PmHub extends EventEmitter {
     if (method === 'GET' && pathname === '/api/status') {
       return this._handleStatus(req, res);
     }
+    if (method === 'GET' && pathname === '/api/daemon-info') {
+      return this._handleDaemonInfo(req, res);
+    }
     if (method === 'POST' && pathname === '/api/register') {
       return this._handleRegister(req, res);
     }
@@ -781,6 +785,46 @@ class PmHub extends EventEmitter {
   _handleStatus(req, res) {
     res.writeHead(200);
     res.end(JSON.stringify(this.getStatus()));
+  }
+
+  /**
+   * R3 (2026-04-28) — daemon discovery handshake.
+   *
+   * GET /api/daemon-info → {
+   *   pid, port, version, started_at_ms, uptime_ms,
+   *   ready (true once brain + bus are loaded),
+   *   project_root, agents_count
+   * }
+   *
+   * Studio polls this on launch + on connection loss as the canonical
+   * way to discover the daemon. Replaces the file-based port
+   * negotiation (.claude/pilot/state/orchestrator/pm-daemon.json)
+   * which had atomicity + 5s-guess-3847 failure modes.
+   */
+  _handleDaemonInfo(req, res) {
+    let version = null;
+    try {
+      const versionPath = require('path').join(this.projectRoot, '.claude/pilot/VERSION');
+      version = require('fs').readFileSync(versionPath, 'utf8').trim();
+    } catch (e) { /* version optional */ }
+
+    const startedAt = this._startedAtMs || Date.now();
+    res.writeHead(200);
+    res.end(JSON.stringify({
+      pid: process.pid,
+      port: this.port,
+      version,
+      started_at_ms: startedAt,
+      uptime_ms: Date.now() - startedAt,
+      // ready = HTTP listener is up (independent of brain).
+      ready: this.listening,
+      // brain_available = PmBrain is loaded; kept separate so Studio
+      // can render "Hub up · brain offline" as a degraded state.
+      brain_available: !!this.brain,
+      project_root: this.projectRoot,
+      agents_count: this.agents.size,
+      protocol_version: 1
+    }));
   }
 
   _handleRegister(req, res) {
