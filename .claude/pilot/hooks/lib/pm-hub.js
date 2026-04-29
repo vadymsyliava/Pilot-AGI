@@ -733,6 +733,9 @@ class PmHub extends EventEmitter {
     if (method === 'GET' && pathname === '/api/daemon-info') {
       return this._handleDaemonInfo(req, res);
     }
+    if (method === 'POST' && pathname === '/api/reload-brain') {
+      return this._handleReloadBrain(req, res);
+    }
     if (method === 'POST' && pathname === '/api/register') {
       return this._handleRegister(req, res);
     }
@@ -824,6 +827,38 @@ class PmHub extends EventEmitter {
       project_root: this.projectRoot,
       agents_count: this.agents.size,
       protocol_version: 1
+    }));
+  }
+
+  /**
+   * R4 (2026-04-28) — manual hot-reload trigger for pm-brain.js.
+   * The watcher in pm-brain-loader.js auto-reloads on fs change, but
+   * this endpoint is the explicit lever for clients that want to
+   * force a reload (e.g. Studio's debug pane). Safe: it does not
+   * mutate in-flight asks; only future PmBrain instances see new
+   * code.
+   */
+  _handleReloadBrain(req, res) {
+    let loader;
+    try { loader = require('./pm-brain-loader'); }
+    catch (e) {
+      res.writeHead(503);
+      return res.end(JSON.stringify({ error: 'pm-brain-loader unavailable: ' + e.message }));
+    }
+    const Fresh = loader.forceReload();
+    // Re-instantiate the daemon's brain so subsequent /api/ask-pm calls
+    // use the new code. Existing in-flight requests already hold a
+    // reference to the previous instance and complete against it.
+    if (this.brain && typeof this.brain.projectRoot === 'string') {
+      try {
+        this.brain = new Fresh(this.brain.projectRoot, {});
+      } catch (e) { /* keep old brain on construct failure */ }
+    }
+    res.writeHead(200);
+    res.end(JSON.stringify({
+      success: true,
+      reload_count: loader._stats().reloadCount,
+      brain_available: !!this.brain
     }));
   }
 
