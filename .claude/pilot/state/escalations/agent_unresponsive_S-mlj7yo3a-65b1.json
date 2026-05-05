@@ -1,0 +1,14 @@
+{
+  "event_type": "agent_unresponsive",
+  "session_id": "S-mlj7yo3a-65b1",
+  "task_id": null,
+  "level": "r",
+  "level_index": 3,
+  "first_triggered": "2026-02-12T10:39:00.005Z",
+  "last_escalated": "2026-02-12T11:36:10.643Z",
+  "retries": 3,
+  "resolved": false,
+  "context": {
+    "health_status": "stale"
+  }
+}

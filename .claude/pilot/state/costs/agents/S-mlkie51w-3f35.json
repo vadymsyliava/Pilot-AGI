@@ -1,0 +1,21 @@
+{
+  "session_id": "S-mlkie51w-3f35",
+  "days": {
+    "2026-02-13": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 138
+    }
+  },
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 138,
+  "tasks_worked": [
+    "Pilot AGI-0yu",
+    "Pilot AGI-si1p",
+    "Pilot AGI-nvn8",
+    "Pilot AGI-etpl"
+  ],
+  "created_at": "2026-02-13T06:51:04.114Z",
+  "updated_at": "2026-02-13T08:44:02.968Z"
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "Pilot AGI-pl7",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 67,
+  "sessions": {
+    "S-mlj7yo3a-65b1": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 67
+    }
+  },
+  "created_at": "2026-02-12T09:35:03.553Z",
+  "updated_at": "2026-02-12T09:43:47.518Z"
+}

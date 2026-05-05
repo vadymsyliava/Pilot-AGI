@@ -1,0 +1,478 @@
+{
+  "channel": "cost-tracking",
+  "version": 579,
+  "publishedBy": "unknown",
+  "sessionId": null,
+  "publishedAt": "2026-02-13T19:24:19.641Z",
+  "summary": null,
+  "data": {
+    "daily_summary": {
+      "date": "2026-02-13",
+      "total_tokens": 0,
+      "cost_usd": 0,
+      "agents": [
+        {
+          "session_id": "S-mlkhknhd-7431",
+          "tokens": 0,
+          "calls": 84
+        },
+        {
+          "session_id": "S-mlkhp61q-cb6e",
+          "tokens": 0,
+          "calls": 153
+        },
+        {
+          "session_id": "S-mlkie51w-3f35",
+          "tokens": 0,
+          "calls": 138
+        },
+        {
+          "session_id": "S-mlkikywn-7fba",
+          "tokens": 0,
+          "calls": 166
+        }
+      ]
+    },
+    "task_costs": [
+      {
+        "task_id": "FAKE-test-123",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 1
+      },
+      {
+        "task_id": "Pilot AGI-02g",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 94
+      },
+      {
+        "task_id": "Pilot AGI-031",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 22
+      },
+      {
+        "task_id": "Pilot AGI-094",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 9
+      },
+      {
+        "task_id": "Pilot AGI-0qt",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 26
+      },
+      {
+        "task_id": "Pilot AGI-0yu",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 105
+      },
+      {
+        "task_id": "Pilot AGI-1lp",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 19
+      },
+      {
+        "task_id": "Pilot AGI-1nv",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 58
+      },
+      {
+        "task_id": "Pilot AGI-1rk",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 7
+      },
+      {
+        "task_id": "Pilot AGI-2ag",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 29
+      },
+      {
+        "task_id": "Pilot AGI-2v8",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 25
+      },
+      {
+        "task_id": "Pilot AGI-34nh",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 49
+      },
+      {
+        "task_id": "Pilot AGI-3du",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 15
+      },
+      {
+        "task_id": "Pilot AGI-3j0",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 38
+      },
+      {
+        "task_id": "Pilot AGI-3y0",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 29
+      },
+      {
+        "task_id": "Pilot AGI-41c",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 27
+      },
+      {
+        "task_id": "Pilot AGI-4b6",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 6
+      },
+      {
+        "task_id": "Pilot AGI-5jg",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 45
+      },
+      {
+        "task_id": "Pilot AGI-5w6",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 11
+      },
+      {
+        "task_id": "Pilot AGI-5ww",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 36
+      },
+      {
+        "task_id": "Pilot AGI-6l3",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 43
+      },
+      {
+        "task_id": "Pilot AGI-7hw",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 75
+      },
+      {
+        "task_id": "Pilot AGI-7u3",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 28
+      },
+      {
+        "task_id": "Pilot AGI-812",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 106
+      },
+      {
+        "task_id": "Pilot AGI-adl",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 64
+      },
+      {
+        "task_id": "Pilot AGI-b9o",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 76
+      },
+      {
+        "task_id": "Pilot AGI-bqq",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 10
+      },
+      {
+        "task_id": "Pilot AGI-bro",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 29
+      },
+      {
+        "task_id": "Pilot AGI-cgv",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 18
+      },
+      {
+        "task_id": "Pilot AGI-cmb",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 70
+      },
+      {
+        "task_id": "Pilot AGI-cni",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 53
+      },
+      {
+        "task_id": "Pilot AGI-etpl",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 8
+      },
+      {
+        "task_id": "Pilot AGI-eud",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 10
+      },
+      {
+        "task_id": "Pilot AGI-f6e.6",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 17
+      },
+      {
+        "task_id": "Pilot AGI-gx9",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 22
+      },
+      {
+        "task_id": "Pilot AGI-h4yi",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 33
+      },
+      {
+        "task_id": "Pilot AGI-hyy",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 124
+      },
+      {
+        "task_id": "Pilot AGI-ia2",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 77
+      },
+      {
+        "task_id": "Pilot AGI-ifj4",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 29
+      },
+      {
+        "task_id": "Pilot AGI-j0o",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 11
+      },
+      {
+        "task_id": "Pilot AGI-j482",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 1
+      },
+      {
+        "task_id": "Pilot AGI-kg3",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 20
+      },
+      {
+        "task_id": "Pilot AGI-l5u",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 37
+      },
+      {
+        "task_id": "Pilot AGI-l6p",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 6
+      },
+      {
+        "task_id": "Pilot AGI-m370",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 1
+      },
+      {
+        "task_id": "Pilot AGI-mkn",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 75
+      },
+      {
+        "task_id": "Pilot AGI-msm",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 37
+      },
+      {
+        "task_id": "Pilot AGI-n55p",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 30
+      },
+      {
+        "task_id": "Pilot AGI-nvn8",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 23
+      },
+      {
+        "task_id": "Pilot AGI-o9z",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 17
+      },
+      {
+        "task_id": "Pilot AGI-ock",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 38
+      },
+      {
+        "task_id": "Pilot AGI-p7b",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 22
+      },
+      {
+        "task_id": "Pilot AGI-p92y",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 4
+      },
+      {
+        "task_id": "Pilot AGI-pg3",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 21
+      },
+      {
+        "task_id": "Pilot AGI-pl7",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 67
+      },
+      {
+        "task_id": "Pilot AGI-r9j",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 80
+      },
+      {
+        "task_id": "Pilot AGI-s6th",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 2
+      },
+      {
+        "task_id": "Pilot AGI-si1p",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 2
+      },
+      {
+        "task_id": "Pilot AGI-sny",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 61
+      },
+      {
+        "task_id": "Pilot AGI-tfro",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 78
+      },
+      {
+        "task_id": "Pilot AGI-tx6",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 8
+      },
+      {
+        "task_id": "Pilot AGI-vdx",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 31
+      },
+      {
+        "task_id": "Pilot AGI-veo",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 53
+      },
+      {
+        "task_id": "Pilot AGI-w5p",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 87
+      },
+      {
+        "task_id": "Pilot AGI-wra.1",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 24
+      },
+      {
+        "task_id": "Pilot AGI-wra.2",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 6
+      },
+      {
+        "task_id": "Pilot AGI-wra.3",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 25
+      },
+      {
+        "task_id": "Pilot AGI-wra.4",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 8
+      },
+      {
+        "task_id": "Pilot AGI-wra.5",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 27
+      },
+      {
+        "task_id": "Pilot AGI-wra.6",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 5
+      },
+      {
+        "task_id": "Pilot AGI-xqn",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 24
+      },
+      {
+        "task_id": "Pilot AGI-y1l",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 98
+      },
+      {
+        "task_id": "Pilot AGI-y59",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "total_calls": 13
+      }
+    ],
+    "published_at": "2026-02-13T19:24:19.641Z"
+  }
+}

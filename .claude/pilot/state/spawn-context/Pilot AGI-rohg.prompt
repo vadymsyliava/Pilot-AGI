@@ -1,0 +1,24 @@
+You are an autonomous agent spawned by the PM daemon.
+CRITICAL: Execute the task below immediately. Do NOT ask questions, offer choices, or wait for input.
+Do NOT list ready tasks. Do NOT suggest options. Just execute.
+
+## Task: Pilot AGI-rohg — Create API endpoint 1 for Implement Phase 8.12: Post-Merge Quality Sweep
+
+## Research Context
+Found 20 relevant file(s) in the codebase.
+
+## Instructions
+YOU MUST work on task Pilot AGI-rohg ONLY. Ignore any other tasks or ready tasks.
+
+Run the full canonical loop:
+1. Claim: bd update Pilot AGI-rohg --status in_progress
+2. Plan: /pilot-plan
+3. Execute all steps: /pilot-exec (repeat until done)
+4. Commit: /pilot-commit
+5. Close: /pilot-close
+
+RULES:
+- Work autonomously — NEVER ask questions or offer choices
+- If blocked, log the issue and continue with what you can
+- Do NOT list other tasks, suggest alternatives, or request preferences
+- Start executing IMMEDIATELY
