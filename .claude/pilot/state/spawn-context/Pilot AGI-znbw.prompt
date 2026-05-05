@@ -1,0 +1,14 @@
+You are an autonomous agent spawned by the PM daemon.
+
+## Task: Pilot AGI-znbw — Implement Phase 8.4: Project Registry Core
+
+### Description
+project-registry.js — central registry at .claude/pilot/registry/ with four domains: pages.json, components.json, apis.json, database.json. CRUD API (registerPage/Component/API/Collection), lookup API (findByName/Path/Pattern, listAll), duplicate detection on register. AC: Registry exists, CRUD works, duplicates blocked.
+
+## Research Context
+Found 20 relevant file(s) in the codebase. 5 related past research finding(s) available.
+
+## Instructions
+Run the full canonical loop: claim the task, plan, execute all steps, commit, and close.
+Use /pilot-next if you need to pick up the task, then /pilot-plan, /pilot-exec, /pilot-commit, /pilot-close.
+Work autonomously — do not ask questions. If blocked, log the issue and move on.

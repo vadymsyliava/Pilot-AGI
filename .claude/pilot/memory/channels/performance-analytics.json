@@ -1,0 +1,57 @@
+{
+  "channel": "performance-analytics",
+  "version": 135,
+  "publishedBy": "unknown",
+  "sessionId": null,
+  "publishedAt": "2026-02-13T19:20:21.371Z",
+  "summary": null,
+  "data": {
+    "daily_snapshot": {
+      "date": "2026-02-13",
+      "generated_at": "2026-02-13T19:20:20.519Z",
+      "tasks_assigned": 0,
+      "tasks_completed": 0,
+      "tasks_failed": 0,
+      "tasks_reassigned": 0,
+      "avg_cycle_time_ms": null,
+      "min_cycle_time_ms": null,
+      "max_cycle_time_ms": null,
+      "total_tokens": 0,
+      "cost_usd": 0,
+      "tokens_per_completed_task": null,
+      "success_rate": null,
+      "rework_rate": 0,
+      "complexity_accuracy": 0,
+      "queue_depth": 0,
+      "blocking_task_count": 0,
+      "bottleneck_assessment": "healthy",
+      "agents": []
+    },
+    "retrospective_summary": {
+      "velocity": {
+        "tasks_assigned": 0,
+        "tasks_completed": 0,
+        "tasks_failed": 0,
+        "tasks_reassigned": 0,
+        "avg_cycle_time_ms": null
+      },
+      "quality": {
+        "success_rate": null,
+        "rework_rate": 0
+      },
+      "cost": {
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "tokens_per_task": null
+      }
+    },
+    "bottlenecks": {
+      "blocking_tasks": [],
+      "slow_tasks": [],
+      "queue_depth": 0,
+      "bottleneck_agents": [],
+      "assessment": "healthy"
+    },
+    "published_at": "2026-02-13T19:20:21.371Z"
+  }
+}

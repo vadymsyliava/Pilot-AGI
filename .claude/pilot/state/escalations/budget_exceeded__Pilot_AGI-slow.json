@@ -1,0 +1,14 @@
+{
+  "event_type": "budget_exceeded",
+  "task_id": "Pilot AGI-slow",
+  "level": "a",
+  "level_index": 2,
+  "first_triggered": "2026-02-12T09:48:10.318Z",
+  "last_escalated": "2026-04-28T04:26:08.615Z",
+  "retries": 2,
+  "resolved": false,
+  "context": {
+    "source": "telegram_timeout",
+    "approvalId": "esc_timeout_001"
+  }
+}

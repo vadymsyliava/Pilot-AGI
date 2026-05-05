@@ -1,0 +1,15 @@
+{
+  "task_id": "Pilot AGI-p92y",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 4,
+  "sessions": {
+    "S-mlkikywn-7fba": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 4
+    }
+  },
+  "created_at": "2026-02-13T07:27:40.571Z",
+  "updated_at": "2026-02-13T07:29:46.124Z"
+}

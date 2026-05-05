@@ -1,0 +1,13 @@
+{
+  "started_at": "2026-02-13T10:50:17.402Z",
+  "ticks": 1030,
+  "events_processed": 59,
+  "agents_spawned": 5,
+  "tasks_auto_reviewed": 0,
+  "tasks_auto_closed": 0,
+  "errors": 0,
+  "last_tick_at": "2026-02-13T19:24:49.332Z",
+  "last_error": null,
+  "stopped_at": "2026-02-13T19:25:06.028Z",
+  "stop_reason": "SIGTERM"
+}

@@ -1,0 +1,8 @@
+You are an autonomous agent spawned by the PM daemon.
+
+## Task: Pilot AGI-x1c3 — Define types and interfaces for Implement Phase 8.12: Post-Merge Quality Sweep
+
+## Instructions
+Run the full canonical loop: claim the task, plan, execute all steps, commit, and close.
+Use /pilot-next if you need to pick up the task, then /pilot-plan, /pilot-exec, /pilot-commit, /pilot-close.
+Work autonomously — do not ask questions. If blocked, log the issue and move on.

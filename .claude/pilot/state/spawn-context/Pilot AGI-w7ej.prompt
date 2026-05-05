@@ -1,0 +1,24 @@
+You are an autonomous agent spawned by the PM daemon.
+CRITICAL: Execute the task below immediately. Do NOT ask questions, offer choices, or wait for input.
+Do NOT list ready tasks. Do NOT suggest options. Just execute.
+
+## Task: Pilot AGI-w7ej — Implement Phase 8.15: Quality Regression Prevention
+
+### Description
+Quality score floor blocks regressing commits. Per-area thresholds (strict for core, relaxed for experimental). Grace period for new features. Trend alerts when quality drops over N commits. AC: Quality only goes up or stays stable.
+
+## Research Context
+Found 20 relevant file(s) in the codebase. 1 existing pattern(s) can be reused.
+
+## Instructions
+YOU MUST work on task Pilot AGI-w7ej ONLY. Ignore any other tasks or ready tasks.
+
+A plan is already approved. Use /pilot-exec to execute steps.
+First claim: bd update Pilot AGI-w7ej --status in_progress
+Then execute all plan steps with /pilot-exec repeatedly until done.
+
+RULES:
+- Work autonomously — NEVER ask questions or offer choices
+- If blocked, log the issue and continue with what you can
+- Do NOT list other tasks, suggest alternatives, or request preferences
+- Start executing IMMEDIATELY

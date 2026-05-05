@@ -1,2 +1,4 @@
 {"ts":"2026-02-11T06:46:02.985Z","event_key":"agent_unresponsive:S-mlhnxanr-e0d7","action":"triggered","level":"[","context":{"health_status":"stale"}}
 {"ts":"2026-02-11T06:47:43.118Z","event_key":"agent_unresponsive:S-mlhhfux6-4358","action":"triggered","level":"[","context":{"health_status":"stale"}}
+{"ts":"2026-04-28T04:25:06.189Z","event_key":"test_failure::Pilot AGI-xyz","action":"escalated","from_level":"a","to_level":"r","retries":3}
+{"ts":"2026-04-28T04:26:08.616Z","event_key":"budget_exceeded::Pilot AGI-slow","action":"escalated","from_level":"w","to_level":"a","retries":2}

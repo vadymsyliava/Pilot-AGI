@@ -1,0 +1,15 @@
+{
+  "byte_offset": 49656,
+  "processed_count": 0,
+  "last_processed_at": "2026-02-13T19:24:55.244Z",
+  "started_at": "2026-02-12T10:43:05.952Z",
+  "errors": [],
+  "stats": {
+    "events_processed": 301,
+    "actions_triggered": 0,
+    "errors_count": 0,
+    "uptime_start": "2026-02-12T10:43:05.952Z"
+  },
+  "stopped_at": "2026-02-13T19:25:06.025Z",
+  "stop_reason": "SIGTERM"
+}
