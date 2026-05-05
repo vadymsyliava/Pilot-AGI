@@ -1,0 +1,398 @@
+---
+name: pilot-init
+description: Initialize new project with smart questions. Goes from idea pitch to PROJECT_BRIEF.md and ROADMAP.md with adaptive questioning based on project type.
+argument-hint: [pitch - describe your idea in one sentence]
+allowed-tools: Read, Write, Bash, Glob, Grep, WebSearch, WebFetch, AskUserQuestion
+---
+
+# Project Initialization
+
+You are initializing a new project through an intelligent interview process.
+
+## Arguments
+- `$ARGUMENTS` contains the project pitch (optional - will prompt if missing)
+
+## Step 1: Get the Pitch
+
+If `$ARGUMENTS` is provided, use it as the pitch. Otherwise, ask:
+
+```
+What are you building? (Describe in 1-2 sentences)
+```
+
+## Step 2: AI Analysis
+
+Analyze the pitch to identify:
+- **Project Type**: web app, mobile app, CLI tool, API/backend, library, other
+- **Domain**: e-commerce, productivity, social, developer tools, etc.
+- **Complexity**: MVP/simple, medium, complex
+- **Key Entities**: What data/objects are involved
+
+Display analysis:
+
+```
+PITCH ANALYSIS
+────────────────────────────────────────────────────────────────
+  Type:       {web app / mobile / CLI / API / library}
+  Domain:     {e-commerce / productivity / social / etc.}
+  Complexity: {simple / medium / complex}
+
+  Key entities identified:
+  • {entity 1}
+  • {entity 2}
+────────────────────────────────────────────────────────────────
+```
+
+## Step 3: Smart Questions
+
+Ask questions in tiers based on complexity. Use AskUserQuestion tool for multiple-choice, or ask directly for open-ended questions.
+
+### Tier 1: Essential (Always Ask)
+
+1. **Target Users**: Who will use this?
+   - Solo users (personal tool)
+   - Small team/organization
+   - Public (general audience)
+   - Developers/technical users
+
+2. **Primary Action**: What's the ONE thing users must do well?
+   (Let them describe freely)
+
+3. **Scope**: Are we building...
+   - MVP (core features only)
+   - Full product (all planned features)
+   - Proof of concept (minimal demo)
+
+### Tier 2: Technical (Ask if web/mobile app)
+
+4. **Data Persistence**: Where does data live?
+   - Local only (browser/device)
+   - Cloud database
+   - Both (sync)
+   - No persistence needed
+
+5. **Authentication**: Do users need accounts?
+   - No auth needed
+   - Simple (email/password)
+   - Social login (Google, GitHub, etc.)
+   - Enterprise (SSO, SAML)
+
+6. **Real-time Features**: Any live updates needed?
+   - No real-time
+   - Notifications/alerts
+   - Live collaboration
+   - Chat/messaging
+
+### Tier 3: Context (Ask if complex or user wants detail)
+
+7. **Reference Apps**: Any apps to use as inspiration?
+   (Let them describe or say "none")
+
+8. **Integrations**: Any external services to connect?
+   - Payment (Stripe, etc.)
+   - Email (SendGrid, etc.)
+   - Analytics
+   - Other APIs
+   - None
+
+9. **Deployment Target**:
+   - Vercel/Netlify (serverless)
+   - Traditional server (VPS/cloud)
+   - Self-hosted
+   - Don't know yet
+
+10. **Design Preference**:
+    - Minimal/clean
+    - Bold/colorful
+    - Corporate/professional
+    - Match existing brand
+    - Suggest best for this type
+
+## Step 4: Tech Stack Recommendation
+
+Based on answers, recommend a tech stack:
+
+```
+RECOMMENDED TECH STACK
+────────────────────────────────────────────────────────────────
+  Framework:    Next.js 15 (App Router)
+  UI:           shadcn/ui + Tailwind CSS
+  Database:     PostgreSQL + Prisma
+  Auth:         NextAuth.js
+  Testing:      Vitest + Playwright
+  Deployment:   Vercel
+
+  Rationale: {1-2 sentences why this stack fits}
+────────────────────────────────────────────────────────────────
+
+Accept this stack? (yes / customize)
+```
+
+If user wants to customize, let them specify preferences.
+
+## Step 5: Generate PROJECT_BRIEF.md
+
+Create `work/PROJECT_BRIEF.md`:
+
+```markdown
+# Project Brief: {Project Name}
+
+**Created**: {YYYY-MM-DD}
+**Status**: Draft
+
+---
+
+## Vision
+
+{2-3 sentences describing what this project does and why it matters}
+
+## Problem Statement
+
+{What problem does this solve? Who has this problem?}
+
+## Target Users
+
+**Primary**: {user type}
+**Secondary**: {optional}
+
+User characteristics:
+- {characteristic 1}
+- {characteristic 2}
+
+## Core Features (MVP)
+
+### 1. {Feature Name}
+{Brief description}
+- {Requirement}
+- {Requirement}
+
+### 2. {Feature Name}
+{Brief description}
+- {Requirement}
+- {Requirement}
+
+### 3. {Feature Name}
+{Brief description}
+- {Requirement}
+- {Requirement}
+
+## Tech Stack
+
+| Layer | Choice | Rationale |
+|-------|--------|-----------|
+| Framework | {choice} | {why} |
+| UI | {choice} | {why} |
+| Database | {choice} | {why} |
+| Auth | {choice} | {why} |
+| Hosting | {choice} | {why} |
+
+## Success Criteria
+
+- [ ] {Measurable criterion 1}
+- [ ] {Measurable criterion 2}
+- [ ] {Measurable criterion 3}
+
+## Out of Scope (v1)
+
+- {Feature explicitly not included}
+- {Feature explicitly not included}
+
+## Open Questions
+
+- {Question to resolve during development}
+
+---
+
+*Generated by Pilot AGI /pilot-init*
+```
+
+## Step 6: User Approval
+
+Display the brief summary:
+
+```
+PROJECT BRIEF GENERATED
+────────────────────────────────────────────────────────────────
+
+  Project:      {name}
+  Type:         {web app / etc.}
+  Scope:        {MVP / full}
+
+  Core Features:
+  1. {Feature 1}
+  2. {Feature 2}
+  3. {Feature 3}
+
+  Tech Stack:   {framework} + {ui} + {db}
+
+  Saved to: work/PROJECT_BRIEF.md
+
+────────────────────────────────────────────────────────────────
+
+Review and approve? (yes / edit / restart)
+```
+
+**CRITICAL**: Wait for approval before proceeding.
+
+## Step 7: Generate ROADMAP.md (If Approved)
+
+Create `work/ROADMAP.md` with phases:
+
+```markdown
+# Roadmap: {Project Name}
+
+## Overview
+
+{Brief project direction from brief}
+
+---
+
+## Milestone 1: Foundation
+
+**Goal**: Project setup and core infrastructure
+**Target**: Week 1
+
+### Phases
+
+#### Phase 1.1: Project Setup
+- Initialize Next.js with TypeScript
+- Configure Tailwind CSS and shadcn/ui
+- Setup testing infrastructure (Vitest)
+- Configure linting and formatting
+
+#### Phase 1.2: Design System
+- Create design tokens (colors, spacing, typography)
+- Build core UI components (Button, Input, Card)
+- Create design system showcase page
+- User approval on visual foundation
+
+#### Phase 1.3: Authentication (if needed)
+- Configure NextAuth.js
+- Implement login/register flows
+- Setup protected routes
+
+### Success Criteria
+- [ ] Dev server runs without errors
+- [ ] Design system approved
+- [ ] (If auth) Can login and logout
+
+---
+
+## Milestone 2: Core MVP
+
+**Goal**: Primary features functional
+**Target**: Week 2-3
+
+### Phases
+
+#### Phase 2.1: {Primary Feature}
+- {High-level requirement}
+- {High-level requirement}
+
+#### Phase 2.2: {Secondary Feature}
+- {High-level requirement}
+- {High-level requirement}
+
+#### Phase 2.3: Data Persistence
+- Database schema
+- CRUD operations
+- Data validation
+
+### Success Criteria
+- [ ] {Primary user flow works}
+- [ ] {Data persists correctly}
+
+---
+
+## Milestone 3: Polish
+
+**Goal**: Production-ready quality
+**Target**: Week 4
+
+### Phases
+
+#### Phase 3.1: Testing
+- Unit tests (>80% coverage)
+- E2E tests for critical paths
+- Accessibility audit
+
+#### Phase 3.2: Performance
+- Lighthouse audit (>90 scores)
+- Bundle optimization
+- Image optimization
+
+#### Phase 3.3: Launch Prep
+- Error handling
+- Loading states
+- Documentation
+
+### Success Criteria
+- [ ] All tests passing
+- [ ] No critical accessibility issues
+- [ ] Ready for demo/launch
+
+---
+
+## Future Milestones
+
+- Milestone 4: {Enhancement}
+- Milestone 5: {Enhancement}
+
+---
+
+*Generated by Pilot AGI /pilot-init*
+*Tasks live in beads (bd), not this document*
+```
+
+## Step 8: Create bd Tasks for Phase 1
+
+Run:
+```bash
+bd init  # If not already initialized
+```
+
+Create initial tasks:
+```bash
+bd create "Setup Next.js 15 with TypeScript" --label foundation
+bd create "Configure Tailwind CSS and shadcn/ui" --label foundation
+bd create "Setup Vitest testing infrastructure" --label foundation
+bd create "Create design tokens (colors, spacing, typography)" --label design
+bd create "Build core Button component" --label design
+bd create "Build core Input component" --label design
+bd create "Build core Card component" --label design
+bd create "Create design system showcase page" --label design
+```
+
+Add dependencies between tasks.
+
+## Step 9: Final Report
+
+```
+PROJECT INITIALIZED
+────────────────────────────────────────────────────────────────
+
+  Project:  {name}
+
+  Created:
+  • work/PROJECT_BRIEF.md
+  • work/ROADMAP.md
+  • {N} bd tasks for Phase 1
+
+  Next Steps:
+  1. Review work/PROJECT_BRIEF.md
+  2. Run: bd ready (see first task)
+  3. Run: /pilot-next (start working)
+
+  "From pitch to production, one step at a time."
+
+────────────────────────────────────────────────────────────────
+```
+
+## Important Rules
+
+- ALWAYS wait for approval at each checkpoint
+- Keep questions focused - don't overwhelm the user
+- Adapt question depth to project complexity
+- Generate realistic, achievable milestones
+- Create concrete, actionable bd tasks
+- Ensure first tasks have no dependencies
