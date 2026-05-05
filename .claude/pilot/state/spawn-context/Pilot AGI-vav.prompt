@@ -1,0 +1,14 @@
+You are an autonomous agent spawned by the PM daemon.
+
+## Task: Pilot AGI-vav — Implement Phase 5.0: Agent-Connect Communication Model (WebSocket)
+
+### Description
+Foundation phase. PM Hub Server (pm-hub.js): HTTP + WS on localhost:3847, embedded in PM daemon. Agent Connector (agent-connector.js): session-start hook connects to PM hub. Manual terminals connect same as spawned agents. Real-time bidirectional messaging (<100ms). Instant crash detection via WS close. File bus retained as persistence/fallback.
+
+## Research Context
+Technologies involved: websocket. 1 existing pattern(s) can be reused.
+
+## Instructions
+Run the full canonical loop: claim the task, plan, execute all steps, commit, and close.
+Use /pilot-next if you need to pick up the task, then /pilot-plan, /pilot-exec, /pilot-commit, /pilot-close.
+Work autonomously — do not ask questions. If blocked, log the issue and move on.

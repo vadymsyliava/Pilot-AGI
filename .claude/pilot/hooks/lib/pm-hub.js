@@ -255,7 +255,7 @@ class PmHub extends EventEmitter {
   constructor(projectRoot, opts = {}) {
     super();
     this.projectRoot = projectRoot;
-    this.port = opts.port || DEFAULT_PORT;
+    this.port = opts.port ?? DEFAULT_PORT;
     this.brain = opts.brain || null;
     this.server = null;
     this.listening = false;
@@ -311,6 +311,8 @@ class PmHub extends EventEmitter {
 
       this.server.on('listening', () => {
         this.listening = true;
+        const address = this.server.address();
+        if (address && typeof address === 'object') this.port = address.port;
         this._startedAtMs = Date.now();
         this._writePortFile();
 
@@ -736,6 +738,14 @@ class PmHub extends EventEmitter {
     if (method === 'POST' && pathname === '/api/reload-brain') {
       return this._handleReloadBrain(req, res);
     }
+    // S1 (2026-04-28) — skill registry + execution
+    if (method === 'GET' && pathname === '/api/skills') {
+      return this._handleListSkills(req, res);
+    }
+    const skillMatch = pathname.match(/^\/api\/skill\/(.+)$/);
+    if (method === 'POST' && skillMatch) {
+      return this._handleExecuteSkill(req, res, decodeURIComponent(skillMatch[1]));
+    }
     if (method === 'POST' && pathname === '/api/register') {
       return this._handleRegister(req, res);
     }
@@ -860,6 +870,91 @@ class PmHub extends EventEmitter {
       reload_count: loader._stats().reloadCount,
       brain_available: !!this.brain
     }));
+  }
+
+  /**
+   * S1 (2026-04-28) — list installed Claude Code skills.
+   * GET /api/skills → { skills: [{ name, description, category,
+   *   hasArgs, source }] }
+   * Skills come from <projectRoot>/.claude/skills/ + ~/.claude/skills/
+   * with project shadowing user-global on name collision.
+   */
+  _handleListSkills(req, res) {
+    let registry;
+    try { registry = require('./skill-registry'); }
+    catch (e) {
+      res.writeHead(503);
+      return res.end(JSON.stringify({ error: 'skill-registry unavailable: ' + e.message }));
+    }
+    const skills = registry.listSkills(this.projectRoot)
+      .map(s => ({
+        name: s.name, description: s.description, category: s.category,
+        hasArgs: s.hasArgs, source: s.source
+      }));
+    res.writeHead(200);
+    res.end(JSON.stringify({ skills }));
+  }
+
+  /**
+   * S1 (2026-04-28) — execute a /pilot-* skill via claude -p in the
+   * project root. Body: { args?: string, sessionId? }. Streams output
+   * as JSON lines: { type: 'stdout'|'stderr'|'exit', data, code? }.
+   *
+   * Synchronous wait + chunked response for v1 simplicity. Future:
+   * SSE for proper streaming.
+   */
+  _handleExecuteSkill(req, res, skillName) {
+    let registry;
+    try { registry = require('./skill-registry'); }
+    catch (e) {
+      res.writeHead(503);
+      return res.end(JSON.stringify({ error: 'skill-registry unavailable: ' + e.message }));
+    }
+    const skill = registry.findSkill(skillName, this.projectRoot);
+    if (!skill) {
+      res.writeHead(404);
+      return res.end(JSON.stringify({ error: `Skill "${skillName}" not found` }));
+    }
+
+    this._readBody(req, (body) => {
+      const args = (body && body.args) ? String(body.args) : '';
+      const prompt = args
+        ? `Run the ${skill.name} skill with these arguments: ${args}`
+        : `Run the ${skill.name} skill.`;
+
+      // Spawn claude -p in the project root. The skill's frontmatter
+      // makes Claude Code load the SKILL.md content automatically.
+      const { spawn } = require('child_process');
+      const env = { ...process.env };
+      env.PATH = `${require('os').homedir()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${env.PATH || '/usr/bin:/bin'}`;
+      let proc;
+      try {
+        proc = spawn('claude', ['-p', prompt], {
+          cwd: this.projectRoot,
+          env,
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+      } catch (e) {
+        res.writeHead(500);
+        return res.end(JSON.stringify({ error: 'failed to spawn claude: ' + e.message }));
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+      proc.stdout.on('data', chunk => {
+        res.write(JSON.stringify({ type: 'stdout', data: chunk.toString('utf8') }) + '\n');
+      });
+      proc.stderr.on('data', chunk => {
+        res.write(JSON.stringify({ type: 'stderr', data: chunk.toString('utf8') }) + '\n');
+      });
+      proc.on('error', err => {
+        res.write(JSON.stringify({ type: 'error', data: err.message }) + '\n');
+        res.end();
+      });
+      proc.on('exit', (code, signal) => {
+        res.write(JSON.stringify({ type: 'exit', code, signal }) + '\n');
+        res.end();
+      });
+    });
   }
 
   _handleRegister(req, res) {

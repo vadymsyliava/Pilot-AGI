@@ -1,0 +1,19 @@
+{
+  "last_pending_at": 1771010660087,
+  "updated_at": "2026-02-13T19:24:20.087Z",
+  "last_decision": {
+    "ts": "2026-02-13T19:24:20.087Z",
+    "action": "scale_up",
+    "reason": "No agents running but 6 tasks pending",
+    "target_count": 1,
+    "pool_state": {
+      "active": 0,
+      "idle": 0,
+      "pending": 6,
+      "budget_remaining_pct": 100,
+      "cpu_pct": 33,
+      "mem_pct": 99
+    }
+  },
+  "last_decision_at": "2026-02-13T19:24:20.087Z"
+}

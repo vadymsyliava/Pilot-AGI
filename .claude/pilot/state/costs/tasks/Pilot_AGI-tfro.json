@@ -1,0 +1,15 @@
+{
+  "task_id": "Pilot AGI-tfro",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 78,
+  "sessions": {
+    "S-mlkikywn-7fba": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 78
+    }
+  },
+  "created_at": "2026-02-13T07:03:01.470Z",
+  "updated_at": "2026-02-13T07:10:57.014Z"
+}

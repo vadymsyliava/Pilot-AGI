@@ -9,7 +9,7 @@
   "scripts": {
     "prepare": "husky || true",
     "lint": "eslint .",
-    "test": "node --test",
+    "test": "node scripts/run-tests.js",
     "release": "semantic-release"
   },
   "keywords": [

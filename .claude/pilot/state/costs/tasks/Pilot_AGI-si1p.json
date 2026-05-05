@@ -1,0 +1,15 @@
+{
+  "task_id": "Pilot AGI-si1p",
+  "total_bytes": 0,
+  "total_tokens": 0,
+  "total_calls": 2,
+  "sessions": {
+    "S-mlkie51w-3f35": {
+      "bytes": 0,
+      "tokens": 0,
+      "calls": 2
+    }
+  },
+  "created_at": "2026-02-13T07:44:23.613Z",
+  "updated_at": "2026-02-13T07:45:09.776Z"
+}

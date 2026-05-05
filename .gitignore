@@ -29,6 +29,13 @@ coverage/
 
 # Git worktrees (multi-agent isolation)
 .worktrees/
+.claude/worktrees/
+
+# Local watcher output
+--watch/
+
+# Codex local app configuration
+.codex/
 
 # Pilot AGI local state (for users of this framework)
 # These are created when using Pilot AGI, not part of the product

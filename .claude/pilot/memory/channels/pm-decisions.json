@@ -1,18 +1,17 @@
 {
   "channel": "pm-decisions",
-  "version": 10,
+  "version": 77,
   "publishedBy": "unknown",
   "sessionId": "pm-daemon",
-  "publishedAt": "2026-02-12T02:15:29.519Z",
-  "summary": "PM decision: architecture",
+  "publishedAt": "2026-04-29T02:15:55.953Z",
+  "summary": "PM decision: answer",
   "data": {
     "decisions": [
       {
-        "type": "architecture",
-        "action": "use_jwt",
-        "reason": "Security best practice",
-        "agent": "agent-2",
-        "ts": "2026-02-12T02:15:29.519Z"
+        "type": "answer",
+        "reason": "r",
+        "agent": "agent-1",
+        "ts": "2026-04-29T02:15:55.952Z"
       }
     ]
   }

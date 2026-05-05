@@ -1,0 +1,14 @@
+{
+  "task_id": "Pilot AGI-jau5",
+  "respawn_count": 1,
+  "history": [
+    {
+      "at": "2026-02-13T10:50:16.106Z",
+      "session_id": null,
+      "exit_reason": "terminal_stall",
+      "pressure_pct": null
+    }
+  ],
+  "created_at": "2026-02-13T10:50:16.106Z",
+  "last_respawn_at": "2026-02-13T10:50:16.106Z"
+}

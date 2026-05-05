@@ -256,11 +256,11 @@ console.log('\n=== PM Decisions: resolveConflict (no claude CLI) ===');
 
 test('resolveConflict returns correct shape on failure', () => {
   const result = pmDecisions.resolveConflict({
-    file: 'src/auth.js',
+    file: 'conflict.unknown',
     ours: 'const token = jwt.sign(payload)',
     theirs: 'const token = jwt.sign(payload, secret)',
     taskId: 'T-test'
-  }, { projectRoot: TMP_DIR });
+  }, { projectRoot: '/nonexistent/path/that/will/cause/claude/to/fail' });
 
   assert(['ours', 'theirs', 'merge', 'manual'].includes(result.strategy), 'valid strategy');
   assertEqual(typeof result.suggestion, 'string', 'has suggestion');

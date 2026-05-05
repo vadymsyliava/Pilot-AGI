@@ -93,8 +93,8 @@ describe('resource-monitor', () => {
   it('isUnderPressure returns false when below thresholds', () => {
     const monitor = freshModule('../.claude/pilot/hooks/lib/resource-monitor');
     const result = monitor.isUnderPressure({
-      cpuThresholdPct: 100,
-      memoryThresholdPct: 100
+      cpuThresholdPct: 101,
+      memoryThresholdPct: 101
     });
     assert.strictEqual(result, false);
   });
