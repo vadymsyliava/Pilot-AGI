@@ -9,7 +9,7 @@
   "scripts": {
     "prepare": "husky || true",
     "lint": "eslint .",
-    "test": "node --test",
+    "test": "node --test .claude/pilot/hooks/lib/__tests__ tests",
     "release": "semantic-release"
   },
   "keywords": [
