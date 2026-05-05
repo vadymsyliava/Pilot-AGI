@@ -255,7 +255,7 @@ class PmHub extends EventEmitter {
   constructor(projectRoot, opts = {}) {
     super();
     this.projectRoot = projectRoot;
-    this.port = opts.port || DEFAULT_PORT;
+    this.port = opts.port ?? DEFAULT_PORT;
     this.brain = opts.brain || null;
     this.server = null;
     this.listening = false;
@@ -311,6 +311,8 @@ class PmHub extends EventEmitter {
 
       this.server.on('listening', () => {
         this.listening = true;
+        const address = this.server.address();
+        if (address && typeof address === 'object') this.port = address.port;
         this._startedAtMs = Date.now();
         this._writePortFile();
 
