@@ -54,6 +54,15 @@ function assertIncludes(str, sub, msg) {
   }
 }
 
+async function waitFor(predicate, timeoutMs = 15000, intervalMs = 100) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  throw new Error('Timed out waiting for condition');
+}
+
 // =============================================================================
 // SETUP: temp directory for isolated file operations
 // =============================================================================
@@ -239,9 +248,8 @@ test('PmDaemon.start() in once+dryRun mode succeeds', async () => {
   assertEqual(result.mode, 'once', 'once mode');
   assert(result.pm_session, 'has pm session');
 
-  // _tick is now async — wait for once-mode tick+stop to complete
-  // (async bd commands may take a moment to fail in test env)
-  await new Promise(resolve => setTimeout(resolve, 3000));
+  // _tick is async and can take longer under parallel test load.
+  await waitFor(() => !daemon.running && daemon.tickCount >= 1);
   assertEqual(daemon.running, false, 'stopped after once');
   assert(daemon.tickCount >= 1, 'ran at least one tick');
 });
@@ -291,9 +299,11 @@ test('Daemon state is saved after once-mode tick', async () => {
   const daemon = new FreshDaemon(TMP_DIR, { once: true, dryRun: true });
   daemon.start();
 
-  // _tick is now async — wait for once-mode tick+stop to complete
-  // (async bd commands may take a moment to fail in test env)
-  await new Promise(resolve => setTimeout(resolve, 3000));
+  // _tick is async and can take longer under parallel test load.
+  await waitFor(() => {
+    const state = freshLoadState(TMP_DIR);
+    return state && state.ticks >= 1 && !daemon.running;
+  });
 
   const state = freshLoadState(TMP_DIR);
   assert(state !== null, 'state file exists');
