@@ -1,24 +1,37 @@
 # Pilot AGI
 
-**From idea to production with one command.** AI-powered development orchestrator that interviews you, plans your product, and builds it autonomously.
+**From idea to production with one command.** Pilot AGI is an open-source orchestration layer for Claude Code that interviews you, plans your product, creates a task graph, and coordinates AI agents until the work is shipped.
 
 [![npm version](https://img.shields.io/npm/v/pilot-agi.svg)](https://www.npmjs.com/package/pilot-agi)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
----
+![Pilot AGI demo](docs/assets/pilot-agi-demo.gif)
 
-## One Command to Start
+## What It Does
+
+Pilot AGI gives AI coding agents the missing production workflow: discovery, planning, task tracking, approval gates, parallel execution, quality checks, PR automation, and persistent memory.
+
+| You provide | Pilot AGI creates | Agents do |
+|-------------|-------------------|-----------|
+| A product idea or existing repo | `PROJECT_BRIEF.md`, `ROADMAP.md`, sprint tasks, policies | Build, test, commit, open PRs, monitor CI |
+
+Use it when you want AI agents to work like a governed development team instead of a chat window with repo access.
+
+## Quick Start
 
 ```bash
 npx pilot-agi --global && /pilot-start
 ```
 
-That's it. Pilot AGI will:
-1. **Interview you** about your product vision
-2. **Analyze** your business requirements
-3. **Create** roadmap, milestones, and sprint backlog
-4. **Build** your product with approval gates
-5. **Coordinate** multiple AI agents seamlessly
+In a new project, Pilot AGI interviews you and generates the product brief, roadmap, milestones, and first sprint. In an existing repo, it reads the codebase, enforces task-first development, and starts coordinating work through `/pilot-next`, `/pilot-plan`, `/pilot-exec`, and `/pilot-close`.
+
+## Why It Matters
+
+- **No shadow work:** every change is tied to a `bd` task and an approved plan.
+- **Parallel agents without chaos:** sessions claim tasks, lock areas, and work in isolated git worktrees.
+- **Production guardrails:** tests, linting, quality gates, budget tracking, and escalation paths are built in.
+- **Context survives:** agents checkpoint, respawn, and learn from persistent project memory.
+- **Shipping is included:** Pilot AGI can push branches, open PRs, watch CI, merge green work, and clean up.
 
 ---
 
